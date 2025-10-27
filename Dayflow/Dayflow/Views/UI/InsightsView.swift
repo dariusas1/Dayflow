@@ -12,7 +12,7 @@ struct InsightsView: View {
     let insights: [ProductivityInsight]
     let recommendations: [Recommendation]
     let trends: [TrendData]
-    let configuration: DashboardConfiguration
+    let showDetailedAnalysis: Bool
 
     @State private var selectedInsight: ProductivityInsight?
     @State private var expandedRecommendation: Recommendation?
@@ -74,7 +74,7 @@ struct InsightsView: View {
                 )
 
                 // Detailed Analysis Section
-                if configuration.showDetailedAnalysis {
+                if showDetailedAnalysis {
                     DetailedAnalysisSection(
                         insights: insights,
                         trends: trends,
@@ -1207,12 +1207,8 @@ private extension TrendData {
                 )
             )
         ],
-        configuration: DashboardConfiguration(
-            widgets: [],
-            theme: .default,
-            layout: .default,
-            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
-        )
+        trends: [],
+        showDetailedAnalysis: true
     )
 }
 #endif

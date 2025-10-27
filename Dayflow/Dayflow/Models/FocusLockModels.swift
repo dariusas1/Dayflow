@@ -1229,6 +1229,12 @@ struct DashboardConfiguration: Codable {
         var accentColor: String
         var chartStyle: ChartStyle
 
+        static let `default` = DashboardTheme(
+            colorScheme: .system,
+            accentColor: "blue",
+            chartStyle: .colorful
+        )
+
         enum ColorScheme: String, Codable, CaseIterable {
             case light = "light"
             case dark = "dark"
@@ -1327,6 +1333,23 @@ struct DashboardConfiguration: Codable {
                 showDetailedAnalysis: showDetailedAnalysis ?? self.showDetailedAnalysis
             )
         }
+    }
+
+}
+
+extension DashboardConfiguration {
+    init(
+        widgets: [DashboardWidget],
+        theme: DashboardTheme? = nil,
+        layout: GridLayout? = nil,
+        preferences: UserPreferences? = nil
+    ) {
+        self.init(
+            widgets: widgets,
+            theme: theme ?? .default,
+            layout: layout ?? .default,
+            preferences: preferences ?? .default
+        )
     }
 }
 

@@ -227,10 +227,7 @@ struct DashboardCustomizationView: View {
                     position: .init(row: 3),
                     size: .large
                 )
-            ],
-            theme: .default,
-            layout: .default,
-            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: false)
+            ]
         )
     }
 }
@@ -691,100 +688,12 @@ struct WidgetPreview: View {
     }
 }
 
-#Preview("Dashboard Customization") {
-    struct PreviewWrapper: View {
-        @State private var configuration = DashboardConfiguration(
-            widgets: [
-                DashboardWidget(
-                    id: "focus-time",
-                    type: .chart,
-                    title: "Focus Time",
-                    metric: .focusTime,
-                    position: 0,
-                    size: .large
-                ),
-                DashboardWidget(
-                    id: "productivity-score",
-                    type: .chart,
-                    title: "Productivity Score",
-                    metric: .productivity,
-                    position: 1,
-                    size: .medium
-                ),
-                DashboardWidget(
-                    id: "insights",
-                    type: .insights,
-                    title: "Insights",
-                    metric: .none,
-                    position: 2,
-                    size: .large
-                )
-            ],
-            theme: DashboardConfiguration.DashboardTheme(
-                colorScheme: .light,
-                accentColor: "#4A90E2",
-                chartStyle: .colorful
-            ),
-            layout: DashboardConfiguration.GridLayout(
-                columns: 6,
-                rows: 4,
-                spacing: 12,
-                padding: 16
-            ),
-            preferences: DashboardConfiguration.UserPreferences(
-                autoRefresh: true,
-                refreshInterval: 300,
-                showInsights: true,
-                showRecommendations: true,
-                enableAnimations: true,
-                compactMode: false
-            )
-        )
-
-        @State private var availableWidgets: [DashboardWidget] = [
-            DashboardWidget(
-                id: "task-progress",
-                type: .chart,
-                title: "Task Progress",
-                metric: .taskCompletion,
-                position: 0,
-                size: .medium
-            ),
-            DashboardWidget(
-                id: "app-usage",
-                type: .chart,
-                title: "App Usage",
-                metric: .appUsage,
-                position: 1,
-                size: .medium
-            ),
-            DashboardWidget(
-                id: "wellness-trends",
-                type: .trends,
-                title: "Wellness Trends",
-                metric: .wellness,
-                position: 2,
-                size: .medium
-            ),
-            DashboardWidget(
-                id: "goals-overview",
-                type: .insights,
-                title: "Goals Overview",
-                metric: .goals,
-                position: 3,
-                size: .large
-            )
-        ]
-
-        var body: some View {
-            DashboardCustomizationView(
-                configuration: $configuration,
-                availableWidgets: $availableWidgets,
-                onSave: { }
-            )
-            .frame(width: 960, height: 640)
-        }
-    }
-
-    return PreviewWrapper()
+#Preview {
+    DashboardCustomizationView(
+        configuration: .constant(DashboardConfiguration(
+            widgets: []
+        )),
+        availableWidgets: .constant([]),
+        onSave: { }
+    )
 }
