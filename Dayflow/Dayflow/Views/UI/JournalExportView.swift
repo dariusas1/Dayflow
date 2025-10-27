@@ -6,7 +6,52 @@
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
+
+enum JournalExportFormat: CaseIterable {
+    case markdown
+    case plainText
+    case html
+    case pdf
+
+    var displayName: String {
+        switch self {
+        case .markdown: return "Markdown"
+        case .plainText: return "Plain Text"
+        case .html: return "HTML"
+        case .pdf: return "PDF"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .markdown: return "doc.text"
+        case .plainText: return "doc.plaintext"
+        case .html: return "globe"
+        case .pdf: return "doc.richtext"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .markdown: return .blue
+        case .plainText: return .gray
+        case .html: return .orange
+        case .pdf: return .red
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .markdown: return "Formatted text with structure"
+        case .plainText: return "Simple text format"
+        case .html: return "Web page format"
+        case .pdf: return "Document format"
+        }
+    }
+}
 
 struct JournalExportView: View {
     let journal: DailyJournal
@@ -16,7 +61,9 @@ struct JournalExportView: View {
     @State private var includeHighlights = true
     @State private var includeSentiment = true
     @State private var includeDate = true
+#if os(iOS)
     @State private var showingShareSheet = false
+#endif
     @State private var exportedContent = ""
     @State private var isExporting = false
 
@@ -50,9 +97,11 @@ struct JournalExportView: View {
                     }
                 }
             }
+#if os(iOS)
             .sheet(isPresented: $showingShareSheet) {
                 ShareSheet(activityItems: [exportedContent])
             }
+#endif
         }
     }
 
@@ -236,23 +285,35 @@ struct JournalExportView: View {
             .disabled(isExporting)
 
             if !exportedContent.isEmpty {
+#if os(iOS)
                 Button(action: {
                     showingShareSheet = true
                 }) {
-                    HStack {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share")
-                            .fontWeight(.semibold)
-                    }
-                    .font(.headline)
-                    .foregroundColor(.green)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.green.opacity(0.1))
-                    .cornerRadius(12)
+                    shareButtonContent
                 }
+#elseif os(macOS)
+                Button(action: {
+                    MacSharingServicePresenter.present(items: [exportedContent])
+                }) {
+                    shareButtonContent
+                }
+#endif
             }
         }
+    }
+
+    private var shareButtonContent: some View {
+        HStack {
+            Image(systemName: "square.and.arrow.up")
+            Text("Share")
+                .fontWeight(.semibold)
+        }
+        .font(.headline)
+        .foregroundColor(.green)
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(Color.green.opacity(0.1))
+        .cornerRadius(12)
     }
 
     // MARK: - Helper Methods
@@ -264,18 +325,18 @@ struct JournalExportView: View {
             preview += "# \(journal.date.formatted(date: .long, time: .omitted))\n\n"
         }
 
-        preview += journal.content.prefix(200) + "...\n\n"
+        preview += String(journal.content.prefix(200)) + "...\n\n"
 
         if includeHighlights && !journal.highlights.isEmpty {
             preview += "## Key Highlights\n"
             for highlight in journal.highlights.prefix(2) {
-                preview += "- \(highlight.title): \(highlight.description)\n"
+                preview += "- \(highlight.title): \(highlight.content)\n"
             }
             preview += "\n"
         }
 
-        if includeSentiment, let sentiment = journal.sentimentAnalysis {
-            preview += "## Sentiment: \(sentiment.overallSentiment.displayName)\n"
+        if includeSentiment {
+            preview += "## Sentiment: \(formattedEmotion(journal.sentiment.overallSentiment.emotion))\n"
         }
 
         return preview
@@ -323,18 +384,19 @@ struct JournalExportView: View {
             content += "## Key Highlights\n\n"
             for highlight in journal.highlights {
                 content += "### \(highlight.title)\n"
-                content += "\(highlight.description)\n\n"
+                content += "\(highlight.content)\n\n"
             }
         }
 
-        if includeSentiment, let sentiment = journal.sentimentAnalysis {
+        if includeSentiment {
+            let sentiment = journal.sentiment
             content += "## Emotional Insights\n\n"
-            content += "**Overall Sentiment:** \(sentiment.overallSentiment.displayName)\n\n"
+            content += "**Overall Sentiment:** \(formattedEmotion(sentiment.overallSentiment.emotion))\n\n"
 
-            if !sentiment.emotionScores.isEmpty {
+            if !sentiment.emotionalBreakdown.isEmpty {
                 content += "**Top Emotions:**\n"
-                for emotion in sentiment.emotionScores.prefix(3) {
-                    content += "- \(emotion.emotion.displayName): \(Int(emotion.intensity * 100))%\n"
+                for emotion in sentiment.emotionalBreakdown.prefix(3) {
+                    content += "- \(formattedEmotion(emotion.emotion)): \(Int(emotion.score * 100))%\n"
                 }
                 content += "\n"
             }
@@ -359,19 +421,20 @@ struct JournalExportView: View {
             content += "KEY HIGHLIGHTS\n"
             content += String(repeating: "-", count: 15) + "\n\n"
             for highlight in journal.highlights {
-                content += "\(highlight.title): \(highlight.description)\n\n"
+                content += "\(highlight.title): \(highlight.content)\n\n"
             }
         }
 
-        if includeSentiment, let sentiment = journal.sentimentAnalysis {
+        if includeSentiment {
+            let sentiment = journal.sentiment
             content += "EMOTIONAL INSIGHTS\n"
             content += String(repeating: "-", count: 19) + "\n\n"
-            content += "Overall Sentiment: \(sentiment.overallSentiment.displayName)\n\n"
+            content += "Overall Sentiment: \(formattedEmotion(sentiment.overallSentiment.emotion))\n\n"
 
-            if !sentiment.emotionScores.isEmpty {
+            if !sentiment.emotionalBreakdown.isEmpty {
                 content += "Top Emotions:\n"
-                for emotion in sentiment.emotionScores.prefix(3) {
-                    content += "- \(emotion.emotion.displayName): \(Int(emotion.intensity * 100))%\n"
+                for emotion in sentiment.emotionalBreakdown.prefix(3) {
+                    content += "- \(formattedEmotion(emotion.emotion)): \(Int(emotion.score * 100))%\n"
                 }
                 content += "\n"
             }
@@ -415,23 +478,24 @@ struct JournalExportView: View {
                 content += """
                 <div class="highlight">
                     <strong>\(highlight.title)</strong><br>
-                    \(highlight.description)
+                    \(highlight.content)
                 </div>
                 """
             }
         }
 
-        if includeSentiment, let sentiment = journal.sentimentAnalysis {
+        if includeSentiment {
+            let sentiment = journal.sentiment
             content += """
             <h2>Emotional Insights</h2>
             <div class="sentiment">
-                <strong>Overall Sentiment:</strong> \(sentiment.overallSentiment.displayName)<br>
+                <strong>Overall Sentiment:</strong> \(formattedEmotion(sentiment.overallSentiment.emotion))<br>
             """
 
-            if !sentiment.emotionScores.isEmpty {
+            if !sentiment.emotionalBreakdown.isEmpty {
                 content += "<strong>Top Emotions:</strong><br>"
-                for emotion in sentiment.emotionScores.prefix(3) {
-                    content += "\(emotion.emotion.displayName): \(Int(emotion.intensity * 100))%<br>"
+                for emotion in sentiment.emotionalBreakdown.prefix(3) {
+                    content += "\(formattedEmotion(emotion.emotion)): \(Int(emotion.score * 100))%<br>"
                 }
             }
 
@@ -445,49 +509,18 @@ struct JournalExportView: View {
 
         return content
     }
-}
 
-// MARK: - Export Format Extensions
-
-extension JournalExportFormat {
-    var displayName: String {
-        switch self {
-        case .markdown: return "Markdown"
-        case .plainText: return "Plain Text"
-        case .html: return "HTML"
-        case .pdf: return "PDF"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .markdown: return "doc.text"
-        case .plainText: return "doc.plaintext"
-        case .html: return "globe"
-        case .pdf: return "doc.richtext"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .markdown: return .blue
-        case .plainText: return .gray
-        case .html: return .orange
-        case .pdf: return .red
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .markdown: return "Formatted text with structure"
-        case .plainText: return "Simple text format"
-        case .html: return "Web page format"
-        case .pdf: return "Document format"
-        }
+    private func formattedEmotion(_ emotion: String) -> String {
+        emotion
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { $0.capitalized }
+            .joined(separator: " ")
     }
 }
-
-// MARK: - Share Sheet
+#if os(iOS)
+// MARK: - Share Sheet (iOS)
 
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
@@ -498,6 +531,17 @@ struct ShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#elseif os(macOS)
+// MARK: - Sharing Service (macOS)
+
+enum MacSharingServicePresenter {
+    static func present(items: [Any]) {
+        guard let window = NSApp.keyWindow, let contentView = window.contentView else { return }
+        let picker = NSSharingServicePicker(items: items)
+        picker.show(relativeTo: contentView.bounds, of: contentView, preferredEdge: .minY)
+    }
+}
+#endif
 
 // MARK: - Preview
 
@@ -511,32 +555,28 @@ struct JournalExportView_Previews: PreviewProvider {
 
 extension DailyJournal {
     static let sample = DailyJournal(
-        id: UUID(),
         date: Date(),
         content: "Today was a productive day filled with meaningful accomplishments and moments of reflection. I successfully completed my main project milestone and took time to appreciate the small victories along the way.",
         template: .comprehensive,
         highlights: [
             JournalHighlight(
                 id: UUID(),
-                category: .achievement,
                 title: "Project Milestone",
-                description: "Completed the main feature implementation",
+                content: "Completed the main feature implementation",
+                category: .achievement,
                 significance: 0.9,
-                relatedActivities: [],
                 timestamp: Date()
             )
         ],
-        sentimentAnalysis: SentimentAnalysis(
-            overallSentiment: .positive,
-            sentimentScore: 0.8,
-            emotionScores: [
-                EmotionScore(emotion: .accomplished, intensity: 0.9, confidence: 0.8)
+        sentiment: SentimentAnalysis(
+            overallSentiment: SentimentScore(emotion: "joy", score: 0.8),
+            emotionalBreakdown: [
+                EmotionScore(emotion: "accomplishment", score: 0.9, intensity: 0.85),
+                EmotionScore(emotion: "gratitude", score: 0.7, intensity: 0.6)
             ],
             confidence: 0.85,
-            keywords: ["productive", "accomplished", "milestone"]
+            keyEmotions: ["productive", "accomplished", "milestone"]
         ),
-        userPreferences: JournalPreferences(),
-        createdAt: Date(),
-        updatedAt: Date()
+        userPreferences: JournalPreferences()
     )
 }

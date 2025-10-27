@@ -13,7 +13,6 @@ import GRDB
 import os.log
 
 class SuggestedTodosEngine {
-
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
 
     // Dependencies
@@ -68,7 +67,7 @@ class SuggestedTodosEngine {
 
         do {
             // Check if we should interrupt focus session
-            guard shouldShowSuggestions() else {
+            guard await shouldShowSuggestions() else {
                 logger.info("Skipping suggestions due to active focus session")
                 return []
             }
@@ -80,16 +79,16 @@ class SuggestedTodosEngine {
             }
 
             // Extract task suggestions from activity data
-            let taskSuggestions = await extractTaskSuggestions(from: currentActivity)
+            let extractedTaskSuggestions = await extractTaskSuggestions(from: currentActivity)
 
             // Apply priority scoring and filtering
-            var scoredSuggestions = await applyPriorityScoring(to: taskSuggestions, activity: currentActivity)
+            var suggestedTodos = await applyPriorityScoring(to: extractedTaskSuggestions, activity: currentActivity)
 
             // Apply user preference learning
-            scoredSuggestions = await applyUserPreferenceLearning(to: scoredSuggestions)
+            suggestedTodos = await applyUserPreferenceLearning(to: suggestedTodos)
 
             // Filter and limit suggestions
-            let finalSuggestions = filterAndLimitSuggestions(scoredSuggestions)
+            let finalSuggestions = filterAndLimitSuggestions(suggestedTodos)
 
             // Store suggestions in database
             for suggestion in finalSuggestions {
@@ -116,20 +115,20 @@ class SuggestedTodosEngine {
             do {
                 try databaseQueue.read { db in
                     var query = "SELECT * FROM suggested_todos WHERE is_dismissed = 0"
-                    var arguments: [DatabaseValueConvertible?] = []
+                    var arguments = StatementArguments()
 
                     if let priority = priority {
                         query += " AND priority = ?"
-                        arguments.append(priority.rawValue)
+                        arguments += [priority.rawValue]
                     }
 
                     if let category = category {
                         query += " AND context_tags LIKE ?"
-                        arguments.append("%\(category)%")
+                        arguments += ["%\(category)%"]
                     }
 
                     query += " ORDER BY urgency_score DESC, relevance_score DESC, created_at DESC LIMIT ?"
-                    arguments.append(Int64(limit))
+                    arguments += [limit]
 
                     let rows = try Row.fetchAll(db, sql: query, arguments: StatementArguments(arguments))
                     let suggestions = rows.compactMap { try parseSuggestedTodo(from: $0) }
@@ -163,7 +162,17 @@ class SuggestedTodosEngine {
                 SET user_feedback_score = ?, user_feedback_timestamp = ?, user_feedback_comment = ?,
                     is_accepted = ?, is_dismissed = ?, dismiss_reason = ?, learning_score = ?, last_shown = ?
                 WHERE id = ?
-            """, arguments: StatementArguments(arguments))
+            """, arguments: StatementArguments([
+                feedback.score,
+                feedback.timestamp,
+                feedback.comment,
+                accept,
+                isDismissed,
+                dismissReason,
+                0.0, // Will be updated by learning system
+                Date(),
+                suggestionId.uuidString
+            ]))
         }
 
         // Update user preferences based on feedback
@@ -321,6 +330,7 @@ class SuggestedTodosEngine {
         }
     }
 
+    @MainActor
     private func shouldShowSuggestions() -> Bool {
         guard sessionManager.isActive else { return true }
 
@@ -339,7 +349,7 @@ class SuggestedTodosEngine {
 
         // Extract from OCR content
         if let ocrResult = activity.ocrResult {
-            suggestions.append(contentsOf: extractFromOCR(ocrResult))
+            suggestions.append(contentsOf: extractFromOCR(ocrResult, insights: activity.fusionResult.ocrInsights))
         }
 
         // Extract from accessibility content
@@ -364,16 +374,16 @@ class SuggestedTodosEngine {
         return suggestions
     }
 
-    private func extractFromOCR(_ ocrResult: OCRResult) -> [TaskSuggestion] {
+    private func extractFromOCR(_ ocrResult: OCRResult, insights: [OCRInsight]) -> [TaskSuggestion] {
         var suggestions: [TaskSuggestion] = []
 
         suggestions.append(contentsOf: extractActionItems(from: ocrResult.text, context: "ocr"))
 
         // Extract specific patterns from OCR insights
-        for insight in ocrResult.ocrInsights {
+        for insight in insights {
             switch insight.type {
             case "date":
-                if let date = parseDate(from: insight.value) {
+                if parseDate(from: insight.value) != nil {
                     suggestions.append(TaskSuggestion(
                         originalText: insight.value,
                         extractedTask: "Follow up on deadline: \(insight.value)",
@@ -408,6 +418,10 @@ class SuggestedTodosEngine {
             }
         }
 
+        for region in ocrResult.regions {
+            suggestions.append(contentsOf: extractActionItems(from: region.text, context: "ocr_region"))
+        }
+
         return suggestions
     }
 
@@ -420,16 +434,19 @@ class SuggestedTodosEngine {
 
         // Extract from structured data
         if let structuredData = axResult.structuredData {
-            for element in structuredData.forms {
-                if element.value.contains("submit") || element.value.contains("send") {
-                    suggestions.append(TaskSuggestion(
-                        originalText: element.value,
-                        extractedTask: "Complete form: \(element.title ?? "Form")",
-                        confidence: 0.7,
-                        actionType: .complete,
-                        context: "form",
-                        suggestedPriority: .medium
-                    ))
+            for form in structuredData.forms {
+                for element in form.elements {
+                    guard let value = element.value?.lowercased() else { continue }
+                    if value.contains("submit") || value.contains("send") {
+                        suggestions.append(TaskSuggestion(
+                            originalText: element.value ?? "",
+                            extractedTask: "Complete form: \(element.title ?? "Form")",
+                            confidence: 0.7,
+                            actionType: .complete,
+                            context: "form",
+                            suggestedPriority: .medium
+                        ))
+                    }
                 }
             }
         }
@@ -439,13 +456,15 @@ class SuggestedTodosEngine {
 
     private func extractFromDetectedTasks(_ tasks: [DetectedTask]) -> [TaskSuggestion] {
         return tasks.map { task in
+            let taskText = task.pattern
+            let originalText = task.context.isEmpty ? taskText : task.context
             TaskSuggestion(
-                originalText: task.description,
-                extractedTask: task.taskName,
+                originalText: originalText,
+                extractedTask: taskText,
                 confidence: task.confidence,
-                actionType: inferActionType(from: task.taskName),
+                actionType: inferActionType(from: taskText),
                 context: task.category,
-                suggestedPriority: inferPriority(from: task.taskName, confidence: task.confidence)
+                suggestedPriority: inferPriority(from: taskText, confidence: task.confidence)
             )
         }
     }
@@ -586,15 +605,17 @@ class SuggestedTodosEngine {
         let wordCount = task.components(separatedBy: .whitespaces).count
         let lowercaseTask = task.lowercased()
 
+        let lowercaseTask = task.lowercased()
+
         // Base estimation: 1 minute per word
         var baseEstimate = TimeInterval(wordCount * 60)
 
         // Adjust for task complexity
         if lowercaseTask.contains("create") || lowercaseTask.contains("write") {
             baseEstimate *= 1.5
-        } else if lowercaseTask.contains("review") || lowercaseTask.contains("check") {
+        } else if task.lowercased().contains("review") || task.lowercased().contains("check") {
             baseEstimate *= 0.8
-        } else if lowercaseTask.contains("research") || lowercaseTask.contains("study") {
+        } else if task.lowercased().contains("research") || task.lowercased().contains("study") {
             baseEstimate *= 2.0
         }
 
@@ -744,7 +765,23 @@ class SuggestedTodosEngine {
                  source_activity_id, context_tags, estimated_duration, deadline, created_at,
                  urgency_score, relevance_score, learning_score)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: StatementArguments(arguments))
+            """, arguments: StatementArguments([
+                suggestion.id.uuidString,
+                suggestion.title,
+                suggestion.description,
+                suggestion.priority.rawValue,
+                suggestion.confidence,
+                suggestion.sourceContent,
+                suggestion.sourceType.rawValue,
+                suggestion.sourceActivityId?.uuidString,
+                tagsString,
+                suggestion.estimatedDuration.map { Int64($0) },
+                suggestion.deadline,
+                suggestion.createdAt,
+                suggestion.urgencyScore,
+                suggestion.relevanceScore,
+                suggestion.learningScore
+            ]))
         }
     }
 
@@ -842,7 +879,11 @@ class SuggestedTodosEngine {
                     UPDATE suggested_todos
                     SET learning_score = learning_score * 0.9 + ? * 0.1
                     WHERE context_tags LIKE ? AND id != ?
-                """, arguments: StatementArguments(arguments))
+                """, arguments: StatementArguments([
+                    feedback.score,
+                    "%\(suggestion.contextTags.joined(separator: ","))%",
+                    suggestion.id.uuidString
+                ]))
             }
         } catch {
             logger.error("Failed to update learning scores: \(error.localizedDescription)")
@@ -878,6 +919,16 @@ class SuggestedTodosEngine {
         } catch {
             logger.error("Failed to cleanup old suggestions: \(error.localizedDescription)")
         }
+    }
+
+    private func saveConfiguration() async throws {
+        let configURL = try FileManager.default
+            .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("FocusLock")
+            .appendingPathComponent("SuggestionEngineConfig.json")
+
+        let data = try JSONEncoder().encode(config)
+        try data.write(to: configURL, options: .atomic)
     }
 
     private func parseDate(from dateString: String) -> Date? {
@@ -951,7 +1002,7 @@ private extension DatabaseError {
 }
 
 private extension Formatter {
-    func then(_ configure: (Formatter) -> Void) -> Formatter {
+    func then(_ configure: (Self) -> Void) -> Self {
         configure(self)
         return self
     }

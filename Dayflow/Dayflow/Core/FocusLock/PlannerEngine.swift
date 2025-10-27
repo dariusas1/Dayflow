@@ -22,6 +22,7 @@ class PlannerEngine: ObservableObject {
     @Published var isPlanning: Bool = false
     @Published var planningProgress: Double = 0.0
     @Published var lastPlanUpdate: Date?
+    @Published var hasCalendarAccess: Bool
     @Published var optimizationMetrics: PlanningMetrics
 
     // MARK: - Private Properties
@@ -50,6 +51,7 @@ class PlannerEngine: ObservableObject {
         priorityResolver = PriorityResolver()
         reschedulingEngine = ReschedulingEngine()
         calendarManager = CalendarManager()
+        hasCalendarAccess = calendarManager.hasCalendarAccess
         persistentStore = PlannerDataStore()
 
         setupObservation()
@@ -296,8 +298,21 @@ class PlannerEngine: ObservableObject {
 
     /// Export plan to calendar
     func exportToCalendar(plan: DailyPlan) async throws {
-        try await calendarManager.exportPlan(plan)
-        logger.info("Plan exported to calendar: \(plan.dateFormatted)")
+        do {
+            try await calendarManager.exportPlan(plan)
+            hasCalendarAccess = true
+            logger.info("Plan exported to calendar: \(plan.dateFormatted)")
+        } catch CalendarError.accessDenied {
+            hasCalendarAccess = false
+            throw error
+        }
+    }
+
+    @discardableResult
+    func ensureCalendarAuthorization() async -> Bool {
+        let granted = await calendarManager.ensureAuthorization()
+        hasCalendarAccess = granted
+        return granted
     }
 
     /// Import tasks from external sources
@@ -455,18 +470,25 @@ class PlannerEngine: ObservableObject {
     }
 
     private func loadCalendarEvents(for date: Date) async throws -> [TimeBlock] {
-        let events = try await calendarManager.loadEvents(for: date)
+        do {
+            let events = try await calendarManager.loadEvents(for: date)
+            hasCalendarAccess = true
 
-        return events.map { event in
-            TimeBlock(
-                startTime: event.startTime,
-                endTime: event.endTime,
-                blockType: .meeting,
-                title: event.title,
-                isProtected: true,
-                energyLevel: .medium,
-                breakBuffer: 300
-            )
+            return events.map { event in
+                TimeBlock(
+                    startTime: event.startTime,
+                    endTime: event.endTime,
+                    blockType: .meeting,
+                    title: event.title,
+                    isProtected: true,
+                    energyLevel: .medium,
+                    breakBuffer: 300
+                )
+            }
+        } catch CalendarError.accessDenied {
+            hasCalendarAccess = false
+            logger.error("Calendar access denied while loading events for date: \(date)")
+            return []
         }
     }
 
@@ -1255,7 +1277,7 @@ class GoalBasedPlanner {
         var score = 0.0
 
         // Check for keyword matches in task title and description
-        let taskText = (task.title + " " + (task.description ?? "")).lowercased()
+        let taskText = (task.title + " " + task.description).lowercased()
         let goalKeywords = extractGoalKeywords(goal: goal)
 
         for keyword in goalKeywords {
@@ -1460,13 +1482,15 @@ class PriorityResolver {
             adjustedTasks = applyCategoryBalanceConstraint(constraint, tasks: adjustedTasks)
         case .maxWorkHours:
             adjustedTasks = applyMaxWorkHoursConstraint(constraint, tasks: adjustedTasks)
+        case .startTime, .endTime, .maxDailyTasks, .energyLevel, .dependency, .deadline, .focusSessionOnly:
+            break
         }
 
         return adjustedTasks
     }
 
     private func applyMaxFocusTimeConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let maxFocusMinutes = constraint.value
+        let maxFocusMinutes = constraint.intValue
         let focusTasks = tasks.filter { $0.isFocusSessionProtected }
 
         let totalFocusMinutes = focusTasks.reduce(0) { $0 + Int($1.estimatedDuration / 60) }
@@ -1481,7 +1505,7 @@ class PriorityResolver {
     }
 
     private func applyMinBreakTimeConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let minBreakMinutes = constraint.value
+        let minBreakMinutes = constraint.intValue
         let totalWorkMinutes = tasks.reduce(0) { $0 + Int($1.estimatedDuration / 60) }
 
         // Ensure adequate break time (15% of work time minimum)
@@ -1511,7 +1535,7 @@ class PriorityResolver {
                 let daysUntilDeadline = Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 999
 
                 // Boost priority for tasks with approaching deadlines
-                if daysUntilDeadline <= constraint.value {
+                if daysUntilDeadline <= constraint.intValue {
                     if adjustedTask.priority == .low {
                         adjustedTask.priority = .medium
                     } else if adjustedTask.priority == .medium && daysUntilDeadline <= 3 {
@@ -1547,7 +1571,7 @@ class PriorityResolver {
     }
 
     private func applyMaxWorkHoursConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let maxWorkHours = Double(constraint.value) / 60.0 // Convert minutes to hours
+        let maxWorkHours = constraint.value / 60.0 // Convert minutes to hours
         let totalWorkHours = tasks.reduce(0) { $0 + $1.estimatedDuration / 3600 }
 
         if totalWorkHours > maxWorkHours {
@@ -1732,14 +1756,36 @@ class CalendarManager {
     private let logger = Logger(subsystem: "FocusLock", category: "CalendarManager")
     private var calendars: [EKCalendar] = []
 
-    init() {
-        requestCalendarAccess()
+    var authorizationStatus: EKAuthorizationStatus {
+        EKEventStore.authorizationStatus(for: .event)
+    }
+
+    var hasCalendarAccess: Bool {
+        authorizationStatus == .authorized
+    }
+
+    @discardableResult
+    func ensureAuthorization() async -> Bool {
+        let status = authorizationStatus
+
+        switch status {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await requestCalendarAccess()
+        case .restricted, .denied:
+            logger.error("Calendar access is not available: \(status.rawValue)")
+            return false
+        @unknown default:
+            logger.error("Calendar access returned unknown status: \(status.rawValue)")
+            return false
+        }
     }
 
     func exportPlan(_ plan: DailyPlan) async throws {
         logger.info("Exporting plan for \(plan.dateFormatted) to calendar")
 
-        let accessGranted = await requestCalendarAccess()
+        let accessGranted = await ensureAuthorization()
         guard accessGranted else {
             throw CalendarError.accessDenied
         }
@@ -1760,7 +1806,7 @@ class CalendarManager {
     }
 
     func loadEvents(for date: Date) async throws -> [CalendarEvent] {
-        let accessGranted = await requestCalendarAccess()
+        let accessGranted = await ensureAuthorization()
         guard accessGranted else {
             throw CalendarError.accessDenied
         }
@@ -1789,7 +1835,7 @@ class CalendarManager {
     func syncWithExternalCalendars() async throws {
         logger.info("Syncing with external calendars")
 
-        let accessGranted = await requestCalendarAccess()
+        let accessGranted = await ensureAuthorization()
         guard accessGranted else {
             throw CalendarError.accessDenied
         }
@@ -2133,6 +2179,10 @@ class TaskImporter {
         logger.info("Importing tasks from calendar: \(name)")
 
         let calendarManager = CalendarManager()
+        let accessGranted = await calendarManager.ensureAuthorization()
+        guard accessGranted else {
+            throw CalendarError.accessDenied
+        }
         let today = Date()
         let events = try await calendarManager.loadEvents(for: today)
 
@@ -2140,7 +2190,7 @@ class TaskImporter {
             PlannerTask(
                 title: event.title,
                 description: event.notes,
-                estimatedDuration: event.endTime.timeIntervalSince(event.startDate),
+                estimatedDuration: event.endTime.timeIntervalSince(event.startTime),
                 priority: .medium,
                 category: .work,
                 deadline: event.endTime,
@@ -2187,7 +2237,7 @@ class TaskImporter {
     private func importFromSuggestedTodos(identifier: String, name: String) async throws -> [PlannerTask] {
         logger.info("Importing tasks from SuggestedTodos: \(name)")
 
-        let suggestedTodosEngine = SuggestedTodosEngine()
+        let suggestedTodosEngine = PlannerSuggestedTodosService()
         let suggestions = try await suggestedTodosEngine.fetchSuggestions(for: identifier)
 
         return suggestions.map { suggestion in
@@ -2207,7 +2257,7 @@ class TaskImporter {
     }
 }
 
-class SuggestedTodosEngine {
+class PlannerSuggestedTodosService {
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
     private var apiEndpoint: String?
     private var userPreferences: PlannerUserPreferences

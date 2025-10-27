@@ -16,20 +16,6 @@ class LaunchAgentManager: ObservableObject {
     private let agentIdentifier = "com.focuslock.agent"
     private let agentLabel = "FocusLock Agent"
 
-    // LaunchAgent configuration
-    private let agentPlist: [String: Any] = [
-        "Label": "FocusLock Agent",
-        "ProgramArguments": [
-            "--autostart",
-            "--background"
-        ],
-        "RunAtLoad": true,
-        "KeepAlive": true,
-        "StandardOutPath": "/tmp/com.focuslock.agent.log",
-        "StandardErrorPath": "/tmp/com.focuslock.agent.error.log",
-        "ProcessType": "Background"
-    ]
-
     // Published state
     @Published var isEnabled: Bool = false
     @Published var isInstalled: Bool = false
@@ -45,88 +31,112 @@ class LaunchAgentManager: ObservableObject {
     func installLaunchAgent() -> Bool {
         logger.info("Installing LaunchAgent for FocusLock")
 
-        do {
-            // Create the LaunchAgent plist file
-            let plistPath = getLaunchAgentPlistPath()
-            let plistData = try PropertyListSerialization.data(
-                fromPropertyList: agentPlist,
-                format: .xml,
-                options: 0
-            )
+        if #available(macOS 13.0, *) {
+            let loginItem = SMAppService.loginItem(identifier: agentIdentifier)
 
-            try plistData.write(to: plistPath)
-            logger.info("LaunchAgent plist written to: \(plistPath)")
-
-            // Load the agent using SMJobBless
-            let result = SMJobBless(kSMDomainUserLaunchd, agentIdentifier as CFString, plistPath as CFString, true)
-
-            if result {
-                logger.info("LaunchAgent installed successfully")
-                isInstalled = true
+            do {
+                try loginItem.register()
+                logger.info("LaunchAgent installed successfully via SMAppService")
                 installationError = nil
+                checkAgentStatus()
                 return true
-            } else {
-                let error = "Failed to load LaunchAgent using SMJobBless"
-                logger.error("\(error)")
-                installationError = error
+            } catch {
+                let errorMessage = "Failed to register LaunchAgent: \(error.localizedDescription)"
+                logger.error("\(errorMessage)")
+                installationError = errorMessage
                 return false
             }
-        } catch {
-            let errorMessage = "Failed to install LaunchAgent: \(error.localizedDescription)"
-            logger.error("\(errorMessage)")
-            installationError = errorMessage
-            return false
+        } else {
+            let success = SMLoginItemSetEnabled(agentIdentifier as CFString, true)
+
+            if success {
+                logger.info("LaunchAgent enabled successfully via SMLoginItemSetEnabled")
+                installationError = nil
+                checkAgentStatus()
+            } else {
+                let errorMessage = "Failed to enable LaunchAgent using SMLoginItemSetEnabled"
+                logger.error("\(errorMessage)")
+                installationError = errorMessage
+            }
+
+            return success
         }
     }
 
     func uninstallLaunchAgent() -> Bool {
         logger.info("Uninstalling LaunchAgent for FocusLock")
 
-        do {
-            // Remove the agent using SMJobBless
-            let result = SMJobBless(kSMDomainUserLaunchd, agentIdentifier as CFString, nil, false)
+        if #available(macOS 13.0, *) {
+            let loginItem = SMAppService.loginItem(identifier: agentIdentifier)
 
-            if result {
-                logger.info("LaunchAgent uninstalled successfully")
-
-                // Remove the plist file
-                try? FileManager.default.removeItem(at: getLaunchAgentPlistPath())
-
-                isInstalled = false
+            do {
+                try loginItem.unregister()
+                logger.info("LaunchAgent unregistered successfully via SMAppService")
                 installationError = nil
+                checkAgentStatus()
                 return true
-            } else {
-                let error = "Failed to unload LaunchAgent using SMJobBless"
-                logger.error(error)
-                installationError = error
+            } catch {
+                let errorMessage = "Failed to unregister LaunchAgent: \(error.localizedDescription)"
+                logger.error("\(errorMessage)")
+                installationError = errorMessage
                 return false
             }
-        } catch {
-            let errorMessage = "Failed to uninstall LaunchAgent: \(error.localizedDescription)"
-            logger.error(errorMessage)
-            installationError = errorMessage
-            return false
+        } else {
+            let success = SMLoginItemSetEnabled(agentIdentifier as CFString, false)
+
+            if success {
+                logger.info("LaunchAgent disabled successfully via SMLoginItemSetEnabled")
+                installationError = nil
+                checkAgentStatus()
+            } else {
+                let errorMessage = "Failed to disable LaunchAgent using SMLoginItemSetEnabled"
+                logger.error("\(errorMessage)")
+                installationError = errorMessage
+            }
+
+            return success
         }
     }
 
     func checkAgentStatus() {
         logger.info("Checking LaunchAgent status")
 
-        // Check if the LaunchAgent plist exists
-        let plistPath = getLaunchAgentPlistPath()
-        let plistExists = FileManager.default.fileExists(atPath: plistPath)
+        if #available(macOS 13.0, *) {
+            let loginItem = SMAppService.loginItem(identifier: agentIdentifier)
+            switch loginItem.status {
+            case .enabled:
+                isInstalled = true
+                isEnabled = true
+                installationError = nil
+            case .requiresApproval:
+                isInstalled = false
+                isEnabled = false
+                installationError = "Login item requires user approval"
+            case .notRegistered, .notFound:
+                fallthrough
+            @unknown default:
+                isInstalled = false
+                isEnabled = false
+                installationError = nil
+            }
+        } else {
+            if let jobs = SMCopyAllJobDictionaries(kSMDomainUserLaunchd)?.takeRetainedValue() as? [[String: Any]] {
+                let isLoaded = jobs.contains { job in
+                    guard let label = job["Label"] as? String else { return false }
+                    return label == agentLabel || label == agentIdentifier
+                }
 
-        // Check if the job is loaded using SMJobBless
-        let jobRef = SMJobCopy(kSMDomainUserLaunchd, agentIdentifier as CFString)
-        let isLoaded = jobRef != nil
-
-        if jobRef != nil {
-            jobRef?.release()
+                isInstalled = isLoaded
+                isEnabled = isLoaded
+                installationError = nil
+            } else {
+                isInstalled = false
+                isEnabled = false
+                installationError = nil
+            }
         }
 
-        isInstalled = plistExists && isLoaded
         lastCheckDate = Date()
-        isEnabled = isInstalled
 
         logger.info("LaunchAgent status - Installed: \(isInstalled), Enabled: \(isEnabled)")
     }
@@ -140,12 +150,6 @@ class LaunchAgentManager: ObservableObject {
     }
 
     // MARK: - Private Methods
-
-    private func getLaunchAgentPlistPath() -> String {
-        let libraryPath = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first!
-        let launchAgentsPath = libraryPath.appendingPathComponent("LaunchAgents")
-        return launchAgentsPath.appendingPathComponent("\(agentIdentifier).plist")
-    }
 
     // MARK: - Autostart Preference
 
@@ -185,6 +189,10 @@ class LaunchAgentManager: ObservableObject {
 
 extension LaunchAgentManager {
     var statusDescription: String {
+        if let error = installationError, !error.isEmpty {
+            return error
+        }
+
         if isInstalled {
             return "Installed and active"
         } else {
