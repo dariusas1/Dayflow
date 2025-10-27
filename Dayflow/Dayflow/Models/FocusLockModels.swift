@@ -2736,7 +2736,6 @@ struct TemplateTask: Codable, Identifiable {
     var tags: [String]
 
     init(title: String, description: String, estimatedDuration: TimeInterval, suggestedPriority: PlannerPriority = .medium, isOptional: Bool = false) {
-        self.id = UUID()
         self.title = title
         self.description = description
         self.estimatedDuration = estimatedDuration
