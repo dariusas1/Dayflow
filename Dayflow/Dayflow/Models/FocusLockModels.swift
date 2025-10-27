@@ -2660,7 +2660,7 @@ struct PlannerTemplate: Codable, Identifiable {
 }
 
 struct TemplateTask: Codable, Identifiable {
-    let id = UUID
+    let id: UUID = UUID()
     var title: String
     var description: String
     var estimatedDuration: TimeInterval
@@ -2670,7 +2670,6 @@ struct TemplateTask: Codable, Identifiable {
     var tags: [String]
 
     init(title: String, description: String, estimatedDuration: TimeInterval, suggestedPriority: PlannerPriority = .medium, isOptional: Bool = false) {
-        self.id = UUID()
         self.title = title
         self.description = description
         self.estimatedDuration = estimatedDuration
@@ -2852,7 +2851,7 @@ struct SentimentAnalysis: Codable {
     let keyEmotions: [String]
 
     var dominantEmotion: String? {
-        emotionalBreakdown.max { $0.score }?.emotion
+        emotionalBreakdown.max(by: { $0.score < $1.score })?.emotion
     }
 
     init() {
