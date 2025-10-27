@@ -67,7 +67,7 @@ class SuggestedTodosEngine {
 
         do {
             // Check if we should interrupt focus session
-            guard shouldShowSuggestions() else {
+            guard await shouldShowSuggestions() else {
                 logger.info("Skipping suggestions due to active focus session")
                 return []
             }
@@ -79,28 +79,28 @@ class SuggestedTodosEngine {
             }
 
             // Extract task suggestions from activity data
-            var suggestions = await extractTaskSuggestions(from: currentActivity)
+            let extractedTaskSuggestions = await extractTaskSuggestions(from: currentActivity)
 
             // Apply priority scoring and filtering
-            suggestions = await applyPriorityScoring(to: suggestions, activity: currentActivity)
+            var suggestedTodos = await applyPriorityScoring(to: extractedTaskSuggestions, activity: currentActivity)
 
             // Apply user preference learning
-            suggestions = await applyUserPreferenceLearning(to: suggestions)
+            suggestedTodos = await applyUserPreferenceLearning(to: suggestedTodos)
 
             // Filter and limit suggestions
-            suggestions = filterAndLimitSuggestions(suggestions)
+            let finalSuggestions = filterAndLimitSuggestions(suggestedTodos)
 
             // Store suggestions in database
-            for suggestion in suggestions {
+            for suggestion in finalSuggestions {
                 try await storeSuggestion(suggestion)
             }
 
             let duration = CFAbsoluteTimeGetCurrent() - startTime
-            updateProcessingStats(duration: duration, suggestionsCount: suggestions.count)
+            updateProcessingStats(duration: duration, suggestionsCount: finalSuggestions.count)
 
-            logger.info("Generated \(suggestions.count) task suggestions in \(String(format: "%.3f", duration))s")
+            logger.info("Generated \(finalSuggestions.count) task suggestions in \(String(format: "%.3f", duration))s")
 
-            return suggestions
+            return finalSuggestions
 
         } catch {
             logger.error("Failed to generate suggestions: \(error.localizedDescription)")
@@ -318,6 +318,7 @@ class SuggestedTodosEngine {
         }
     }
 
+    @MainActor
     private func shouldShowSuggestions() -> Bool {
         guard sessionManager.isActive else { return true }
 
@@ -590,11 +591,13 @@ class SuggestedTodosEngine {
     private func estimateDuration(for task: String) -> TimeInterval {
         let wordCount = task.components(separatedBy: .whitespaces).count
 
+        let lowercaseTask = task.lowercased()
+
         // Base estimation: 1 minute per word
         var baseEstimate = TimeInterval(wordCount * 60)
 
         // Adjust for task complexity
-        if task.lowercased().contains("create") || task.lowercased().contains("write") {
+        if lowercaseTask.contains("create") || lowercaseTask.contains("write") {
             baseEstimate *= 1.5
         } else if task.lowercased().contains("review") || task.lowercased().contains("check") {
             baseEstimate *= 0.8
@@ -860,6 +863,16 @@ class SuggestedTodosEngine {
         } catch {
             logger.error("Failed to cleanup old suggestions: \(error.localizedDescription)")
         }
+    }
+
+    private func saveConfiguration() async throws {
+        let configURL = try FileManager.default
+            .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("FocusLock")
+            .appendingPathComponent("SuggestionEngineConfig.json")
+
+        let data = try JSONEncoder().encode(config)
+        try data.write(to: configURL, options: .atomic)
     }
 
     private func parseDate(from dateString: String) -> Date? {
