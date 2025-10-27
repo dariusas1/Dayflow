@@ -947,61 +947,76 @@ struct TrendData: Identifiable, Codable {
 
 // MARK: - Widget Configuration Models
 
-struct DashboardWidget: Identifiable, Codable {
-    let id = UUID()
-    let type: WidgetType
-    let title: String
-    let configuration: WidgetConfiguration
-    let position: WidgetPosition
-    let isVisible: Bool
-    let refreshInterval: TimeInterval
+struct DashboardWidget: Identifiable, Codable, Equatable {
+    let id: String
+    var type: WidgetType
+    var title: String
+    var subtitle: String?
+    var position: WidgetPosition
+    var size: WidgetSize {
+        didSet {
+            position.width = size.gridDimensions.width
+            position.height = size.gridDimensions.height
+        }
+    }
+    var isVisible: Bool
+
+    init(
+        id: String = UUID().uuidString,
+        type: WidgetType,
+        title: String,
+        subtitle: String? = nil,
+        position: WidgetPosition = WidgetPosition(),
+        size: WidgetSize = .medium,
+        isVisible: Bool = true
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.subtitle = subtitle
+        var adjustedPosition = position
+        adjustedPosition.width = size.gridDimensions.width
+        adjustedPosition.height = size.gridDimensions.height
+        self.position = adjustedPosition
+        self.size = size
+        self.isVisible = isVisible
+    }
+
+    var systemImage: String { type.icon }
 
     enum WidgetType: String, Codable, CaseIterable {
-        case productivityScore = "productivity_score"
-        case focusTimeChart = "focus_time_chart"
-        case topApplications = "top_applications"
-        case taskProgress = "task_progress"
-        case trendAnalysis = "trend_analysis"
+        case focusTime = "focus_time"
+        case productivity = "productivity"
+        case tasks = "tasks"
+        case apps = "apps"
+        case wellness = "wellness"
+        case goals = "goals"
         case insights = "insights"
-        case goalsOverview = "goals_overview"
-        case quickQuery = "quick_query"
+        case trends = "trends"
 
         var displayName: String {
             switch self {
-            case .productivityScore: return "Productivity Score"
-            case .focusTimeChart: return "Focus Time"
-            case .topApplications: return "Top Applications"
-            case .taskProgress: return "Task Progress"
-            case .trendAnalysis: return "Trend Analysis"
+            case .focusTime: return "Focus Time"
+            case .productivity: return "Productivity"
+            case .tasks: return "Tasks"
+            case .apps: return "Apps"
+            case .wellness: return "Wellness"
+            case .goals: return "Goals"
             case .insights: return "Insights"
-            case .goalsOverview: return "Goals Overview"
-            case .quickQuery: return "Quick Query"
-            }
-        }
-
-        var defaultSize: WidgetSize {
-            switch self {
-            case .productivityScore: return .small
-            case .focusTimeChart: return .medium
-            case .topApplications: return .medium
-            case .taskProgress: return .small
-            case .trendAnalysis: return .large
-            case .insights: return .medium
-            case .goalsOverview: return .medium
-            case .quickQuery: return .small
+            case .trends: return "Trends"
             }
         }
 
         var icon: String {
             switch self {
-            case .productivityScore: return "chart.bar"
-            case .focusTimeChart: return "clock"
-            case .topApplications: return "app.badge"
-            case .taskProgress: return "checklist"
-            case .trendAnalysis: return "line.chart.uptrend.xyaxis"
-            case .insights: return "lightbulb"
-            case .goalsOverview: return "target"
-            case .quickQuery: return "magnifyingglass.circle"
+            case .focusTime: return "clock.fill"
+            case .productivity: return "chart.line.uptrend.xyaxis"
+            case .tasks: return "checkmark.circle.fill"
+            case .apps: return "app.badge"
+            case .wellness: return "heart.fill"
+            case .goals: return "target"
+            case .insights: return "lightbulb.fill"
+            case .trends: return "chart.xyaxis.line"
             }
         }
     }
@@ -1010,55 +1025,40 @@ struct DashboardWidget: Identifiable, Codable {
         case small = "small"
         case medium = "medium"
         case large = "large"
-        case full = "full"
 
-        var dimensions: (width: Int, height: Int) {
+        var height: CGFloat {
+            switch self {
+            case .small: return 120
+            case .medium: return 200
+            case .large: return 280
+            }
+        }
+
+        var gridDimensions: (width: Int, height: Int) {
             switch self {
             case .small: return (2, 2)
             case .medium: return (4, 2)
             case .large: return (4, 4)
-            case .full: return (8, 8)
             }
         }
     }
 
-    struct WidgetConfiguration: Codable {
-        let timeRange: TimeRange
-        let refreshInterval: TimeInterval
-        let customSettings: [String: AnyCodable]
+    struct WidgetPosition: Codable, Equatable {
+        var column: Int
+        var row: Int
+        var width: Int
+        var height: Int
 
-        enum TimeRange: String, Codable, CaseIterable {
-            case lastDay = "last_day"
-            case lastWeek = "last_week"
-            case lastMonth = "last_month"
-            case lastQuarter = "last_quarter"
-            case lastYear = "last_year"
-            case custom = "custom"
-
-            var displayName: String {
-                switch self {
-                case .lastDay: return "Last Day"
-                case .lastWeek: return "Last Week"
-                case .lastMonth: return "Last Month"
-                case .lastQuarter: return "Last Quarter"
-                case .lastYear: return "Last Year"
-                case .custom: return "Custom"
-                }
-            }
-        }
-    }
-
-    struct WidgetPosition: Codable {
-        let x: Int
-        let y: Int
-        let width: Int
-        let height: Int
-
-        init(x: Int = 0, y: Int = 0, width: Int = 2, height: Int = 2) {
-            self.x = x
-            self.y = y
+        init(column: Int = 0, row: Int = 0, width: Int = 2, height: Int = 2) {
+            self.column = column
+            self.row = row
             self.width = width
             self.height = height
+        }
+
+        var order: Int {
+            get { row }
+            set { row = newValue }
         }
     }
 }
@@ -1197,15 +1197,37 @@ struct Recommendation: Identifiable, Codable {
 // MARK: - Dashboard Configuration
 
 struct DashboardConfiguration: Codable {
-    let widgets: [DashboardWidget]
-    let theme: DashboardTheme
-    let layout: GridLayout
-    let preferences: UserPreferences
+    var widgets: [DashboardWidget]
+    var theme: DashboardTheme
+    var layout: GridLayout
+    var preferences: UserPreferences
+
+    init(
+        widgets: [DashboardWidget],
+        theme: DashboardTheme = .default,
+        layout: GridLayout = .default,
+        preferences: UserPreferences = .default
+    ) {
+        self.widgets = widgets
+        self.theme = theme
+        self.layout = layout
+        self.preferences = preferences
+    }
+
+    var timeRange: UserPreferences.TimeRange {
+        get { preferences.timeRange }
+        set { preferences.timeRange = newValue }
+    }
+
+    var showDetailedAnalysis: Bool {
+        get { preferences.showDetailedAnalysis }
+        set { preferences.showDetailedAnalysis = newValue }
+    }
 
     struct DashboardTheme: Codable {
-        let colorScheme: ColorScheme
-        let accentColor: String
-        let chartStyle: ChartStyle
+        var colorScheme: ColorScheme
+        var accentColor: String
+        var chartStyle: ChartStyle
 
         enum ColorScheme: String, Codable, CaseIterable {
             case light = "light"
@@ -1234,24 +1256,32 @@ struct DashboardConfiguration: Codable {
                 }
             }
         }
+
+        static let `default` = DashboardTheme(
+            colorScheme: .system,
+            accentColor: "AccentColor",
+            chartStyle: .colorful
+        )
     }
 
     struct GridLayout: Codable {
-        let columns: Int
-        let rows: Int
-        let spacing: CGFloat
-        let padding: CGFloat
+        var columns: Int
+        var rows: Int
+        var spacing: CGFloat
+        var padding: CGFloat
 
         static let `default` = GridLayout(columns: 8, rows: 8, spacing: 12, padding: 16)
     }
 
     struct UserPreferences: Codable {
-        let autoRefresh: Bool
-        let refreshInterval: TimeInterval
-        let showInsights: Bool
-        let showRecommendations: Bool
-        let enableAnimations: Bool
-        let compactMode: Bool
+        var autoRefresh: Bool
+        var refreshInterval: TimeInterval
+        var showInsights: Bool
+        var showRecommendations: Bool
+        var enableAnimations: Bool
+        var compactMode: Bool
+        var timeRange: TimeRange
+        var showDetailedAnalysis: Bool
 
         static let `default` = UserPreferences(
             autoRefresh: true,
@@ -1259,8 +1289,44 @@ struct DashboardConfiguration: Codable {
             showInsights: true,
             showRecommendations: true,
             enableAnimations: true,
-            compactMode: false
+            compactMode: false,
+            timeRange: .week,
+            showDetailedAnalysis: false
         )
+
+        enum TimeRange: String, Codable, CaseIterable {
+            case day = "day"
+            case week = "week"
+            case month = "month"
+            case quarter = "quarter"
+            case year = "year"
+
+            var displayName: String {
+                switch self {
+                case .day: return "Last Day"
+                case .week: return "Last Week"
+                case .month: return "Last Month"
+                case .quarter: return "Last Quarter"
+                case .year: return "Last Year"
+                }
+            }
+        }
+
+        func updating(
+            timeRange: TimeRange? = nil,
+            showDetailedAnalysis: Bool? = nil
+        ) -> UserPreferences {
+            UserPreferences(
+                autoRefresh: autoRefresh,
+                refreshInterval: refreshInterval,
+                showInsights: showInsights,
+                showRecommendations: showRecommendations,
+                enableAnimations: enableAnimations,
+                compactMode: compactMode,
+                timeRange: timeRange ?? self.timeRange,
+                showDetailedAnalysis: showDetailedAnalysis ?? self.showDetailedAnalysis
+            )
+        }
     }
 }
 
@@ -2660,7 +2726,7 @@ struct PlannerTemplate: Codable, Identifiable {
 }
 
 struct TemplateTask: Codable, Identifiable {
-    let id = UUID
+    let id: UUID
     var title: String
     var description: String
     var estimatedDuration: TimeInterval
@@ -2852,7 +2918,7 @@ struct SentimentAnalysis: Codable {
     let keyEmotions: [String]
 
     var dominantEmotion: String? {
-        emotionalBreakdown.max { $0.score }?.emotion
+        emotionalBreakdown.max(by: { $0.score < $1.score })?.emotion
     }
 
     init() {

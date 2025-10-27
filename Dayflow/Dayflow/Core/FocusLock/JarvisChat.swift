@@ -35,12 +35,12 @@ class JarvisChat: ObservableObject {
     private let maxToolHops = 3
     private let responseTimeout: TimeInterval = 12.0 // Local: 5s, Hybrid: 12s
 
-    private init() {
+    private init(llmService: LLMServicing = LLMService.shared) {
         // Initialize components
         self.memoryStore = try! HybridMemoryStore.shared
         self.toolOrchestrator = ToolOrchestrator()
         self.contextManager = ConversationContextManager()
-        self.llmService = LLMService.shared
+        self.llmService = llmService
 
         setupBindings()
         loadConversationHistory()
@@ -174,11 +174,11 @@ class JarvisChat: ObservableObject {
         isProcessing = false
     }
 
-    func getContextualInfo() -> [ContextualInfo] {
+    func getContextualInfo() async -> [ContextualInfo] {
         var info: [ContextualInfo] = []
 
         // Current activity
-        if let activity = ActivityTap.shared.getCurrentActivity() {
+        if let activity = await ActivityTap.shared.getCurrentActivity() {
             info.append(ContextualInfo(
                 type: .currentActivity,
                 title: "Current Activity",
@@ -311,6 +311,7 @@ class JarvisChat: ObservableObject {
             do {
                 let parameters = extractToolParameters(for: toolName, intent: intent, context: context)
                 let result = try await toolOrchestrator.executeTool(name: toolName, parameters: parameters)
+                let encodedParameters = encodeParameters(parameters)
 
                 let parameterPayload = convertToAnyCodable(parameters)
 
@@ -455,6 +456,10 @@ class JarvisChat: ObservableObject {
         }
     }
 
+    private func encodeParameters(_ parameters: [String: Any]) -> [String: AnyCodable] {
+        parameters.mapValues { AnyCodable($0) }
+    }
+
     private func extractCitations(from result: ToolResult) -> [Citation] {
         // Extract citations from tool results
         if let memoryIds = result.metadata["memory_ids"]?.value as? [String] {
@@ -556,7 +561,10 @@ class JarvisChat: ObservableObject {
     }
 
     private func updateContextualInfo() {
-        contextualInfo = getContextualInfo()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.contextualInfo = await self.getContextualInfo()
+        }
     }
 
     private func saveConversationHistory() {
