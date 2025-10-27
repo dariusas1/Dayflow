@@ -2660,7 +2660,7 @@ struct PlannerTemplate: Codable, Identifiable {
 }
 
 struct TemplateTask: Codable, Identifiable {
-    let id = UUID
+    let id: UUID
     var title: String
     var description: String
     var estimatedDuration: TimeInterval
