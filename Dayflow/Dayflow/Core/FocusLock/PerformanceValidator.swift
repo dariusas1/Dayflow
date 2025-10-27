@@ -15,6 +15,7 @@ class PerformanceValidator {
 
     private let logger = Logger(subsystem: "FocusLock", category: "PerformanceValidator")
     private var testResults: [PerformanceTestResult] = []
+    private let sessionManager = SessionManager.shared
 
     // Performance budgets and thresholds
     private let budgets = PerformanceBudgets()
@@ -80,14 +81,14 @@ class PerformanceValidator {
         let testName = "Idle Resource Usage"
         logger.info("Testing: \(testName)")
 
-        let baseline = await sessionManager.resourceUsage
+        let baseline = await measureResourceUsage()
 
         // Run idle monitoring for 30 seconds
         let startTime = Date()
         var measurements: [ResourceUsage] = []
 
         while Date().timeIntervalSince(startTime) < 30 {
-            measurements.append(await sessionManager.resourceUsage)
+            measurements.append(await measureResourceUsage())
             try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
         }
 
@@ -173,7 +174,7 @@ class PerformanceValidator {
         do {
             try await ocrDetector.startDetection()
 
-            let baseline = await sessionManager.resourceUsage
+            let baseline = await measureResourceUsage()
 
             // Run OCR for 30 seconds and measure peak usage
             let startTime = Date()
@@ -186,7 +187,7 @@ class PerformanceValidator {
                     ocrCount += 1
                 }
 
-                let current = await sessionManager.resourceUsage
+                let current = await measureResourceUsage()
                 peakCPU = max(peakCPU, current.cpuPercent)
                 peakMemory = max(peakMemory, current.memoryMB)
 
@@ -230,7 +231,7 @@ class PerformanceValidator {
         var memoryMeasurements: [(time: TimeInterval, memory: Double)] = []
 
         // Measure baseline
-        let baseline = await sessionManager.resourceUsage
+        let baseline = await measureResourceUsage()
         memoryMeasurements.append((0, baseline.memoryMB))
 
         do {
@@ -240,7 +241,7 @@ class PerformanceValidator {
             // Monitor for 5 minutes
             let startTime = Date()
             while Date().timeIntervalSince(startTime) < 300 {
-                let current = await sessionManager.resourceUsage
+                let current = await measureResourceUsage()
                 memoryMeasurements.append((Date().timeIntervalSince(startTime), current.memoryMB))
 
                 try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
@@ -581,12 +582,12 @@ class PerformanceValidator {
             try await detectorFuser.startFusion()
             try await ocrDetector.startDetection()
 
-            let baseline = await sessionManager.resourceUsage
+            let baseline = await measureResourceUsage()
 
             // Run all systems for 60 seconds
             try? await Task.sleep(nanoseconds: 60_000_000_000)
 
-            let peak = await sessionManager.resourceUsage
+            let peak = await measureResourceUsage()
 
             // Stop all systems
             ocrDetector.stopDetection()
@@ -713,15 +714,13 @@ class PerformanceValidator {
 
     // MARK: - Utility Methods
 
-    private func await sessionManager.resourceUsage -> ResourceUsage {
-        // Simplified mock resource measurement for testing
-        let usedMemory = Double.random(in: 50...200) // Mock memory usage
-        let totalMemory = 8192.0 // Mock 8GB total memory for testing
-        let memoryUsage = usedMemory / totalMemory
+    private func measureResourceUsage() async -> ResourceUsage {
+        if let usage = sessionManager.resourceUsage {
+            return usage
+        }
 
-        // Mock CPU usage for now
+        let usedMemory = Double.random(in: 50...200)
         let cpuUsage = Double.random(in: 0.01...0.15)
-
         let networkActivity = NetworkActivity(
             incomingBytesPerSecond: Double.random(in: 100...1000),
             outgoingBytesPerSecond: Double.random(in: 50...500),
