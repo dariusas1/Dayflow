@@ -233,9 +233,7 @@ struct DashboardCustomizationView: View {
                     position: 3,
                     size: .large
                 )
-            ],
-            timeRange: .week,
-            showDetailedAnalysis: false
+            ]
         )
     }
 }
@@ -725,9 +723,7 @@ struct WidgetPreview: View {
 #Preview {
     DashboardCustomizationView(
         configuration: .constant(DashboardConfiguration(
-            widgets: [],
-            timeRange: .week,
-            showDetailedAnalysis: false
+            widgets: []
         )),
         availableWidgets: .constant([]),
         onSave: { }

@@ -49,9 +49,7 @@ struct DashboardView: View {
                 position: 3,
                 size: .large
             )
-        ],
-        timeRange: .week,
-        showDetailedAnalysis: false
+        ]
     )
 
     var body: some View {
@@ -451,11 +449,7 @@ struct DashboardInsightsView: View {
             insights: engine.insights,
             recommendations: engine.recommendations,
             trends: engine.trends,
-            configuration: DashboardConfiguration(
-                widgets: [],
-                timeRange: .week,
-                showDetailedAnalysis: true
-            )
+            showDetailedAnalysis: true
         )
     }
 }
