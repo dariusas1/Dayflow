@@ -342,8 +342,17 @@ struct PlannerTask: Codable, Identifiable, Equatable {
     var estimatedDuration: TimeInterval // in seconds
     var priority: PlannerPriority
     var deadline: Date?
-    var isCompleted: Bool
-    var isFocusSessionProtected: Bool
+    var category: TaskCategory = .work
+    var complexity: Double = 0.5
+    var requiredResources: Set<String> = []
+    var relatedGoalID: UUID?
+    var goalAlignmentScore: Double?
+    var sourceIdentifier: String?
+    var externalSource: Bool = false
+    var isCompleted: Bool = false
+    var isOverdue: Bool = false
+    var hasResourceConflict: Bool = false
+    var isFocusSessionProtected: Bool = false
     var preferredEnergyLevel: PlannerEnergyLevel?
     var tags: [String]
     var createdAt: Date
@@ -369,11 +378,6 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         return scheduledStartTime != nil && scheduledEndTime != nil
     }
 
-    var isOverdue: Bool {
-        guard let deadline = deadline else { return false }
-        return Date() > deadline && !isCompleted
-    }
-
     var durationFormatted: String {
         let duration = Int(estimatedDuration)
         let hours = duration / 3600
@@ -390,10 +394,19 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         description: String = "",
         estimatedDuration: TimeInterval,
         priority: PlannerPriority = .medium,
+        category: TaskCategory = .work,
         deadline: Date? = nil,
+        complexity: Double = 0.5,
+        requiredResources: Set<String> = [],
+        relatedGoalID: UUID? = nil,
+        goalAlignmentScore: Double? = nil,
+        sourceIdentifier: String? = nil,
+        externalSource: Bool = false,
         isFocusSessionProtected: Bool = false,
         preferredEnergyLevel: PlannerEnergyLevel? = nil,
-        tags: [String] = []
+        tags: [String] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.id = UUID()
         self.title = title
@@ -401,14 +414,30 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         self.estimatedDuration = estimatedDuration
         self.priority = priority
         self.deadline = deadline
+        self.category = category
+        self.complexity = max(0.0, min(complexity, 1.0))
+        self.requiredResources = requiredResources
+        self.relatedGoalID = relatedGoalID
+        self.goalAlignmentScore = goalAlignmentScore
+        self.sourceIdentifier = sourceIdentifier
+        self.externalSource = externalSource
         self.isCompleted = false
+        self.isOverdue = deadline.map { Date() > $0 } ?? false
+        self.hasResourceConflict = false
         self.isFocusSessionProtected = isFocusSessionProtected
         self.preferredEnergyLevel = preferredEnergyLevel
         self.tags = tags
-        self.createdAt = Date()
-        self.updatedAt = Date()
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.completedAt = nil
+        self.scheduledStartTime = nil
+        self.scheduledEndTime = nil
+        self.actualStartTime = nil
+        self.actualEndTime = nil
+        self.parentTaskID = nil
         self.dependencyIDs = []
         self.dependentIDs = []
+        self.optimalStartTime = nil
         self.confidenceScore = 0.5
         self.completionProbability = 0.8
         self.focusSessionRecommendation = isFocusSessionProtected
@@ -418,6 +447,7 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         isCompleted = true
         completedAt = Date()
         actualEndTime = Date()
+        isOverdue = false
         updatedAt = Date()
     }
 
@@ -641,8 +671,9 @@ struct SchedulingConstraint: Codable {
     let id: UUID
     var type: ConstraintType
     var taskID: UUID
-    var parameter: String // Constraint-specific parameter
-    var value: String // Constraint value
+    var parameter: String?
+    private var numericValueStorage: Double?
+    private var stringValueStorage: String?
     var isActive: Bool
 
     enum ConstraintType: String, CaseIterable, Codable {
@@ -654,15 +685,119 @@ struct SchedulingConstraint: Codable {
         case dependency = "dependency"
         case deadline = "deadline"
         case focusSessionOnly = "focus_session_only"
+        case maxFocusTime = "max_focus_time"
+        case energyAlignment = "energy_alignment"
+        case deadlinePriority = "deadline_priority"
+        case categoryBalance = "category_balance"
+        case maxWorkHours = "max_work_hours"
     }
 
-    init(type: ConstraintType, taskID: UUID, parameter: String, value: String) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case taskID
+        case parameter
+        case numericValue
+        case stringValue
+        case legacyValue = "value"
+        case isActive
+    }
+
+    var value: Double {
+        get {
+            if let numericValueStorage {
+                return numericValueStorage
+            }
+            if let stringValueStorage, let numeric = Double(stringValueStorage) {
+                return numeric
+            }
+            return 0
+        }
+        set {
+            numericValueStorage = newValue
+            stringValueStorage = nil
+        }
+    }
+
+    var intValue: Int {
+        return Int(value.rounded())
+    }
+
+    var stringValue: String? {
+        get {
+            if let stringValueStorage {
+                return stringValueStorage
+            }
+            if let numericValueStorage {
+                return String(numericValueStorage)
+            }
+            return nil
+        }
+        set {
+            stringValueStorage = newValue
+            if let newValue, let numeric = Double(newValue) {
+                numericValueStorage = numeric
+            } else {
+                numericValueStorage = nil
+            }
+        }
+    }
+
+    init(type: ConstraintType, taskID: UUID, parameter: String? = nil, value: Double, isActive: Bool = true) {
         self.id = UUID()
         self.type = type
         self.taskID = taskID
         self.parameter = parameter
-        self.value = value
-        self.isActive = true
+        self.numericValueStorage = value
+        self.stringValueStorage = nil
+        self.isActive = isActive
+    }
+
+    init(type: ConstraintType, taskID: UUID, parameter: String? = nil, stringValue: String, isActive: Bool = true) {
+        self.id = UUID()
+        self.type = type
+        self.taskID = taskID
+        self.parameter = parameter
+        self.numericValueStorage = Double(stringValue)
+        self.stringValueStorage = stringValue
+        self.isActive = isActive
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        type = try container.decode(ConstraintType.self, forKey: .type)
+        taskID = try container.decode(UUID.self, forKey: .taskID)
+        parameter = try container.decodeIfPresent(String.self, forKey: .parameter)
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
+
+        numericValueStorage = try container.decodeIfPresent(Double.self, forKey: .numericValue)
+        stringValueStorage = try container.decodeIfPresent(String.self, forKey: .stringValue)
+
+        if numericValueStorage == nil {
+            if let legacyNumeric = try container.decodeIfPresent(Double.self, forKey: .legacyValue) {
+                numericValueStorage = legacyNumeric
+            } else if stringValueStorage == nil,
+                      let legacyString = try container.decodeIfPresent(String.self, forKey: .legacyValue) {
+                stringValueStorage = legacyString
+                numericValueStorage = Double(legacyString)
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(taskID, forKey: .taskID)
+        try container.encodeIfPresent(parameter, forKey: .parameter)
+        try container.encode(isActive, forKey: .isActive)
+
+        if let numericValueStorage {
+            try container.encode(numericValueStorage, forKey: .numericValue)
+        } else if let stringValueStorage {
+            try container.encode(stringValueStorage, forKey: .stringValue)
+        }
     }
 }
 
@@ -947,61 +1082,76 @@ struct TrendData: Identifiable, Codable {
 
 // MARK: - Widget Configuration Models
 
-struct DashboardWidget: Identifiable, Codable {
-    let id = UUID()
-    let type: WidgetType
-    let title: String
-    let configuration: WidgetConfiguration
-    let position: WidgetPosition
-    let isVisible: Bool
-    let refreshInterval: TimeInterval
+struct DashboardWidget: Identifiable, Codable, Equatable {
+    let id: String
+    var type: WidgetType
+    var title: String
+    var subtitle: String?
+    var position: WidgetPosition
+    var size: WidgetSize {
+        didSet {
+            position.width = size.gridDimensions.width
+            position.height = size.gridDimensions.height
+        }
+    }
+    var isVisible: Bool
+
+    init(
+        id: String = UUID().uuidString,
+        type: WidgetType,
+        title: String,
+        subtitle: String? = nil,
+        position: WidgetPosition = WidgetPosition(),
+        size: WidgetSize = .medium,
+        isVisible: Bool = true
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.subtitle = subtitle
+        var adjustedPosition = position
+        adjustedPosition.width = size.gridDimensions.width
+        adjustedPosition.height = size.gridDimensions.height
+        self.position = adjustedPosition
+        self.size = size
+        self.isVisible = isVisible
+    }
+
+    var systemImage: String { type.icon }
 
     enum WidgetType: String, Codable, CaseIterable {
-        case productivityScore = "productivity_score"
-        case focusTimeChart = "focus_time_chart"
-        case topApplications = "top_applications"
-        case taskProgress = "task_progress"
-        case trendAnalysis = "trend_analysis"
+        case focusTime = "focus_time"
+        case productivity = "productivity"
+        case tasks = "tasks"
+        case apps = "apps"
+        case wellness = "wellness"
+        case goals = "goals"
         case insights = "insights"
-        case goalsOverview = "goals_overview"
-        case quickQuery = "quick_query"
+        case trends = "trends"
 
         var displayName: String {
             switch self {
-            case .productivityScore: return "Productivity Score"
-            case .focusTimeChart: return "Focus Time"
-            case .topApplications: return "Top Applications"
-            case .taskProgress: return "Task Progress"
-            case .trendAnalysis: return "Trend Analysis"
+            case .focusTime: return "Focus Time"
+            case .productivity: return "Productivity"
+            case .tasks: return "Tasks"
+            case .apps: return "Apps"
+            case .wellness: return "Wellness"
+            case .goals: return "Goals"
             case .insights: return "Insights"
-            case .goalsOverview: return "Goals Overview"
-            case .quickQuery: return "Quick Query"
-            }
-        }
-
-        var defaultSize: WidgetSize {
-            switch self {
-            case .productivityScore: return .small
-            case .focusTimeChart: return .medium
-            case .topApplications: return .medium
-            case .taskProgress: return .small
-            case .trendAnalysis: return .large
-            case .insights: return .medium
-            case .goalsOverview: return .medium
-            case .quickQuery: return .small
+            case .trends: return "Trends"
             }
         }
 
         var icon: String {
             switch self {
-            case .productivityScore: return "chart.bar"
-            case .focusTimeChart: return "clock"
-            case .topApplications: return "app.badge"
-            case .taskProgress: return "checklist"
-            case .trendAnalysis: return "line.chart.uptrend.xyaxis"
-            case .insights: return "lightbulb"
-            case .goalsOverview: return "target"
-            case .quickQuery: return "magnifyingglass.circle"
+            case .focusTime: return "clock.fill"
+            case .productivity: return "chart.line.uptrend.xyaxis"
+            case .tasks: return "checkmark.circle.fill"
+            case .apps: return "app.badge"
+            case .wellness: return "heart.fill"
+            case .goals: return "target"
+            case .insights: return "lightbulb.fill"
+            case .trends: return "chart.xyaxis.line"
             }
         }
     }
@@ -1010,55 +1160,40 @@ struct DashboardWidget: Identifiable, Codable {
         case small = "small"
         case medium = "medium"
         case large = "large"
-        case full = "full"
 
-        var dimensions: (width: Int, height: Int) {
+        var height: CGFloat {
+            switch self {
+            case .small: return 120
+            case .medium: return 200
+            case .large: return 280
+            }
+        }
+
+        var gridDimensions: (width: Int, height: Int) {
             switch self {
             case .small: return (2, 2)
             case .medium: return (4, 2)
             case .large: return (4, 4)
-            case .full: return (8, 8)
             }
         }
     }
 
-    struct WidgetConfiguration: Codable {
-        let timeRange: TimeRange
-        let refreshInterval: TimeInterval
-        let customSettings: [String: AnyCodable]
+    struct WidgetPosition: Codable, Equatable {
+        var column: Int
+        var row: Int
+        var width: Int
+        var height: Int
 
-        enum TimeRange: String, Codable, CaseIterable {
-            case lastDay = "last_day"
-            case lastWeek = "last_week"
-            case lastMonth = "last_month"
-            case lastQuarter = "last_quarter"
-            case lastYear = "last_year"
-            case custom = "custom"
-
-            var displayName: String {
-                switch self {
-                case .lastDay: return "Last Day"
-                case .lastWeek: return "Last Week"
-                case .lastMonth: return "Last Month"
-                case .lastQuarter: return "Last Quarter"
-                case .lastYear: return "Last Year"
-                case .custom: return "Custom"
-                }
-            }
-        }
-    }
-
-    struct WidgetPosition: Codable {
-        let x: Int
-        let y: Int
-        let width: Int
-        let height: Int
-
-        init(x: Int = 0, y: Int = 0, width: Int = 2, height: Int = 2) {
-            self.x = x
-            self.y = y
+        init(column: Int = 0, row: Int = 0, width: Int = 2, height: Int = 2) {
+            self.column = column
+            self.row = row
             self.width = width
             self.height = height
+        }
+
+        var order: Int {
+            get { row }
+            set { row = newValue }
         }
     }
 }
@@ -1197,15 +1332,43 @@ struct Recommendation: Identifiable, Codable {
 // MARK: - Dashboard Configuration
 
 struct DashboardConfiguration: Codable {
-    let widgets: [DashboardWidget]
-    let theme: DashboardTheme
-    let layout: GridLayout
-    let preferences: UserPreferences
+    var widgets: [DashboardWidget]
+    var theme: DashboardTheme
+    var layout: GridLayout
+    var preferences: UserPreferences
+
+    init(
+        widgets: [DashboardWidget],
+        theme: DashboardTheme = .default,
+        layout: GridLayout = .default,
+        preferences: UserPreferences = .default
+    ) {
+        self.widgets = widgets
+        self.theme = theme
+        self.layout = layout
+        self.preferences = preferences
+    }
+
+    var timeRange: UserPreferences.TimeRange {
+        get { preferences.timeRange }
+        set { preferences.timeRange = newValue }
+    }
+
+    var showDetailedAnalysis: Bool {
+        get { preferences.showDetailedAnalysis }
+        set { preferences.showDetailedAnalysis = newValue }
+    }
 
     struct DashboardTheme: Codable {
-        let colorScheme: ColorScheme
-        let accentColor: String
-        let chartStyle: ChartStyle
+        var colorScheme: ColorScheme
+        var accentColor: String
+        var chartStyle: ChartStyle
+
+        static let `default` = DashboardTheme(
+            colorScheme: .system,
+            accentColor: "blue",
+            chartStyle: .colorful
+        )
 
         enum ColorScheme: String, Codable, CaseIterable {
             case light = "light"
@@ -1234,24 +1397,32 @@ struct DashboardConfiguration: Codable {
                 }
             }
         }
+
+        static let `default` = DashboardTheme(
+            colorScheme: .system,
+            accentColor: "AccentColor",
+            chartStyle: .colorful
+        )
     }
 
     struct GridLayout: Codable {
-        let columns: Int
-        let rows: Int
-        let spacing: CGFloat
-        let padding: CGFloat
+        var columns: Int
+        var rows: Int
+        var spacing: CGFloat
+        var padding: CGFloat
 
         static let `default` = GridLayout(columns: 8, rows: 8, spacing: 12, padding: 16)
     }
 
     struct UserPreferences: Codable {
-        let autoRefresh: Bool
-        let refreshInterval: TimeInterval
-        let showInsights: Bool
-        let showRecommendations: Bool
-        let enableAnimations: Bool
-        let compactMode: Bool
+        var autoRefresh: Bool
+        var refreshInterval: TimeInterval
+        var showInsights: Bool
+        var showRecommendations: Bool
+        var enableAnimations: Bool
+        var compactMode: Bool
+        var timeRange: TimeRange
+        var showDetailedAnalysis: Bool
 
         static let `default` = UserPreferences(
             autoRefresh: true,
@@ -1259,7 +1430,60 @@ struct DashboardConfiguration: Codable {
             showInsights: true,
             showRecommendations: true,
             enableAnimations: true,
-            compactMode: false
+            compactMode: false,
+            timeRange: .week,
+            showDetailedAnalysis: false
+        )
+
+        enum TimeRange: String, Codable, CaseIterable {
+            case day = "day"
+            case week = "week"
+            case month = "month"
+            case quarter = "quarter"
+            case year = "year"
+
+            var displayName: String {
+                switch self {
+                case .day: return "Last Day"
+                case .week: return "Last Week"
+                case .month: return "Last Month"
+                case .quarter: return "Last Quarter"
+                case .year: return "Last Year"
+                }
+            }
+        }
+
+        func updating(
+            timeRange: TimeRange? = nil,
+            showDetailedAnalysis: Bool? = nil
+        ) -> UserPreferences {
+            UserPreferences(
+                autoRefresh: autoRefresh,
+                refreshInterval: refreshInterval,
+                showInsights: showInsights,
+                showRecommendations: showRecommendations,
+                enableAnimations: enableAnimations,
+                compactMode: compactMode,
+                timeRange: timeRange ?? self.timeRange,
+                showDetailedAnalysis: showDetailedAnalysis ?? self.showDetailedAnalysis
+            )
+        }
+    }
+
+}
+
+extension DashboardConfiguration {
+    init(
+        widgets: [DashboardWidget],
+        theme: DashboardTheme? = nil,
+        layout: GridLayout? = nil,
+        preferences: UserPreferences? = nil
+    ) {
+        self.init(
+            widgets: widgets,
+            theme: theme ?? .default,
+            layout: layout ?? .default,
+            preferences: preferences ?? .default
         )
     }
 }
@@ -2660,7 +2884,7 @@ struct PlannerTemplate: Codable, Identifiable {
 }
 
 struct TemplateTask: Codable, Identifiable {
-    let id = UUID
+    let id: UUID
     var title: String
     var description: String
     var estimatedDuration: TimeInterval
@@ -2670,7 +2894,6 @@ struct TemplateTask: Codable, Identifiable {
     var tags: [String]
 
     init(title: String, description: String, estimatedDuration: TimeInterval, suggestedPriority: PlannerPriority = .medium, isOptional: Bool = false) {
-        self.id = UUID()
         self.title = title
         self.description = description
         self.estimatedDuration = estimatedDuration
@@ -2852,7 +3075,7 @@ struct SentimentAnalysis: Codable {
     let keyEmotions: [String]
 
     var dominantEmotion: String? {
-        emotionalBreakdown.max { $0.score }?.emotion
+        emotionalBreakdown.max(by: { $0.score < $1.score })?.emotion
     }
 
     init() {

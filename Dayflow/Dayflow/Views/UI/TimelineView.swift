@@ -963,7 +963,7 @@ struct TaskDetailsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("How well did this task go?")
                             .font(.custom("Nunito", size: 14))
-                            .fontWeight(.medium))
+                            .fontWeight(.medium)
 
                         HStack {
                             ForEach(1...5, id: \.self) { rating in

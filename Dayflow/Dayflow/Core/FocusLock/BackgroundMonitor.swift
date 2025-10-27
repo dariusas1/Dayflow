@@ -179,6 +179,12 @@ class BackgroundMonitor: ObservableObject {
         consolidatedTimer = nil
     }
 
+    private func stopIntegrityCheckTimer() {
+        consolidatedTimer?.invalidate()
+        consolidatedTimer = nil
+        lastIntegrityCheckTime = nil
+    }
+
     private func adaptMonitoringIntervals() {
         guard isMonitoring else { return }
 
@@ -304,8 +310,12 @@ class BackgroundMonitor: ObservableObject {
 
     private func handleAppBecameActive() {
         // App became active - resume monitoring if needed
-        if sessionManager.currentState != .idle && !isMonitoring {
-            startMonitoring()
+        if sessionManager.currentState != .idle {
+            if !isMonitoring {
+                startMonitoring()
+            } else if consolidatedTimer == nil {
+                startConsolidatedTimer()
+            }
         }
     }
 

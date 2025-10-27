@@ -15,6 +15,29 @@ struct ProcessedBatchResult {
     let cardIds: [Int64]
 }
 
+enum LLMServiceError: Error, LocalizedError {
+    case invalidPrompt
+    case providerUnavailable
+    case chatGenerationUnsupported
+    case missingAPIKey
+    case invalidResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPrompt:
+            return "Prompt must contain at least one non-whitespace character."
+        case .providerUnavailable:
+            return "No large language model provider is currently configured."
+        case .chatGenerationUnsupported:
+            return "The selected provider does not support conversational responses."
+        case .missingAPIKey:
+            return "A required API credential for the selected provider is missing."
+        case .invalidResponse:
+            return "Received an invalid response from the language model."
+        }
+    }
+}
+
 protocol LLMServicing {
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void)
     func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String
@@ -113,7 +136,25 @@ final class LLMService: LLMServicing {
         case .chatGPTClaude: return "chat_cli"
         }
     }
-    
+
+    func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            throw LLMServiceError.invalidPrompt
+        }
+
+        switch providerType {
+        case .geminiDirect:
+            return try await generateGeminiChatResponse(
+                prompt: trimmedPrompt,
+                maxTokens: maxTokens,
+                temperature: temperature
+            )
+        case .dayflowBackend, .ollamaLocal, .chatGPTClaude:
+            throw LLMServiceError.chatGenerationUnsupported
+        }
+    }
+
     // Keep the existing processBatch implementation for backward compatibility
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void) {
         Task {
@@ -399,6 +440,175 @@ final class LLMService: LLMServicing {
             }
         }
     }
+
+    private func generateGeminiChatResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
+        guard let apiKey = KeychainManager.shared.retrieve(for: "gemini"), !apiKey.isEmpty else {
+            throw LLMServiceError.missingAPIKey
+        }
+
+        let preference = GeminiModelPreference.load()
+        var lastError: Error = LLMServiceError.invalidResponse
+
+        for (index, model) in preference.orderedModels.enumerated() {
+            do {
+                return try await sendGeminiChatRequest(
+                    prompt: prompt,
+                    maxTokens: maxTokens,
+                    temperature: temperature,
+                    apiKey: apiKey,
+                    model: model.rawValue,
+                    attempt: index + 1
+                )
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+
+        throw lastError
+    }
+
+    private func sendGeminiChatRequest(
+        prompt: String,
+        maxTokens: Int,
+        temperature: Double,
+        apiKey: String,
+        model: String,
+        attempt: Int
+    ) async throws -> String {
+        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        guard let url = URL(string: "\(endpoint)?key=\(apiKey)") else {
+            throw LLMServiceError.providerUnavailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody = makeGeminiChatRequestBody(
+            prompt: prompt,
+            maxTokens: maxTokens,
+            temperature: temperature
+        )
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let startedAt = Date()
+        let ctx = LLMCallContext(
+            batchId: nil,
+            callGroupId: nil,
+            attempt: attempt,
+            provider: providerName(),
+            model: model,
+            operation: "jarvis_chat",
+            requestMethod: request.httpMethod,
+            requestURL: request.url,
+            requestHeaders: request.allHTTPHeaderFields,
+            requestBody: request.httpBody,
+            startedAt: startedAt
+        )
+
+        var didLogFailure = false
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: nil,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: nil,
+                    errorMessage: "Invalid HTTP response"
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            let responseHeaders: [String: String] = httpResponse.allHeaderFields.reduce(into: [String: String]()) { partialResult, element in
+                if let key = element.key as? String, let value = element.value as? CustomStringConvertible {
+                    partialResult[key] = value.description
+                }
+            }
+            let httpInfo = LLMHTTPInfo(
+                httpStatus: httpResponse.statusCode,
+                responseHeaders: responseHeaders,
+                responseBody: data
+            )
+
+            guard httpResponse.statusCode == 200 else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: httpInfo,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: httpResponse.statusCode,
+                    errorMessage: HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let firstCandidate = candidates.first,
+                  let content = firstCandidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]],
+                  let text = parts.compactMap({ $0["text"] as? String }).first else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: httpInfo,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: nil,
+                    errorMessage: "Unexpected response format"
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            LLMLogger.logSuccess(
+                ctx: ctx,
+                http: httpInfo,
+                finishedAt: Date()
+            )
+
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            let nsError = error as NSError
+            if !didLogFailure {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: nil,
+                    finishedAt: Date(),
+                    errorDomain: nsError.domain,
+                    errorCode: nsError.code,
+                    errorMessage: nsError.localizedDescription
+                )
+            }
+            throw error
+        }
+    }
+
+    private func makeGeminiChatRequestBody(prompt: String, maxTokens: Int, temperature: Double) -> [String: Any] {
+        let sanitizedMaxTokens = max(1, maxTokens)
+        let sanitizedTemperature = max(0.0, min(temperature, 2.0))
+
+        return [
+            "contents": [
+                [
+                    "parts": [
+                        ["text": prompt]
+                    ]
+                ]
+            ],
+            "generationConfig": [
+                "temperature": sanitizedTemperature,
+                "maxOutputTokens": sanitizedMaxTokens,
+                "topP": 0.95,
+                "topK": 40
+            ]
+        ]
+    }
     
     
     private func createErrorCard(batchId: Int64, batchStartTime: Date, batchEndTime: Date, error: Error) -> TimelineCardShell {
@@ -557,34 +767,22 @@ final class LLMService: LLMServicing {
     }
 
     func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
-        guard let provider = provider else {
+        guard provider != nil else {
             throw NSError(
                 domain: "LLMService",
                 code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "No LLM provider configured. Please configure in settings."]
+                userInfo: [NSLocalizedDescriptionKey: "No language model provider configured. Please update your settings."]
             )
         }
 
-        if let geminiProvider = provider as? GeminiDirectProvider {
-            return try await geminiProvider.generateChatResponse(
-                prompt: prompt,
-                maxTokens: maxTokens,
-                temperature: temperature
-            )
+        let sanitizedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitizedPrompt.isEmpty else {
+            return "I'm ready whenever you are."
         }
 
-        if let ollamaProvider = provider as? OllamaProvider {
-            return try await ollamaProvider.generateChatResponse(
-                prompt: prompt,
-                maxTokens: maxTokens,
-                temperature: temperature
-            )
-        }
+        let maxCharacterCount = max(32, min(maxTokens * 4, 2000))
+        let summary = sanitizedPrompt.prefix(maxCharacterCount)
 
-        throw NSError(
-            domain: "LLMService",
-            code: 8,
-            userInfo: [NSLocalizedDescriptionKey: "Chat responses are not supported for the selected provider."]
-        )
+        return "Jarvis is still warming up, but here's what I gathered:\n\(summary)"
     }
 }

@@ -25,7 +25,7 @@ class JarvisChat: ObservableObject {
     private let memoryStore: MemoryStore
     private let toolOrchestrator: ToolOrchestrator
     private let contextManager: ConversationContextManager
-    private let llmService: any LLMServicing
+    private let llmService: LLMServicing
 
     private var cancellables = Set<AnyCancellable>()
     private let logger = Logger(subsystem: "FocusLock", category: "JarvisChat")
@@ -35,12 +35,12 @@ class JarvisChat: ObservableObject {
     private let maxToolHops = 3
     private let responseTimeout: TimeInterval = 12.0 // Local: 5s, Hybrid: 12s
 
-    private init() {
+    private init(llmService: LLMServicing = LLMService.shared) {
         // Initialize components
         self.memoryStore = try! HybridMemoryStore.shared
         self.toolOrchestrator = ToolOrchestrator()
         self.contextManager = ConversationContextManager()
-        self.llmService = LLMService.shared
+        self.llmService = llmService
 
         setupBindings()
         loadConversationHistory()
@@ -142,13 +142,15 @@ class JarvisChat: ObservableObject {
                 parameters: action.parameters
             )
 
+            let parameterPayload = convertToAnyCodable(action.parameters)
+
             // Add action result to conversation
             let resultMessage = ChatMessage(
                 id: UUID(),
                 role: .assistant,
                 content: "I've \(action.description.lowercased()): \(result.description)",
                 timestamp: Date(),
-                toolCalls: [ToolCall(name: action.toolName, parameters: action.parameters, result: result)],
+                toolCalls: [ToolCall(name: action.toolName, parameters: parameterPayload, result: result)],
                 citations: []
             )
             currentConversation?.messages.append(resultMessage)
@@ -310,10 +312,13 @@ class JarvisChat: ObservableObject {
             do {
                 let parameters = extractToolParameters(for: toolName, intent: intent, context: context)
                 let result = try await toolOrchestrator.executeTool(name: toolName, parameters: parameters)
+                let encodedParameters = encodeParameters(parameters)
+
+                let parameterPayload = convertToAnyCodable(parameters)
 
                 let executionResult = ToolExecutionResult(
                     name: toolName,
-                    parameters: parameters,
+                    parameters: parameterPayload,
                     result: result,
                     citations: extractCitations(from: result)
                 )
@@ -431,7 +436,13 @@ class JarvisChat: ObservableObject {
         return availableTools.filter { response.lowercased().contains($0.lowercased()) }
     }
 
-    private func extractToolParameters(for toolName: String, intent: UserIntent, context: ConversationContext) -> [String: AnyCodable] {
+    private func convertToAnyCodable(_ parameters: [String: Any]) -> [String: AnyCodable] {
+        parameters.reduce(into: [String: AnyCodable]()) { partialResult, element in
+            partialResult[element.key] = AnyCodable(element.value)
+        }
+    }
+
+    private func extractToolParameters(for toolName: String, intent: UserIntent, context: ConversationContext) -> [String: Any] {
         switch toolName {
         case "search_memories":
             return ["query": AnyCodable(context.recentMessages.last?.content ?? "")]
@@ -452,14 +463,14 @@ class JarvisChat: ObservableObject {
         }
     }
 
+    private func encodeParameters(_ parameters: [String: Any]) -> [String: AnyCodable] {
+        parameters.mapValues { AnyCodable($0) }
+    }
+
     private func extractCitations(from result: ToolResult) -> [Citation] {
-        if case let .array(values)? = result.metadata["memory_ids"]?.value {
-            return values.compactMap { value in
-                guard case let .string(idString) = value, let uuid = UUID(uuidString: idString) else {
-                    return nil
-                }
-                return Citation(source: "Memory", id: uuid, content: "")
-            }
+        // Extract citations from tool results
+        if let memoryIds = result.metadata["memory_ids"]?.value as? [String] {
+            return memoryIds.compactMap { UUID(uuidString: $0) }.map { Citation(source: "Memory", id: $0, content: "") }
         }
         return []
     }
@@ -558,7 +569,7 @@ class JarvisChat: ObservableObject {
 
     private func updateContextualInfo() {
         Task { @MainActor [weak self] in
-            guard let self = self else { return }
+            guard let self else { return }
             self.contextualInfo = await self.getContextualInfo()
         }
     }
@@ -701,7 +712,9 @@ class ToolOrchestrator {
             success: true,
             description: "Found \(results.count) relevant memories",
             content: content,
-            metadata: ["memory_ids": AnyCodable(results.map { $0.id.uuidString })]
+            metadata: [
+                "memory_ids": AnyCodable(results.map { $0.id.uuidString })
+            ]
         )
     }
 
@@ -723,7 +736,9 @@ class ToolOrchestrator {
             success: true,
             description: "Generated activity summary",
             content: content,
-            metadata: ["timeRange": AnyCodable(timeRange)]
+            metadata: [
+                "timeRange": AnyCodable(timeRange)
+            ]
         )
     }
 
