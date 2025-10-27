@@ -494,9 +494,9 @@ struct JournalEntryCard: View {
     }
 }
 
-// MARK: - Feature Onboarding View
+// MARK: - Feature Flag Onboarding Steps View
 
-struct FeatureOnboardingView: View {
+struct FeatureFlagOnboardingStepsView: View {
     let feature: FeatureFlag
     let onComplete: () -> Void
     @State private var currentStep: Int = 0
