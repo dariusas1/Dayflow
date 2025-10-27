@@ -2852,7 +2852,7 @@ struct SentimentAnalysis: Codable {
     let keyEmotions: [String]
 
     var dominantEmotion: String? {
-        emotionalBreakdown.max { $0.score }?.emotion
+        emotionalBreakdown.max(by: { lhs, rhs in lhs.score < rhs.score })?.emotion
     }
 
     init() {
