@@ -13,6 +13,8 @@ struct DashboardView: View {
     @State private var availableWidgets: [DashboardWidget] = []
     @State private var dragOffset: CGSize = .zero
     @State private var isDragging: Bool = false
+    @State private var latestQueryAnswer: QueryAnswer?
+    @State private var showingQueryAlert: Bool = false
 
     // Dashboard configuration
     @State private var configuration = DashboardConfiguration(
@@ -179,12 +181,10 @@ struct DashboardView: View {
                 onSave: saveConfiguration
             )
         }
-        .alert("Query Result", isPresented: $dashboardEngine.showingQueryAlert) {
+        .alert("Query Result", isPresented: $showingQueryAlert) {
             Button("OK") { }
         } message: {
-            if let result = dashboardEngine.queryResult {
-                Text(result.answer)
-            }
+            Text(latestQueryAnswer?.answer ?? "")
         }
     }
 
@@ -192,10 +192,15 @@ struct DashboardView: View {
         guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         Task {
-            let result = await queryProcessor.processQuery(searchText)
+            let context = await queryProcessor.processQuery(searchText)
+            let metrics = await MainActor.run { dashboardEngine.productivityMetrics }
+            let answer = await queryProcessor.generateAnswer(
+                for: context,
+                with: metrics
+            )
             await MainActor.run {
-                dashboardEngine.queryResult = result
-                dashboardEngine.showingQueryAlert = true
+                latestQueryAnswer = answer
+                showingQueryAlert = true
             }
         }
         searchText = ""
