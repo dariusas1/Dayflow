@@ -371,6 +371,7 @@ class BackgroundMonitor: ObservableObject {
             return nil
         }
     }
+}
 
 // MARK: - Session Health
 

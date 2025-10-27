@@ -18,7 +18,6 @@ class ActivityTap {
     // Component extractors
     private let axExtractor = AXExtractor.shared
     private let ocrExtractor = OCRExtractor.shared
-    private let taskDetector = TaskDetector.shared
 
     // Activity tracking
     private var currentActivity: Activity?
@@ -77,13 +76,13 @@ class ActivityTap {
     // MARK: - Private Methods
 
     private func startActivityMonitoring() {
-        activityTimer = Timer.scheduledTimer(withTimeInterval: activityUpdateInterval, repeats: true) { [weak self] _ in
+        activityTimer = Timer.scheduledTimer(withTimeInterval: self.activityUpdateInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 await self?.updateCurrentActivity()
             }
         }
 
-        logger.info("Started activity monitoring with \(activityUpdateInterval)s interval")
+        logger.info("Started activity monitoring with \(self.activityUpdateInterval)s interval")
     }
 
     private func updateCurrentActivity() async -> Activity? {
@@ -98,7 +97,7 @@ class ActivityTap {
             }
 
             // Collect data from multiple sources
-            async let windowInfo = WindowInfo(
+            let windowInfo = WindowInfo(
                 bundleIdentifier: foregroundApp.bundleIdentifier ?? "",
                 title: activeWindow.title ?? "",
                 frame: activeWindow.frame,
@@ -566,7 +565,7 @@ class ActivityTap {
 
 // MARK: - Data Models
 
-struct Activity: Identifiable, Codable {
+struct Activity: Identifiable {
     let id: UUID
     let timestamp: Date
     let windowInfo: WindowInfo
@@ -590,7 +589,7 @@ struct Activity: Identifiable, Codable {
     }
 }
 
-struct ActivityFusionResult: Codable {
+struct ActivityFusionResult {
     var primaryCategory: String = "unknown"
     var overallConfidence: Double = 0.0
     var context: String = ""

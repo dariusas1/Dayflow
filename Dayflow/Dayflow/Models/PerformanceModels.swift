@@ -90,18 +90,51 @@ public struct PerformanceTestResult: Codable {
 
 public struct PerformanceTestReport: Codable {
     public let timestamp: Date
-    public let overallScore: Double
+    public let passRate: Double
+    public let totalTests: Int
+    public let passedTests: Int
     public let criticalFailures: [PerformanceTestResult]
     public let warnings: [PerformanceTestResult]
     public let detailedResults: [PerformanceTestResult]
-    public let summary: String
+    public let recommendations: [String]
 
-    public init(timestamp: Date, overallScore: Double, criticalFailures: [PerformanceTestResult], warnings: [PerformanceTestResult], detailedResults: [PerformanceTestResult], summary: String) {
+    public init(
+        timestamp: Date,
+        passRate: Double,
+        totalTests: Int,
+        passedTests: Int,
+        criticalFailures: [PerformanceTestResult],
+        warnings: [PerformanceTestResult],
+        detailedResults: [PerformanceTestResult],
+        recommendations: [String]
+    ) {
         self.timestamp = timestamp
-        self.overallScore = overallScore
+        self.passRate = passRate
+        self.totalTests = totalTests
+        self.passedTests = passedTests
         self.criticalFailures = criticalFailures
         self.warnings = warnings
         self.detailedResults = detailedResults
-        self.summary = summary
+        self.recommendations = recommendations
+    }
+
+    public var failedTests: Int {
+        return max(totalTests - passedTests, 0)
+    }
+
+    public var isHealthy: Bool {
+        criticalFailures.isEmpty && passRate >= 0.9
+    }
+
+    public var summary: String {
+        if isHealthy {
+            return "All systems operating within budget"
+        }
+
+        if criticalFailures.isEmpty {
+            return "Warnings detected - review recommended"
+        }
+
+        return "Critical performance regressions detected"
     }
 }

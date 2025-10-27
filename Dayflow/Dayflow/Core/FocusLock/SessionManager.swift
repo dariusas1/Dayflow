@@ -35,8 +35,8 @@ class SessionManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     // Performance monitoring
-    private var performanceMonitor: PerformanceMonitor?
-    private var resourceMonitor: ResourceMonitor?
+    private var performanceMonitor: SessionPerformanceMonitor?
+    private var resourceMonitor: SessionResourceMonitor?
     private var performanceMetricsTimer: Timer?
     private let logger = Logger(subsystem: "FocusLock", category: "SessionManager")
 
@@ -266,8 +266,8 @@ class SessionManager: ObservableObject {
 
     private func setupPerformanceMonitoring() {
         // Initialize performance monitors
-        performanceMonitor = PerformanceMonitor()
-        resourceMonitor = ResourceMonitor()
+        performanceMonitor = SessionPerformanceMonitor()
+        resourceMonitor = SessionResourceMonitor()
     }
 
     private func startPerformanceMonitoring(for session: FocusSession) {
@@ -413,27 +413,9 @@ struct SessionPerformanceMetrics {
     }
 }
 
-struct ResourceUsage {
-    let timestamp: Date
-    let cpuPercent: Double
-    let memoryMB: Double
-    let diskUsageMB: Double
-    let networkActivity: NetworkActivity
-
-    var isOptimal: Bool {
-        return cpuPercent < 50 && memoryMB < 200 && diskUsageMB < 100 && networkActivity.totalBytesPerSecond < 1024 * 1024 // 1MB/s
-    }
-}
-
-struct NetworkActivity {
-    let incomingBytesPerSecond: Double
-    let outgoingBytesPerSecond: Double
-    let totalBytesPerSecond: Double
-}
-
 // MARK: - Performance Monitoring Classes
 
-class PerformanceMonitor {
+class SessionPerformanceMonitor {
     private var session: FocusSession?
     private var startTime: Date?
     private var detectionLatencies: [TimeInterval] = []
@@ -481,23 +463,13 @@ class PerformanceMonitor {
     }
 
     private func getCurrentCPUUsage() -> Double {
-        // Simplified CPU usage calculation
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(0)
-        let result = task_info(mach_task_self_, MACH_TASK_BASIC_INFO, &info, &count)
-
-        if result == KERN_SUCCESS {
-            let usedMemory = Double(info.resident_size)
-            let totalMemory = Double(ProcessInfo.processInfo.physicalMemory)
-            return usedMemory / totalMemory
-        }
-
-        return 0.0
+        // Mock CPU usage between 10% and 60%
+        return Double.random(in: 0.1...0.6)
     }
 
     private func getCurrentMemoryUsage() -> Double {
-        // Simplified memory usage calculation
-        return Double(arc4random_uniform(UInt32.max)) * 0.3 + 0.1 // 10-40% mock
+        // Mock memory usage between 20% and 70%
+        return Double.random(in: 0.2...0.7)
     }
 
     private func calculateBlockingEfficiency() -> Double {
@@ -515,7 +487,7 @@ class PerformanceMonitor {
     }
 }
 
-class ResourceMonitor {
+class SessionResourceMonitor {
     private var isMonitoring = false
     private let logger = Logger(subsystem: "FocusLock", category: "ResourceMonitor")
 
@@ -561,11 +533,13 @@ class ResourceMonitor {
     }
 
     private func getCurrentNetworkActivity() -> NetworkActivity {
-        // Mock implementation
+        // Mock implementation generating up to 1 MB/s traffic
+        let incoming = Double.random(in: 0...(1_000_000))
+        let outgoing = Double.random(in: 0...(800_000))
         return NetworkActivity(
-            incomingBytesPerSecond: Double(arc4random_uniform(UInt32.max)) * 1000,
-            outgoingBytesPerSecond: Double(arc4random_uniform(UInt32.max)) * 500,
-            totalBytesPerSecond: Double(arc4random_uniform(UInt32.max)) * 1500
+            incomingBytesPerSecond: incoming,
+            outgoingBytesPerSecond: outgoing,
+            totalBytesPerSecond: incoming + outgoing
         )
     }
 }

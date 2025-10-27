@@ -432,6 +432,15 @@ struct PlannerTask: Codable, Identifiable, Equatable {
     }
 }
 
+enum TaskCategory: String, Codable, CaseIterable {
+    case work
+    case learning
+    case personal
+    case health
+    case productivity
+    case career
+}
+
 struct TimeBlock: Codable, Identifiable {
     let id: UUID
     var startTime: Date
@@ -483,7 +492,7 @@ struct TimeBlock: Codable, Identifiable {
 enum TimeBlockType: String, CaseIterable, Codable {
     case task = "task"
     case focus = "focus"
-    case break = "break"
+    case `break` = "break"
     case buffer = "buffer"
     case meeting = "meeting"
     case deepWork = "deep_work"
@@ -2290,7 +2299,7 @@ struct UserPlannerPreferences: Codable {
     enum TimelineViewMode: String, CaseIterable, Codable {
         case day = "day"
         case week = "week"
-        case case month = "month"
+        case month = "month"
         case agenda = "agenda"
     }
 
@@ -2464,7 +2473,7 @@ struct CalendarSyncSettings: Codable {
     var defaultEventDuration: TimeInterval
 
     enum SyncDirection: String, CaseIterable, Codable {
-        case import = "import"        // Import from calendars only
+        case `import` = "import"        // Import from calendars only
         case export = "export"        // Export to calendars only
         case bidirectional = "bidirectional" // Both directions
     }

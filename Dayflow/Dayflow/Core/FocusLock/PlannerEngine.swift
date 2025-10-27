@@ -282,11 +282,11 @@ class PlannerEngine: ObservableObject {
     }
 
     /// Get task suggestions based on goals and patterns
-    func getTaskSuggestions(limit: Int = 10) async -> [TaskSuggestion] {
+    func getTaskSuggestions(limit: Int = 10) async -> [PlannerTaskSuggestion] {
         let userGoals = await loadUserGoals()
         let completionPatterns = await analyzeCompletionPatterns()
 
-        return await TaskSuggestionEngine.generateSuggestions(
+        return await PlannerTaskSuggestionEngine.generateSuggestions(
             goals: userGoals,
             patterns: completionPatterns,
             existingTasks: tasks,
@@ -301,7 +301,7 @@ class PlannerEngine: ObservableObject {
     }
 
     /// Import tasks from external sources
-    func importTasks(from source: TaskSource) async throws -> [PlannerTask] {
+    func importTasks(from source: PlannerTaskSource) async throws -> [PlannerTask] {
         let importedTasks = try await TaskImporter.importTasks(from: source)
 
         for task in importedTasks {
@@ -830,15 +830,6 @@ struct GoalProgress {
     let tasksCompleted: Int
     let totalTasks: Int
     let isOnTrack: Bool
-}
-
-struct TaskSuggestion {
-    let title: String
-    let description: String
-    let estimatedDuration: TimeInterval
-    let priority: PlannerPriority
-    let relatedGoal: UUID?
-    let confidence: Double
 }
 
 struct CompletionPatterns {
@@ -2090,7 +2081,7 @@ struct SchedulingPerformance {
     let breakDuration: TimeInterval
 }
 
-struct TaskSource {
+struct PlannerTaskSource {
     let type: SourceType
     let identifier: String
     let name: String
@@ -2119,7 +2110,7 @@ struct CalendarEvent {
 class TaskImporter {
     private let logger = Logger(subsystem: "FocusLock", category: "TaskImporter")
 
-    static func importTasks(from source: TaskSource) async throws -> [PlannerTask] {
+    static func importTasks(from source: PlannerTaskSource) async throws -> [PlannerTask] {
         let importer = TaskImporter()
 
         switch source.type {
@@ -2219,14 +2210,14 @@ class TaskImporter {
 class SuggestedTodosEngine {
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
     private var apiEndpoint: String?
-    private var userPreferences: UserPreferences
+    private var userPreferences: PlannerUserPreferences
 
     init() {
-        userPreferences = UserPreferences()
+        userPreferences = PlannerUserPreferences()
         setupAPIEndpoint()
     }
 
-    func fetchSuggestions(for sourceID: String) async throws -> [TaskSuggestion] {
+    func fetchSuggestions(for sourceID: String) async throws -> [PlannerTaskSuggestion] {
         logger.info("Fetching suggestions from source: \(sourceID)")
 
         guard let endpoint = apiEndpoint else {
@@ -2245,7 +2236,7 @@ class SuggestedTodosEngine {
         // back to SuggestedTodos service for better recommendations
     }
 
-    func updateSuggestionPreferences(_ preferences: UserPreferences) {
+    func updateSuggestionPreferences(_ preferences: PlannerUserPreferences) {
         userPreferences = preferences
         logger.info("Updated suggestion preferences")
     }
@@ -2256,8 +2247,8 @@ class SuggestedTodosEngine {
         apiEndpoint = "https://api.suggestedtodos.com/v1"
     }
 
-    private func generateMockSuggestions(for sourceID: String) -> [TaskSuggestion] {
-        var suggestions: [TaskSuggestion] = []
+    private func generateMockSuggestions(for sourceID: String) -> [PlannerTaskSuggestion] {
+        var suggestions: [PlannerTaskSuggestion] = []
 
         // Generate suggestions based on common productivity patterns
         let commonTasks = [
@@ -2272,7 +2263,7 @@ class SuggestedTodosEngine {
         ]
 
         for (title, duration, priority, category) in commonTasks {
-            suggestions.append(TaskSuggestion(
+            suggestions.append(PlannerTaskSuggestion(
                 title: title,
                 description: "Suggested based on your productivity patterns",
                 estimatedDuration: duration,
@@ -2288,7 +2279,7 @@ class SuggestedTodosEngine {
     }
 }
 
-struct UserPreferences {
+struct PlannerUserPreferences: Codable {
     var preferredWorkHours: WorkHours = WorkHours(startHour: 9, endHour: 17)
     var focusSessionDuration: TimeInterval = 1500 // 25 minutes
     var breakDuration: TimeInterval = 300 // 5 minutes
@@ -2296,13 +2287,13 @@ struct UserPreferences {
     var energyAwareScheduling: Bool = true
     var goalAlignment: Bool = true
 
-    struct WorkHours {
+    struct WorkHours: Codable {
         let startHour: Int
         let endHour: Int
     }
 }
 
-struct TaskSuggestion {
+struct PlannerTaskSuggestion {
     let title: String
     let description: String
     let estimatedDuration: TimeInterval
@@ -2320,16 +2311,8 @@ enum SuggestedTodosError: Error {
     case invalidResponse
 }
 
-enum TaskSource {
-    case calendar
-    case todoist
-    case trello
-    case asana
-    case email
-}
-
-class TaskSuggestionEngine {
-    static func generateSuggestions(goals: [PlannerGoal], patterns: CompletionPatterns, existingTasks: [PlannerTask], limit: Int) async -> [TaskSuggestion] {
+class PlannerTaskSuggestionEngine {
+    static func generateSuggestions(goals: [PlannerGoal], patterns: CompletionPatterns, existingTasks: [PlannerTask], limit: Int) async -> [PlannerTaskSuggestion] {
         // Generate AI-powered task suggestions
         return [] // Simplified implementation
     }
@@ -2348,7 +2331,7 @@ class PlannerDataStore {
     private let documentsURL: URL
     private let dataDirectory: URL
     private let encryptionKey: String
-    private let privacySettings: PrivacySettings
+    private let privacySettings: PlannerPrivacySettings
 
     // MARK: - File Paths
     private let tasksFile = "tasks.json"
@@ -2552,26 +2535,26 @@ class PlannerDataStore {
 
     // MARK: - Public Methods - User Preferences
 
-    func saveUserPreferences(_ preferences: UserPreferences) async throws {
+    func saveUserPreferences(_ preferences: PlannerUserPreferences) async throws {
         let data = try JSONEncoder().encode(preferences)
         let encryptedData = try encryptData(data)
         try saveDataToFile(encryptedData, fileName: userPreferencesFile)
         logger.info("Saved user preferences")
     }
 
-    func loadUserPreferences() async throws -> UserPreferences {
+    func loadUserPreferences() async throws -> PlannerUserPreferences {
         guard fileManager.fileExists(atPath: dataDirectory.appendingPathComponent(userPreferencesFile).path) else {
-            return UserPreferences()
+            return PlannerUserPreferences()
         }
 
         let encryptedData = try loadDataFromFile(fileName: userPreferencesFile)
         let data = try decryptData(encryptedData)
-        return try JSONDecoder().decode(UserPreferences.self, from: data)
+        return try JSONDecoder().decode(PlannerUserPreferences.self, from: data)
     }
 
     // MARK: - Public Methods - Privacy Settings
 
-    func savePrivacySettings(_ settings: PrivacySettings) async throws {
+    func savePrivacySettings(_ settings: PlannerPrivacySettings) async throws {
         let data = try JSONEncoder().encode(settings)
         let encryptedData = try encryptData(data)
         try saveDataToFile(encryptedData, fileName: privacySettingsFile)
@@ -2680,7 +2663,7 @@ class PlannerDataStore {
         // Create privacy settings file if it doesn't exist
         let privacyFilePath = dataDirectory.appendingPathComponent(privacySettingsFile)
         if !fileManager.fileExists(atPath: privacyFilePath.path) {
-            let defaultSettings = PrivacySettings()
+            let defaultSettings = PlannerPrivacySettings()
             Task {
                 do {
                     try await savePrivacySettings(defaultSettings)
@@ -2737,21 +2720,21 @@ class PlannerDataStore {
 
     // MARK: - Private Methods - Privacy
 
-    private func loadPrivacySettings() -> PrivacySettings {
+    private func loadPrivacySettings() -> PlannerPrivacySettings {
         let filePath = dataDirectory.appendingPathComponent(privacySettingsFile)
 
         if fileManager.fileExists(atPath: filePath.path) {
             do {
                 let encryptedData = try loadDataFromFile(fileName: privacySettingsFile)
                 let data = try decryptData(encryptedData)
-                return try JSONDecoder().decode(PrivacySettings.self, from: data)
+                return try JSONDecoder().decode(PlannerPrivacySettings.self, from: data)
             } catch {
                 logger.error("Failed to load privacy settings, using defaults: \(error.localizedDescription)")
             }
         }
 
         // Return default privacy settings
-        return PrivacySettings()
+        return PlannerPrivacySettings()
     }
 
     private func filterTasksForPrivacy(_ tasks: [PlannerTask]) -> [PlannerTask] {
@@ -2804,7 +2787,7 @@ struct DataExport: Codable {
     let goals: [PlannerGoal]
     let constraints: [SchedulingConstraint]
     let performanceData: [SchedulingPerformance]
-    let userPreferences: UserPreferences
+    let userPreferences: PlannerUserPreferences
     let exportDate: Date
     let version: String
 }
@@ -2814,7 +2797,7 @@ struct DataSize {
     let formattedSize: String
 }
 
-struct PrivacySettings: Codable {
+struct PlannerPrivacySettings: Codable {
     var enableDataCollection: Bool = true
     var enablePerformanceTracking: Bool = true
     var storeTaskDescriptions: Bool = true
@@ -2829,43 +2812,5 @@ struct PrivacySettings: Codable {
         case minimal = "minimal"
         case standard = "standard"
         case comprehensive = "comprehensive"
-    }
-}
-
-// MARK: - Codable Support for Any
-
-struct AnyCodable: Codable {
-    let value: Any
-
-    init<T>(_ value: T) {
-        self.value = value
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let bool = try? container.decode(Bool.self) {
-            self.value = bool
-        } else if let int = try? container.decode(Int.self) {
-            self.value = int
-        } else if let double = try? container.decode(Double.self) {
-            self.value = double
-        } else if let string = try? container.decode(String.self) {
-            self.value = string
-        } else {
-            self.value = NSNull()
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        if let bool = value as? Bool {
-            try container.encode(bool)
-        } else if let int = value as? Int {
-            try container.encode(int)
-        } else if let double = value as? Double {
-            try container.encode(double)
-        } else if let string = value as? String {
-            try container.encode(string)
-        }
     }
 }

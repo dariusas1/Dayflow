@@ -574,7 +574,7 @@ class AXExtractor {
         return codeStructure
     }
 
-    private func detectTasks(from content: String, in windowInfo: WindowInfo) async -> TaskDetectionResult {
+    private func detectTasks(from content: String, in windowInfo: WindowInfo) async -> AXTaskDetectionResult {
         var detectedTasks: [DetectedTask] = []
         let contentLower = content.lowercased()
 
@@ -605,7 +605,7 @@ class AXExtractor {
         detectedTasks.sort { $0.confidence > $1.confidence }
         detectedTasks = removeDuplicateTasks(detectedTasks)
 
-        return TaskDetectionResult(
+        return AXTaskDetectionResult(
             primaryTask: detectedTasks.first,
             allTasks: Array(detectedTasks.prefix(5)), // Top 5 tasks
             confidence: detectedTasks.first?.confidence ?? 0.0
@@ -770,7 +770,7 @@ struct AXExtractionResult {
     let windowInfo: WindowInfo
     let content: String?
     let structuredData: AXStructuredData?
-    let taskDetection: TaskDetectionResult?
+    let taskDetection: AXTaskDetectionResult?
     let error: Error?
 }
 
@@ -829,7 +829,7 @@ struct AXApplicationState {
     let launchDate: Date
 }
 
-struct TaskDetectionResult {
+struct AXTaskDetectionResult {
     let primaryTask: DetectedTask?
     let allTasks: [DetectedTask]
     let confidence: Double
