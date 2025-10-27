@@ -1091,7 +1091,23 @@ private extension TrendData {
 
 #if DEBUG
 #Preview {
-    InsightsView(
+    let focusTimeMetric = ProductivityMetric(
+        name: "Focus Time",
+        value: 180,
+        unit: "minutes",
+        category: .focusTime,
+        metadata: ["trend": "up"]
+    )
+
+    let productivityScoreMetric = ProductivityMetric(
+        name: "Productivity Score",
+        value: 0.85,
+        unit: "index",
+        category: .productivity,
+        metadata: ["trend": "steady"]
+    )
+
+    return InsightsView(
         insights: [
             ProductivityInsight(
                 type: .productivityPattern,
@@ -1193,8 +1209,9 @@ private extension TrendData {
         ],
         configuration: DashboardConfiguration(
             widgets: [],
-            timeRange: .week,
-            showDetailedAnalysis: true
+            theme: .default,
+            layout: .default,
+            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
         )
     )
 }
