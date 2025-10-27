@@ -92,42 +92,197 @@ struct MemoryStoreStatistics {
 
 // MARK: - AnyCodable Helper
 
-struct AnyCodable: Codable {
-    let value: Any
-
-    init(_ value: Any) {
-        self.value = value
-    }
+enum AnyCodableValue: Equatable, Codable {
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case string(String)
+    case array([AnyCodableValue])
+    case dictionary([String: AnyCodableValue])
+    case null
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        if let bool = try? container.decode(Bool.self) {
-            value = bool
+        if container.decodeNil() {
+            self = .null
+        } else if let bool = try? container.decode(Bool.self) {
+            self = .bool(bool)
         } else if let int = try? container.decode(Int.self) {
-            value = int
+            self = .int(int)
         } else if let double = try? container.decode(Double.self) {
-            value = double
+            self = .double(double)
         } else if let string = try? container.decode(String.self) {
-            value = string
+            self = .string(string)
+        } else if let array = try? container.decode([AnyCodable].self) {
+            self = .array(array.map { $0.value })
+        } else if let dictionary = try? container.decode([String: AnyCodable].self) {
+            self = .dictionary(dictionary.mapValues { $0.value })
         } else {
-            value = NSNull()
+            self = .null
         }
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        if let bool = value as? Bool {
-            try container.encode(bool)
-        } else if let int = value as? Int {
-            try container.encode(int)
-        } else if let double = value as? Double {
-            try container.encode(double)
-        } else if let string = value as? String {
-            try container.encode(string)
-        } else {
+        switch self {
+        case .bool(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let values):
+            try container.encode(values.map { AnyCodable(value: $0) })
+        case .dictionary(let dictionary):
+            try container.encode(dictionary.mapValues { AnyCodable(value: $0) })
+        case .null:
             try container.encodeNil()
         }
     }
+}
+
+struct AnyCodable: Codable {
+    let value: AnyCodableValue
+
+    init(_ value: Any) {
+        self.value = AnyCodableValue(any: value)
+    }
+
+    init(value: AnyCodableValue) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        self.value = try AnyCodableValue(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try value.encode(to: encoder)
+    }
+}
+
+extension AnyCodableValue {
+    init(any value: Any) {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            if let child = mirror.children.first {
+                self.init(any: child.value)
+            } else {
+                self = .null
+            }
+            return
+        }
+
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+                return
+            }
+
+            if number.doubleValue.rounded() == number.doubleValue {
+                self = .int(number.intValue)
+            } else {
+                self = .double(number.doubleValue)
+            }
+            return
+        }
+
+        switch value {
+        case let codable as AnyCodable:
+            self = codable.value
+        case let codableValue as AnyCodableValue:
+            self = codableValue
+        case let bool as Bool:
+            self = .bool(bool)
+        case let int as Int:
+            self = .int(int)
+        case let int32 as Int32:
+            self = .int(Int(int32))
+        case let int64 as Int64:
+            self = .int(Int(int64))
+        case let double as Double:
+            self = .double(double)
+        case let float as Float:
+            self = .double(Double(float))
+        case let string as String:
+            self = .string(string)
+        case let uuid as UUID:
+            self = .string(uuid.uuidString)
+        case let array as [AnyCodable]:
+            self = .array(array.map { $0.value })
+        case let array as [Any]:
+            self = .array(array.map { AnyCodableValue(any: $0) })
+        case let dictionary as [String: AnyCodable]:
+            self = .dictionary(dictionary.mapValues { $0.value })
+        case let dictionary as [String: Any]:
+            self = .dictionary(dictionary.mapValues { AnyCodableValue(any: $0) })
+        case is NSNull:
+            self = .null
+        default:
+            self = .null
+        }
+    }
+
+    var stringValue: String? {
+        if case let .string(value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .int(let value):
+            return value
+        case .double(let value) where value.rounded() == value:
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+
+    var doubleValue: Double? {
+        switch self {
+        case .double(let value):
+            return value
+        case .int(let value):
+            return Double(value)
+        default:
+            return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        if case let .bool(value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [AnyCodableValue]? {
+        if case let .array(values) = self {
+            return values
+        }
+        return nil
+    }
+
+    var dictionaryValue: [String: AnyCodableValue]? {
+        if case let .dictionary(values) = self {
+            return values
+        }
+        return nil
+    }
+}
+
+extension AnyCodable {
+    var stringValue: String? { value.stringValue }
+    var intValue: Int? { value.intValue }
+    var doubleValue: Double? { value.doubleValue }
+    var boolValue: Bool? { value.boolValue }
+    var arrayValue: [AnyCodableValue]? { value.arrayValue }
+    var dictionaryValue: [String: AnyCodableValue]? { value.dictionaryValue }
 }
 
 // MARK: - BM25 Index

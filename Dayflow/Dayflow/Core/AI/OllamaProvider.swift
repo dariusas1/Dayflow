@@ -371,9 +371,25 @@ final class OllamaProvider: LLMProvider {
     private struct ChatRequest: Codable {
         let model: String
         let messages: [ChatMessage]
-        let temperature: Double = 0.7
-        let max_tokens: Int = -1
-        let stream: Bool = false
+        let temperature: Double?
+        let maxTokens: Int?
+        let stream: Bool
+
+        init(model: String, messages: [ChatMessage], temperature: Double? = nil, maxTokens: Int? = nil, stream: Bool = false) {
+            self.model = model
+            self.messages = messages
+            self.temperature = temperature
+            self.maxTokens = maxTokens
+            self.stream = stream
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case model
+            case messages
+            case temperature
+            case maxTokens = "max_tokens"
+            case stream
+        }
     }
     
     private struct ChatMessage: Codable {
@@ -600,17 +616,39 @@ final class OllamaProvider: LLMProvider {
     // Helper method for text-only requests
     private func callTextAPI(_ prompt: String, operation: String, expectJSON: Bool = false, batchId: Int64? = nil, maxRetries: Int = 3) async throws -> String {
         let systemPrompt = expectJSON ? "You are a helpful assistant. Always respond with valid JSON." : "You are a helpful assistant."
-        
+        let temperature = expectJSON ? 0.2 : 0.7
+
         let request = ChatRequest(
             model: savedModelId,
             messages: [
                 ChatMessage(role: "system", content: [MessageContent(type: "text", text: systemPrompt, image_url: nil)]),
                 ChatMessage(role: "user", content: [MessageContent(type: "text", text: prompt, image_url: nil)])
-            ]
+            ],
+            temperature: temperature,
+            maxTokens: nil,
+            stream: false
         )
-        
+
         let response = try await callChatAPI(request, operation: operation, batchId: batchId, maxRetries: maxRetries)
         return response.choices.first?.message.content ?? ""
+    }
+
+    func generateChatResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
+        let sanitizedMaxTokens = maxTokens > 0 ? maxTokens : nil
+
+        let request = ChatRequest(
+            model: savedModelId,
+            messages: [
+                ChatMessage(role: "system", content: [MessageContent(type: "text", text: "You are a helpful assistant.", image_url: nil)]),
+                ChatMessage(role: "user", content: [MessageContent(type: "text", text: prompt, image_url: nil)])
+            ],
+            temperature: temperature,
+            maxTokens: sanitizedMaxTokens,
+            stream: false
+        )
+
+        let response = try await callChatAPI(request, operation: "chat_response")
+        return response.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
     
     

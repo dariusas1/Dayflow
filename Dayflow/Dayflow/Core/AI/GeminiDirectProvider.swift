@@ -1983,6 +1983,209 @@ private func uploadResumable(data: Data, mimeType: String) async throws -> Strin
         }
     }
     
+    func generateChatResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
+        var modelState = ModelRunState(models: modelPreference.orderedModels)
+        var attempt = 1
+        var lastError: Error?
+        let callGroupId = UUID().uuidString
+
+        while true {
+            let model = modelState.current
+            do {
+                return try await performChatRequest(
+                    prompt: prompt,
+                    model: model,
+                    temperature: temperature,
+                    maxTokens: maxTokens,
+                    attempt: attempt,
+                    callGroupId: callGroupId
+                )
+            } catch {
+                lastError = error
+                if let transition = modelState.advance() {
+                    print("↘️ [GeminiChat] Falling back from \(transition.from.rawValue) to \(transition.to.rawValue) after error: \(error.localizedDescription)")
+                    attempt += 1
+                    continue
+                }
+                throw lastError ?? error
+            }
+        }
+    }
+
+    private func performChatRequest(
+        prompt: String,
+        model: GeminiModel,
+        temperature: Double,
+        maxTokens: Int,
+        attempt: Int,
+        callGroupId: String
+    ) async throws -> String {
+        let urlWithKey = endpointForModel(model) + "?key=\(apiKey)"
+        var request = URLRequest(url: URL(string: urlWithKey)!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        var generationConfig: [String: Any] = [
+            "temperature": temperature
+        ]
+        if maxTokens > 0 {
+            generationConfig["maxOutputTokens"] = maxTokens
+        }
+
+        let requestBody: [String: Any] = [
+            "contents": [[
+                "parts": [["text": prompt]]
+            ]],
+            "generationConfig": generationConfig
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        logCurlCommand(context: "chat.generateContent", url: urlWithKey, requestBody: requestBody)
+        logRequestTiming(context: "chat")
+
+        let callStart = Date()
+        let ctx = LLMCallContext(
+            batchId: nil,
+            callGroupId: callGroupId,
+            attempt: attempt,
+            provider: "gemini",
+            model: model.rawValue,
+            operation: "chat_response",
+            requestMethod: request.httpMethod,
+            requestURL: request.url,
+            requestHeaders: request.allHTTPHeaderFields,
+            requestBody: request.httpBody,
+            startedAt: callStart
+        )
+
+        let dataResponse: (Data, URLResponse)
+        do {
+            dataResponse = try await URLSession.shared.data(for: request)
+        } catch {
+            let finishedAt = Date()
+            LLMLogger.logFailure(
+                ctx: ctx,
+                http: nil,
+                finishedAt: finishedAt,
+                errorDomain: (error as NSError).domain,
+                errorCode: (error as NSError).code,
+                errorMessage: (error as NSError).localizedDescription
+            )
+            logGeminiFailure(context: "chat.generateContent.catch", attempt: attempt, response: nil, data: nil, error: error)
+            throw error
+        }
+
+        let (data, response) = dataResponse
+        let finishedAt = Date()
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            LLMLogger.logFailure(
+                ctx: ctx,
+                http: nil,
+                finishedAt: finishedAt,
+                errorDomain: "GeminiDirectProvider",
+                errorCode: nil,
+                errorMessage: "Invalid response"
+            )
+            throw NSError(
+                domain: "GeminiDirectProvider",
+                code: 90,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid response from Gemini chat API"]
+            )
+        }
+
+        let headers: [String: String] = httpResponse.allHeaderFields.reduce(into: [:]) { acc, kv in
+            if let key = kv.key as? String, let value = kv.value as? CustomStringConvertible {
+                acc[key] = value.description
+            }
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            logGeminiFailure(
+                context: "chat.generateContent.http\(httpResponse.statusCode)",
+                attempt: attempt,
+                response: response,
+                data: data,
+                error: nil
+            )
+            LLMLogger.logFailure(
+                ctx: ctx,
+                http: LLMHTTPInfo(httpStatus: httpResponse.statusCode, responseHeaders: headers, responseBody: data),
+                finishedAt: finishedAt,
+                errorDomain: "GeminiDirectProvider",
+                errorCode: httpResponse.statusCode,
+                errorMessage: "HTTP \(httpResponse.statusCode)"
+            )
+            throw NSError(
+                domain: "GeminiDirectProvider",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Gemini chat request failed with status \(httpResponse.statusCode)"]
+            )
+        }
+
+        guard let text = extractChatText(from: data) else {
+            logGeminiFailure(
+                context: "chat.generateContent.empty",
+                attempt: attempt,
+                response: response,
+                data: data,
+                error: nil
+            )
+            LLMLogger.logFailure(
+                ctx: ctx,
+                http: LLMHTTPInfo(httpStatus: httpResponse.statusCode, responseHeaders: headers, responseBody: data),
+                finishedAt: finishedAt,
+                errorDomain: "GeminiDirectProvider",
+                errorCode: nil,
+                errorMessage: "Empty response"
+            )
+            throw NSError(
+                domain: "GeminiDirectProvider",
+                code: 91,
+                userInfo: [NSLocalizedDescriptionKey: "Gemini returned an empty response"]
+            )
+        }
+
+        LLMLogger.logSuccess(
+            ctx: ctx,
+            http: LLMHTTPInfo(httpStatus: httpResponse.statusCode, responseHeaders: headers, responseBody: data),
+            finishedAt: finishedAt
+        )
+
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func extractChatText(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        if let candidates = json["candidates"] as? [[String: Any]] {
+            for candidate in candidates {
+                if let content = candidate["content"] as? [String: Any],
+                   let parts = content["parts"] as? [[String: Any]] {
+                    for part in parts {
+                        if let text = part["text"] as? String, !text.isEmpty {
+                            return text
+                        }
+                    }
+                }
+
+                if let text = candidate["output"] as? String, !text.isEmpty {
+                    return text
+                }
+            }
+        }
+
+        if let text = json["text"] as? String, !text.isEmpty {
+            return text
+        }
+
+        return nil
+    }
+
     // Helper function to format timestamps
     private func formatTimestampForPrompt(_ unixTime: Int) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(unixTime))

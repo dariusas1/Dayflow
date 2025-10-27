@@ -17,6 +17,7 @@ struct ProcessedBatchResult {
 
 protocol LLMServicing {
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void)
+    func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String
 }
 
 final class LLMService: LLMServicing {
@@ -553,5 +554,37 @@ final class LLMService: LLMServicing {
             // For unknown errors, keep it simple
             return "An unexpected error occurred."
         }
+    }
+
+    func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
+        guard let provider = provider else {
+            throw NSError(
+                domain: "LLMService",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "No LLM provider configured. Please configure in settings."]
+            )
+        }
+
+        if let geminiProvider = provider as? GeminiDirectProvider {
+            return try await geminiProvider.generateChatResponse(
+                prompt: prompt,
+                maxTokens: maxTokens,
+                temperature: temperature
+            )
+        }
+
+        if let ollamaProvider = provider as? OllamaProvider {
+            return try await ollamaProvider.generateChatResponse(
+                prompt: prompt,
+                maxTokens: maxTokens,
+                temperature: temperature
+            )
+        }
+
+        throw NSError(
+            domain: "LLMService",
+            code: 8,
+            userInfo: [NSLocalizedDescriptionKey: "Chat responses are not supported for the selected provider."]
+        )
     }
 }
