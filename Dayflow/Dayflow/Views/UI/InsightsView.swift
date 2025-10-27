@@ -953,46 +953,73 @@ struct DetailedDataView: View {
 }
 
 #Preview {
-    InsightsView(
+    let focusTimeMetric = ProductivityMetric(
+        name: "Focus Time",
+        value: 180,
+        unit: "minutes",
+        category: .focusTime,
+        metadata: ["trend": "up"]
+    )
+
+    let productivityScoreMetric = ProductivityMetric(
+        name: "Productivity Score",
+        value: 0.85,
+        unit: "index",
+        category: .productivity,
+        metadata: ["trend": "steady"]
+    )
+
+    return InsightsView(
         insights: [
             ProductivityInsight(
-                id: UUID(),
+                type: .productivityPattern,
                 title: "Peak Productivity Hours",
-                description: "You're most productive between 9 AM and 12 PM",
-                type: .pattern,
-                category: .productivity,
-                priority: .high,
-                icon: "clock.fill",
-                color: .blue,
-                value: 0.85,
-                impact: "Focus important tasks during morning hours",
-                relatedMetrics: ["Focus Time", "Productivity Score"],
-                data: ["peak_hours": "9-12", "efficiency": "85%"]
+                description: "You're most productive between 9 AM and 12 PM.",
+                metrics: [focusTimeMetric, productivityScoreMetric],
+                confidenceLevel: 0.92,
+                actionableItems: [
+                    ActionableItem(
+                        title: "Block morning focus time",
+                        description: "Reserve 9 AM – 11 AM for deep work sessions.",
+                        type: .technique,
+                        isCompleted: false,
+                        completedAt: nil
+                    )
+                ]
             )
         ],
         recommendations: [
             Recommendation(
-                id: UUID(),
                 title: "Optimize Morning Routine",
-                description: "Start your most important work during peak hours",
-                category: .productivity,
+                description: "Start your most important work during peak hours.",
+                category: .timeManagement,
                 priority: .high,
-                type: .optimization,
-                icon: "sunrise.fill",
-                color: .orange,
-                steps: [
-                    "Schedule important tasks before 12 PM",
-                    "Minimize meetings during morning hours",
-                    "Prepare work materials the night before"
+                actionable: true,
+                estimatedImpact: .significant,
+                suggestedActions: [
+                    Recommendation.SuggestedAction(
+                        title: "Plan a morning focus block",
+                        description: "Protect morning hours for deep, high-impact work.",
+                        difficulty: .easy,
+                        estimatedTime: 1800,
+                        steps: [
+                            "Schedule a recurring focus block from 9 AM to 11 AM",
+                            "Prepare priority tasks the evening before",
+                            "Silence non-essential notifications during the block"
+                        ]
+                    )
                 ],
-                expectedImpact: "15% productivity increase"
+                evidence: [focusTimeMetric, productivityScoreMetric],
+                createdAt: Date(),
+                dismissedAt: nil
             )
         ],
         trends: [],
         configuration: DashboardConfiguration(
             widgets: [],
-            timeRange: .week,
-            showDetailedAnalysis: true
+            theme: .default,
+            layout: .default,
+            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
         )
     )
 }

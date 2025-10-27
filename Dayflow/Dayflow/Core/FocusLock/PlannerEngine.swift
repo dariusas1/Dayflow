@@ -2187,7 +2187,7 @@ class TaskImporter {
     private func importFromSuggestedTodos(identifier: String, name: String) async throws -> [PlannerTask] {
         logger.info("Importing tasks from SuggestedTodos: \(name)")
 
-        let suggestedTodosEngine = SuggestedTodosEngine()
+        let suggestedTodosEngine = PlannerSuggestedTodosService()
         let suggestions = try await suggestedTodosEngine.fetchSuggestions(for: identifier)
 
         return suggestions.map { suggestion in
@@ -2207,7 +2207,7 @@ class TaskImporter {
     }
 }
 
-class SuggestedTodosEngine {
+class PlannerSuggestedTodosService {
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
     private var apiEndpoint: String?
     private var userPreferences: PlannerUserPreferences
