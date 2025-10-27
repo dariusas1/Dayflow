@@ -25,7 +25,7 @@ class JarvisChat: ObservableObject {
     private let memoryStore: MemoryStore
     private let toolOrchestrator: ToolOrchestrator
     private let contextManager: ConversationContextManager
-    private let llmService: LLMService
+    private let llmService: LLMServicing
 
     private var cancellables = Set<AnyCancellable>()
     private let logger = Logger(subsystem: "FocusLock", category: "JarvisChat")
@@ -35,12 +35,12 @@ class JarvisChat: ObservableObject {
     private let maxToolHops = 3
     private let responseTimeout: TimeInterval = 12.0 // Local: 5s, Hybrid: 12s
 
-    private init() {
+    private init(llmService: LLMServicing = LLMService.shared) {
         // Initialize components
         self.memoryStore = try! HybridMemoryStore.shared
         self.toolOrchestrator = ToolOrchestrator()
         self.contextManager = ConversationContextManager()
-        self.llmService = LLMService.shared
+        self.llmService = llmService
 
         setupBindings()
         loadConversationHistory()
@@ -147,7 +147,7 @@ class JarvisChat: ObservableObject {
                 role: .assistant,
                 content: "I've \(action.description.lowercased()): \(result.description)",
                 timestamp: Date(),
-                toolCalls: [ToolCall(name: action.toolName, parameters: action.parameters, result: result)],
+                toolCalls: [ToolCall(name: action.toolName, parameters: encodeParameters(action.parameters), result: result)],
                 citations: []
             )
             currentConversation?.messages.append(resultMessage)
@@ -172,11 +172,11 @@ class JarvisChat: ObservableObject {
         isProcessing = false
     }
 
-    func getContextualInfo() -> [ContextualInfo] {
+    func getContextualInfo() async -> [ContextualInfo] {
         var info: [ContextualInfo] = []
 
         // Current activity
-        if let activity = ActivityTap.shared.getCurrentActivity() {
+        if let activity = await ActivityTap.shared.getCurrentActivity() {
             info.append(ContextualInfo(
                 type: .currentActivity,
                 title: "Current Activity",
@@ -309,10 +309,11 @@ class JarvisChat: ObservableObject {
             do {
                 let parameters = extractToolParameters(for: toolName, intent: intent, context: context)
                 let result = try await toolOrchestrator.executeTool(name: toolName, parameters: parameters)
+                let encodedParameters = encodeParameters(parameters)
 
                 let executionResult = ToolExecutionResult(
                     name: toolName,
-                    parameters: parameters,
+                    parameters: encodedParameters,
                     result: result,
                     citations: extractCitations(from: result)
                 )
@@ -445,10 +446,17 @@ class JarvisChat: ObservableObject {
         }
     }
 
+    private func encodeParameters(_ parameters: [String: Any]) -> [String: AnyCodable] {
+        parameters.mapValues { AnyCodable($0) }
+    }
+
     private func extractCitations(from result: ToolResult) -> [Citation] {
         // Extract citations from tool results
-        if let memoryIds = result.metadata["memory_ids"] as? [String] {
-            return memoryIds.map { Citation(source: "Memory", id: $0, content: "") }
+        if let memoryIds = result.metadata["memory_ids"]?.value as? [String] {
+            return memoryIds.compactMap { idString in
+                guard let uuid = UUID(uuidString: idString) else { return nil }
+                return Citation(source: "Memory", id: uuid, content: "")
+            }
         }
         return []
     }
@@ -546,7 +554,10 @@ class JarvisChat: ObservableObject {
     }
 
     private func updateContextualInfo() {
-        contextualInfo = getContextualInfo()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.contextualInfo = await self.getContextualInfo()
+        }
     }
 
     private func saveConversationHistory() {
@@ -647,7 +658,7 @@ struct ContextualInfo: Identifiable {
 
 struct ToolExecutionResult {
     let name: String
-    let parameters: [String: Any]
+    let parameters: [String: AnyCodable]
     let result: ToolResult
     let citations: [Citation]
 }
@@ -687,7 +698,7 @@ class ToolOrchestrator {
             success: true,
             description: "Found \(results.count) relevant memories",
             content: content,
-            metadata: ["memory_ids": results.map { $0.id.uuidString }]
+            metadata: ["memory_ids": AnyCodable(results.map { $0.id.uuidString })]
         )
     }
 
@@ -709,7 +720,7 @@ class ToolOrchestrator {
             success: true,
             description: "Generated activity summary",
             content: content,
-            metadata: ["timeRange": timeRange]
+            metadata: ["timeRange": AnyCodable(timeRange)]
         )
     }
 
@@ -724,7 +735,10 @@ class ToolOrchestrator {
             success: true,
             description: "Created todo: \(title)",
             content: "✅ Task created: \(title) (Priority: \(priority))",
-            metadata: ["title": title, "priority": priority]
+            metadata: [
+                "title": AnyCodable(title),
+                "priority": AnyCodable(priority)
+            ]
         )
     }
 
@@ -739,7 +753,10 @@ class ToolOrchestrator {
             success: true,
             description: "Scheduled focus session: \(taskName)",
             content: "🎯 Focus session scheduled: \(taskName) for \(duration) minutes",
-            metadata: ["taskName": taskName, "duration": duration]
+            metadata: [
+                "taskName": AnyCodable(taskName),
+                "duration": AnyCodable(duration)
+            ]
         )
     }
 
