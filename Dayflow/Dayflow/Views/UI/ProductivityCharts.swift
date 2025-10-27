@@ -13,28 +13,6 @@ struct ProductivityCharts: View {
     let trends: [TrendData]
     let style: ChartStyle
 
-    enum ChartStyle {
-        case minimal
-        case colorful
-        case monochrome
-
-        var primaryColor: Color {
-            switch self {
-            case .minimal: return .blue
-            case .colorful: return .purple
-            case .monochrome: return .gray
-            }
-        }
-
-        var accentColor: Color {
-            switch self {
-            case .minimal: return .blue.opacity(0.8)
-            case .colorful: return .orange
-            case .monochrome: return .black
-            }
-        }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -61,6 +39,28 @@ struct ProductivityCharts: View {
                     .frame(height: 200)
             }
             .padding()
+        }
+    }
+}
+
+enum ChartStyle {
+    case minimal
+    case colorful
+    case monochrome
+
+    var primaryColor: Color {
+        switch self {
+        case .minimal: return .blue
+        case .colorful: return .purple
+        case .monochrome: return .gray
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .minimal: return .blue.opacity(0.8)
+        case .colorful: return .orange
+        case .monochrome: return .black
         }
     }
 }
