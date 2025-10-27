@@ -10,7 +10,7 @@ class CompatibilityManager: ObservableObject {
     @Published var systemCompatibility: SystemCompatibility
     @Published var degradedFeatures: Set<String> = []
     @Published var compatibilityWarnings: [CompatibilityWarning] = []
-    @Published var migrationStatus: MigrationStatus = .notStarted
+    @Published var migrationStatus: DataMigration.MigrationStatus = .notStarted
     @Published var isGracefulModeActive: Bool = false
 
     // MARK: - Private Properties
@@ -36,7 +36,7 @@ class CompatibilityManager: ObservableObject {
         let currentVersion = ProcessInfo.processInfo.operatingSystemVersion
         let availableMemory = getAvailableMemory()
 
-        let versionCompatible = isVersionCompatible(currentVersion, minimum: minimummacOSVersion)
+        let versionCompatible = Self.isVersionCompatible(currentVersion, minimum: minimummacOSVersion)
         let memoryCompatible = availableMemory >= minimumMemoryMB
 
         let systemScore = calculateCompatibilityScore(
@@ -77,16 +77,18 @@ class CompatibilityManager: ObservableObject {
 
         // Notify user about graceful mode
         addCompatibilityWarning(
-            type: .performanceDegradation,
+            type: CompatibilityWarning.CompatibilityWarningType.performanceDegradation,
             message: "Graceful mode enabled to ensure stability on this system.",
-            severity: .info
+            severity: CompatibilityWarning.WarningSeverity.info
         )
     }
 
     func disableGracefulMode() {
         isGracefulModeActive = false
         degradedFeatures.removeAll()
-        compatibilityWarnings.removeAll { $0.type == .performanceDegradation }
+        compatibilityWarnings.removeAll {
+            $0.type == CompatibilityWarning.CompatibilityWarningType.performanceDegradation
+        }
         checkFeatureCompatibility()
     }
 
@@ -189,18 +191,21 @@ class CompatibilityManager: ObservableObject {
 
     private static func assessSystemCompatibility() -> SystemCompatibility {
         let currentVersion = ProcessInfo.processInfo.operatingSystemVersion
-        let availableMemory = Self().getAvailableMemory()
+        let availableMemory = fetchAvailableMemory()
 
         return SystemCompatibility(
             osVersion: currentVersion,
             memoryMB: availableMemory,
             processorCount: ProcessInfo.processInfo.processorCount,
-            supportsAdvancedFeatures: currentVersion >= OperatingSystemVersion(majorVersion: 13, minorVersion: 0, patchVersion: 0),
+            supportsAdvancedFeatures: isVersionCompatible(
+                currentVersion,
+                minimum: OperatingSystemVersion(majorVersion: 13, minorVersion: 0, patchVersion: 0)
+            ),
             recommendedPerformanceLevel: availableMemory >= 8192
         )
     }
 
-    private func getAvailableMemory() -> Double {
+    private static func fetchAvailableMemory() -> Double {
         var info = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
 
@@ -217,7 +222,11 @@ class CompatibilityManager: ObservableObject {
         return 8192 // Default to 8GB if detection fails
     }
 
-    private func isVersionCompatible(_ current: OperatingSystemVersion, minimum: OperatingSystemVersion) -> Bool {
+    private func getAvailableMemory() -> Double {
+        Self.fetchAvailableMemory()
+    }
+
+    private static func isVersionCompatible(_ current: OperatingSystemVersion, minimum: OperatingSystemVersion) -> Bool {
         if current.majorVersion > minimum.majorVersion { return true }
         if current.majorVersion < minimum.majorVersion { return false }
         if current.minorVersion > minimum.minorVersion { return true }
@@ -229,9 +238,9 @@ class CompatibilityManager: ObservableObject {
         var score: Double = 1.0
 
         // OS Version scoring
-        if osVersion < minimummacOSVersion {
+        if !Self.isVersionCompatible(osVersion, minimum: minimummacOSVersion) {
             score *= 0.3
-        } else if osVersion < recommendedmacOSVersion {
+        } else if !Self.isVersionCompatible(osVersion, minimum: recommendedmacOSVersion) {
             score *= 0.7
         }
 
@@ -256,9 +265,9 @@ class CompatibilityManager: ObservableObject {
             newDegradedFeatures.insert("Analytics")
 
             newWarnings.append(CompatibilityWarning(
-                type: .memoryConstraints,
+                type: CompatibilityWarning.CompatibilityWarningType.memoryConstraints,
                 message: "Limited memory may affect performance of advanced features.",
-                severity: .warning,
+                severity: CompatibilityWarning.WarningSeverity.warning,
                 recommendation: "Consider upgrading memory or using simplified features."
             ))
         }
@@ -268,9 +277,9 @@ class CompatibilityManager: ObservableObject {
             newDegradedFeatures.insert("JarvisChat")
 
             newWarnings.append(CompatibilityWarning(
-                type: .osVersionConstraints,
+                type: CompatibilityWarning.CompatibilityWarningType.osVersionConstraints,
                 message: "Some advanced features require a newer macOS version.",
-                severity: .info,
+                severity: CompatibilityWarning.WarningSeverity.info,
                 recommendation: "Upgrade to macOS 13.0 or later for full functionality."
             ))
         }
@@ -286,7 +295,12 @@ class CompatibilityManager: ObservableObject {
         // Disable non-essential features
     }
 
-    private func addCompatibilityWarning(type: CompatibilityWarningType, message: String, severity: WarningSeverity, recommendation: String? = nil) {
+    private func addCompatibilityWarning(
+        type: CompatibilityWarning.CompatibilityWarningType,
+        message: String,
+        severity: CompatibilityWarning.WarningSeverity,
+        recommendation: String? = nil
+    ) {
         let warning = CompatibilityWarning(
             type: type,
             message: message,
@@ -358,13 +372,13 @@ class CompatibilityManager: ObservableObject {
 
     private func isSystemCompatible() -> Bool {
         return systemCompatibility.memoryMB >= minimumMemoryMB &&
-               isVersionCompatible(systemCompatibility.osVersion, minimum: minimummacOSVersion)
+               Self.isVersionCompatible(systemCompatibility.osVersion, minimum: minimummacOSVersion)
     }
 }
 
 // MARK: - Supporting Data Models
 
-struct SystemCompatibility: Codable {
+struct SystemCompatibility {
     let osVersion: OperatingSystemVersion
     let memoryMB: Double
     let processorCount: Int
@@ -428,14 +442,6 @@ struct FallbackImplementation {
         case localOnly
         case disabled
     }
-}
-
-enum MigrationStatus: String, Codable {
-    case notStarted = "not_started"
-    case inProgress = "in_progress"
-    case completed = "completed"
-    case failed = "failed"
-    case skipped = "skipped"
 }
 
 struct MigrationResult {
