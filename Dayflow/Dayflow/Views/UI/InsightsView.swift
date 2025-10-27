@@ -991,8 +991,9 @@ struct DetailedDataView: View {
         trends: [],
         configuration: DashboardConfiguration(
             widgets: [],
-            timeRange: .week,
-            showDetailedAnalysis: true
+            theme: .default,
+            layout: .default,
+            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
         )
     )
 }

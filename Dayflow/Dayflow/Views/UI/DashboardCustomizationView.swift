@@ -150,38 +150,36 @@ struct DashboardCustomizationView: View {
     }
 
     private func categoryForWidget(_ widget: DashboardWidget) -> WidgetCategory {
-        switch widget.metric {
+        switch widget.type {
         case .focusTime: return .focus
         case .productivity: return .productivity
-        case .taskCompletion: return .tasks
-        case .appUsage: return .apps
+        case .tasks: return .tasks
+        case .apps: return .apps
         case .wellness: return .wellness
         case .goals: return .goals
-        case .none:
-            if widget.type == .insights { return .insights }
-            return .all
+        case .insights, .trends: return .insights
         }
     }
 
     private func addWidget(_ widget: DashboardWidget) {
         var newWidget = widget
-        newWidget.position = configuration.widgets.count
+        newWidget.position.order = configuration.widgets.count
         configuration.widgets.append(newWidget)
     }
 
     private func removeWidget(_ widget: DashboardWidget) {
         configuration.widgets.removeAll { $0.id == widget.id }
         // Update positions
-        for (index, var widget) in configuration.widgets.enumerated() {
-            widget.position = index
+        for index in configuration.widgets.indices {
+            configuration.widgets[index].position.order = index
         }
     }
 
     private func reorderWidgets(from source: IndexSet, to destination: Int) {
         configuration.widgets.move(fromOffsets: source, toOffset: destination)
         // Update positions
-        for (index, var widget) in configuration.widgets.enumerated() {
-            widget.position = index
+        for index in configuration.widgets.indices {
+            configuration.widgets[index].position.order = index
         }
     }
 
@@ -203,39 +201,36 @@ struct DashboardCustomizationView: View {
             widgets: [
                 DashboardWidget(
                     id: "focus-time",
-                    type: .chart,
+                    type: .focusTime,
                     title: "Focus Time",
-                    metric: .focusTime,
-                    position: 0,
+                    position: .init(row: 0),
                     size: .large
                 ),
                 DashboardWidget(
                     id: "productivity-score",
-                    type: .chart,
+                    type: .productivity,
                     title: "Productivity Score",
-                    metric: .productivity,
-                    position: 1,
+                    position: .init(row: 1),
                     size: .medium
                 ),
                 DashboardWidget(
                     id: "app-usage",
-                    type: .chart,
+                    type: .apps,
                     title: "App Usage",
-                    metric: .appUsage,
-                    position: 2,
+                    position: .init(row: 2),
                     size: .large
                 ),
                 DashboardWidget(
                     id: "insights",
                     type: .insights,
                     title: "Insights",
-                    metric: .none,
-                    position: 3,
+                    position: .init(row: 3),
                     size: .large
                 )
             ],
-            timeRange: .week,
-            showDetailedAnalysis: false
+            theme: .default,
+            layout: .default,
+            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: false)
         )
     }
 }
@@ -379,36 +374,19 @@ struct AvailableWidgetCard: View {
     }
 
     private func iconForWidget(_ widget: DashboardWidget) -> String {
-        switch widget.type {
-        case .chart:
-            switch widget.metric {
-            case .focusTime: return "clock.fill"
-            case .productivity: return "chart.line.uptrend.xyaxis"
-            case .taskCompletion: return "checkmark.circle.fill"
-            case .appUsage: return "app.badge"
-            case .wellness: return "heart.fill"
-            case .goals: return "target"
-            case .none: return "chart.bar.fill"
-            }
-        case .insights: return "lightbulb.fill"
-        case .trends: return "chart.xyaxis.line"
-        }
+        return widget.type.icon
     }
 
     private func colorForWidget(_ widget: DashboardWidget) -> Color {
-        switch widget.metric {
+        switch widget.type {
         case .focusTime: return .blue
         case .productivity: return .green
-        case .taskCompletion: return .orange
-        case .appUsage: return .purple
+        case .tasks: return .orange
+        case .apps: return .purple
         case .wellness: return .pink
         case .goals: return .teal
-        case .none:
-            switch widget.type {
-            case .insights: return .purple
-            case .trends: return .orange
-            case .chart: return .gray
-            }
+        case .insights: return .purple
+        case .trends: return .orange
         }
     }
 
@@ -511,15 +489,6 @@ struct CurrentWidgetRow: View {
                     Text(sizeLabel(widget.size))
                         .font(.custom("Nunito", size: 12))
                         .foregroundColor(.gray)
-
-                    if widget.metric != .none {
-                        Text("•")
-                            .foregroundColor(.gray.opacity(0.5))
-
-                        Text(widget.metric.displayName)
-                            .font(.custom("Nunito", size: 12))
-                            .foregroundColor(.gray)
-                    }
                 }
             }
 
@@ -677,7 +646,7 @@ struct WidgetPreview: View {
                 .fill(Color.gray.opacity(0.1))
                 .overlay(
                     VStack(spacing: 4) {
-                        Image(systemName: "chart.bar.fill")
+                        Image(systemName: widget.systemImage)
                             .font(.system(size: iconSize))
                             .foregroundColor(.blue)
 
@@ -726,8 +695,9 @@ struct WidgetPreview: View {
     DashboardCustomizationView(
         configuration: .constant(DashboardConfiguration(
             widgets: [],
-            timeRange: .week,
-            showDetailedAnalysis: false
+            theme: .default,
+            layout: .default,
+            preferences: .default.updating(timeRange: .week, showDetailedAnalysis: false)
         )),
         availableWidgets: .constant([]),
         onSave: { }

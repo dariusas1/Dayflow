@@ -19,39 +19,36 @@ struct DashboardView: View {
         widgets: [
             DashboardWidget(
                 id: "focus-time",
-                type: .chart,
+                type: .focusTime,
                 title: "Focus Time",
-                metric: .focusTime,
-                position: 0,
+                position: .init(row: 0),
                 size: .large
             ),
             DashboardWidget(
                 id: "productivity-score",
-                type: .chart,
+                type: .productivity,
                 title: "Productivity Score",
-                metric: .productivity,
-                position: 1,
+                position: .init(row: 1),
                 size: .medium
             ),
             DashboardWidget(
                 id: "app-usage",
-                type: .chart,
+                type: .apps,
                 title: "App Usage",
-                metric: .appUsage,
-                position: 2,
+                position: .init(row: 2),
                 size: .large
             ),
             DashboardWidget(
                 id: "insights",
                 type: .insights,
                 title: "Insights",
-                metric: .none,
-                position: 3,
+                position: .init(row: 3),
                 size: .large
             )
         ],
-        timeRange: .week,
-        showDetailedAnalysis: false
+        theme: .default,
+        layout: .default,
+        preferences: .default.updating(timeRange: .week, showDetailedAnalysis: false)
     )
 
     var body: some View {
@@ -216,100 +213,89 @@ struct DashboardView: View {
             // Focus Time Widgets
             DashboardWidget(
                 id: "focus-time-mini",
-                type: .chart,
+                type: .focusTime,
                 title: "Focus Time Today",
-                metric: .focusTime,
-                position: -1,
+                position: .init(row: -1),
                 size: .small
             ),
             DashboardWidget(
                 id: "focus-time-week",
-                type: .chart,
+                type: .focusTime,
                 title: "Weekly Focus",
-                metric: .focusTime,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
 
             // Productivity Widgets
             DashboardWidget(
                 id: "productivity-score",
-                type: .chart,
+                type: .productivity,
                 title: "Productivity Score",
-                metric: .productivity,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
             DashboardWidget(
                 id: "productivity-trend",
-                type: .chart,
+                type: .productivity,
                 title: "Productivity Trend",
-                metric: .productivity,
-                position: -1,
+                position: .init(row: -1),
                 size: .large
             ),
 
             // Task Widgets
             DashboardWidget(
                 id: "tasks-completed",
-                type: .chart,
+                type: .tasks,
                 title: "Tasks Completed",
-                metric: .taskCompletion,
-                position: -1,
+                position: .init(row: -1),
                 size: .small
             ),
             DashboardWidget(
                 id: "task-progress",
-                type: .chart,
+                type: .tasks,
                 title: "Task Progress",
-                metric: .taskCompletion,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
 
             // App Usage Widgets
             DashboardWidget(
                 id: "top-apps",
-                type: .chart,
+                type: .apps,
                 title: "Top Apps",
-                metric: .appUsage,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
             DashboardWidget(
                 id: "app-usage-detailed",
-                type: .chart,
+                type: .apps,
                 title: "App Usage Analysis",
-                metric: .appUsage,
-                position: -1,
+                position: .init(row: -1),
                 size: .large
             ),
 
             // Wellness Widgets
             DashboardWidget(
                 id: "break-time",
-                type: .chart,
+                type: .wellness,
                 title: "Break Time",
-                metric: .wellness,
-                position: -1,
+                position: .init(row: -1),
                 size: .small
             ),
             DashboardWidget(
                 id: "session-length",
-                type: .chart,
+                type: .wellness,
                 title: "Session Length",
-                metric: .wellness,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
 
             // Goals Widgets
             DashboardWidget(
                 id: "goal-progress",
-                type: .chart,
+                type: .goals,
                 title: "Goal Progress",
-                metric: .goals,
-                position: -1,
+                position: .init(row: -1),
                 size: .medium
             ),
 
@@ -318,8 +304,7 @@ struct DashboardView: View {
                 id: "recent-insights",
                 type: .insights,
                 title: "Recent Insights",
-                metric: .none,
-                position: -1,
+                position: .init(row: -1),
                 size: .large
             ),
 
@@ -328,8 +313,7 @@ struct DashboardView: View {
                 id: "weekly-trends",
                 type: .trends,
                 title: "Weekly Trends",
-                metric: .none,
-                position: -1,
+                position: .init(row: -1),
                 size: .large
             )
         ]
@@ -447,14 +431,15 @@ struct DashboardInsightsView: View {
     let onInsightTap: (ProductivityInsight) -> Void
 
     var body: some View {
-        InsightsView(
-            insights: engine.insights,
-            recommendations: engine.recommendations,
-            trends: engine.trends,
-            configuration: DashboardConfiguration(
+            InsightsView(
+                insights: engine.insights,
+                recommendations: engine.recommendations,
+                trends: engine.trends,
+                configuration: DashboardConfiguration(
                 widgets: [],
-                timeRange: .week,
-                showDetailedAnalysis: true
+                theme: .default,
+                layout: .default,
+                preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
             )
         )
     }
