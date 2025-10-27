@@ -2660,7 +2660,7 @@ struct PlannerTemplate: Codable, Identifiable {
 }
 
 struct TemplateTask: Codable, Identifiable {
-    let id = UUID
+    let id: UUID
     var title: String
     var description: String
     var estimatedDuration: TimeInterval
@@ -2852,7 +2852,7 @@ struct SentimentAnalysis: Codable {
     let keyEmotions: [String]
 
     var dominantEmotion: String? {
-        emotionalBreakdown.max { $0.score }?.emotion
+        emotionalBreakdown.max(by: { $0.score < $1.score })?.emotion
     }
 
     init() {
