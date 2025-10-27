@@ -5,6 +5,7 @@
 //  Comprehensive insights and recommendations for productivity optimization
 //
 
+import Foundation
 import SwiftUI
 
 private struct InsightPresentation {
@@ -88,7 +89,7 @@ struct InsightsView: View {
     let insights: [ProductivityInsight]
     let recommendations: [Recommendation]
     let trends: [TrendData]
-    let configuration: DashboardConfiguration
+    let showDetailedAnalysis: Bool
 
     @State private var selectedInsight: ProductivityInsight?
     @State private var expandedRecommendation: Recommendation?
@@ -113,7 +114,7 @@ struct InsightsView: View {
                 if !insights.isEmpty {
                     InsightsSection(
                         title: "Key Insights",
-                        insights: insights.highConfidence,
+                        insights: insights.filter { $0.priority.level >= Recommendation.Priority.medium.level },
                         selectedInsight: $selectedInsight
                     )
                 }
@@ -150,7 +151,7 @@ struct InsightsView: View {
                 )
 
                 // Detailed Analysis Section
-                if configuration.showDetailedAnalysis {
+                if showDetailedAnalysis {
                     DetailedAnalysisSection(
                         insights: insights,
                         trends: trends,
@@ -319,7 +320,7 @@ struct TrendCard: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.black)
 
-                    Text(dateRangeDescription)
+                    Text(trend.periodDescription)
                         .font(.custom("Nunito", size: 12))
                         .foregroundColor(.gray)
                 }
@@ -400,8 +401,7 @@ struct MiniTrendView: View {
             }
             .trim(from: 0, to: 1)
             .stroke(
-                trend.trendDirection == .positive ? Color.green :
-                trend.trendDirection == .negative ? Color.red : Color.gray,
+                trend.trendDirection.color,
                 style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
             )
         }
@@ -535,11 +535,11 @@ struct RecommendationCard: View {
                     HStack {
                         Image(systemName: "chart.line.uptrend.xyaxis")
                             .font(.system(size: 12))
-                            .foregroundColor(recommendation.estimatedImpact.color)
+                            .foregroundColor(.green)
 
-                        Text("Impact: \(recommendation.estimatedImpact.displayName)")
+                        Text("Expected impact: \(recommendation.impactDescription)")
                             .font(.custom("Nunito", size: 12))
-                            .foregroundColor(recommendation.estimatedImpact.color)
+                            .foregroundColor(.green)
                     }
 
                     Button(action: onApplyAction) {
@@ -863,7 +863,7 @@ struct GoalProgressSection: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.black)
 
-            let goalInsights = insights.filter { $0.isGoalRelated }
+            let goalInsights = insights.filter { $0.category == .goal }
             let goalRecommendations = recommendations.filter { $0.category == .goalSetting }
 
             if !goalInsights.isEmpty || !goalRecommendations.isEmpty {
@@ -925,12 +925,15 @@ struct GoalProgressRow: View {
                         .foregroundColor(metadata.accentColor)
                 }
             }
+        }
 
-            ProgressView(value: min(max(insight.confidenceLevel, 0), 1))
-                .progressViewStyle(LinearProgressViewStyle(tint: metadata.accentColor))
+        if let progress = insight.progressValue {
+            ProgressView(value: progress)
+                .progressViewStyle(LinearProgressViewStyle(tint: insight.color))
                 .scaleEffect(y: 0.8)
         }
     }
+}
 }
 
 // MARK: - Supporting Views
@@ -1126,7 +1129,7 @@ struct InsightDetailView: View {
 }
 
 struct DetailedDataView: View {
-    let metrics: [ProductivityMetric]
+    let data: [String: String]
     let color: Color
 
     var body: some View {
@@ -1160,6 +1163,146 @@ struct DetailedDataView: View {
     }
 }
 
+private extension ProductivityInsight {
+    enum Category {
+        case productivity
+        case pattern
+        case timeManagement
+        case trend
+        case goal
+    }
+
+    var category: Category {
+        switch type {
+        case .peakPerformance, .focusQuality:
+            return .productivity
+        case .productivityPattern, .taskEfficiency:
+            return .pattern
+        case .schedulingImprovement:
+            return .timeManagement
+        case .goalProgress:
+            return .goal
+        case .energyOptimization, .burnoutRisk:
+            return .trend
+        }
+    }
+
+    var icon: String {
+        switch type {
+        case .peakPerformance: return "speedometer"
+        case .productivityPattern: return "chart.line.uptrend.xyaxis"
+        case .energyOptimization: return "bolt.fill"
+        case .taskEfficiency: return "checkmark.seal.fill"
+        case .schedulingImprovement: return "calendar"
+        case .goalProgress: return "target"
+        case .burnoutRisk: return "exclamationmark.triangle.fill"
+        case .focusQuality: return "eye.fill"
+        }
+    }
+
+    var color: Color {
+        switch type {
+        case .peakPerformance: return .green
+        case .productivityPattern: return .purple
+        case .energyOptimization: return .orange
+        case .taskEfficiency: return .blue
+        case .schedulingImprovement: return .teal
+        case .goalProgress: return .pink
+        case .burnoutRisk: return .red
+        case .focusQuality: return .indigo
+        }
+    }
+
+    var priority: Recommendation.Priority {
+        switch confidenceLevel {
+        case ..<0.4: return .low
+        case ..<0.7: return .medium
+        case ..<0.9: return .high
+        default: return .urgent
+        }
+    }
+
+    var relatedMetrics: [String] {
+        metrics.map(\.name)
+    }
+
+    var value: Double? {
+        metrics.first?.value
+    }
+
+    var progressValue: Double? {
+        guard let metric = metrics.first else { return nil }
+        if metric.unit.contains("%") {
+            return min(max(metric.value / 100, 0), 1)
+        }
+        if (0...1).contains(metric.value) {
+            return metric.value
+        }
+        return min(max(metric.value / 100, 0), 1)
+    }
+
+    var impact: String? {
+        recommendations.first?.expectedImpact.displayName
+    }
+
+    var data: [String: String]? {
+        let formatter = NumberFormatter()
+        formatter.maximumFractionDigits = 1
+        formatter.minimumFractionDigits = 0
+        let entries = metrics.reduce(into: [String: String]()) { result, metric in
+            let number = NSNumber(value: metric.value)
+            let formattedValue = formatter.string(from: number) ?? String(format: "%.1f", metric.value)
+            if metric.unit.isEmpty {
+                result[metric.name] = formattedValue
+            } else {
+                result[metric.name] = "\(formattedValue) \(metric.unit)"
+            }
+        }
+        return entries.isEmpty ? nil : entries
+    }
+}
+
+private extension ProductivityRecommendation.ImpactLevel {
+    var displayName: String {
+        switch self {
+        case .minimal: return "Minimal"
+        case .moderate: return "Moderate"
+        case .significant: return "Significant"
+        case .transformative: return "Transformative"
+        }
+    }
+}
+
+private extension Recommendation {
+    var icon: String { category.icon }
+
+    var color: Color { category.color }
+
+    var steps: [String] {
+        suggestedActions.flatMap { action in
+            var items = [action.title]
+            items.append(contentsOf: action.steps)
+            return items
+        }
+    }
+
+    var impactDescription: String { estimatedImpact.displayName }
+}
+
+private extension TrendData {
+    var periodDescription: String {
+        TrendData.periodFormatter.string(from: dateRange) ?? ""
+    }
+
+    static var periodFormatter: DateIntervalFormatter = {
+        let formatter = DateIntervalFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+}
+
+#if DEBUG
 #Preview {
     let focusMetric = ProductivityMetric(
         name: "Focus Time",
