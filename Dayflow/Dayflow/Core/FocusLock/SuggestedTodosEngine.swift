@@ -13,7 +13,6 @@ import GRDB
 import os.log
 
 class SuggestedTodosEngine {
-    static let shared = SuggestedTodosEngine()
 
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
 
@@ -81,28 +80,30 @@ class SuggestedTodosEngine {
             }
 
             // Extract task suggestions from activity data
-            var suggestions = await extractTaskSuggestions(from: currentActivity)
+            let taskSuggestions = await extractTaskSuggestions(from: currentActivity)
 
             // Apply priority scoring and filtering
-            suggestions = await applyPriorityScoring(to: suggestions, activity: currentActivity)
+            var scoredSuggestions = await applyPriorityScoring(to: taskSuggestions, activity: currentActivity)
 
             // Apply user preference learning
-            suggestions = await applyUserPreferenceLearning(to: suggestions)
+            scoredSuggestions = await applyUserPreferenceLearning(to: scoredSuggestions)
 
             // Filter and limit suggestions
-            suggestions = filterAndLimitSuggestions(suggestions)
+            let finalSuggestions = filterAndLimitSuggestions(scoredSuggestions)
 
             // Store suggestions in database
-            for suggestion in suggestions {
+            for suggestion in finalSuggestions {
                 try await storeSuggestion(suggestion)
             }
 
+            suggestionHistory.append(contentsOf: finalSuggestions)
+
             let duration = CFAbsoluteTimeGetCurrent() - startTime
-            updateProcessingStats(duration: duration, suggestionsCount: suggestions.count)
+            updateProcessingStats(duration: duration, suggestionsCount: finalSuggestions.count)
 
-            logger.info("Generated \(suggestions.count) task suggestions in \(String(format: "%.3f", duration))s")
+            logger.info("Generated \(finalSuggestions.count) task suggestions in \(String(format: "%.3f", duration))s")
 
-            return suggestions
+            return finalSuggestions
 
         } catch {
             logger.error("Failed to generate suggestions: \(error.localizedDescription)")
@@ -115,22 +116,22 @@ class SuggestedTodosEngine {
             do {
                 try databaseQueue.read { db in
                     var query = "SELECT * FROM suggested_todos WHERE is_dismissed = 0"
-                    var arguments: [DatabaseValue] = []
+                    var arguments: [DatabaseValueConvertible?] = []
 
                     if let priority = priority {
                         query += " AND priority = ?"
-                        arguments.append(DatabaseValue.string(priority.rawValue))
+                        arguments.append(priority.rawValue)
                     }
 
                     if let category = category {
                         query += " AND context_tags LIKE ?"
-                        arguments.append(DatabaseValue.string("%\(category)%"))
+                        arguments.append("%\(category)%")
                     }
 
                     query += " ORDER BY urgency_score DESC, relevance_score DESC, created_at DESC LIMIT ?"
-                    arguments.append(DatabaseValue.integer64(limit))
+                    arguments.append(Int64(limit))
 
-                    let rows = try Row.fetchAll(db, sql: query, arguments: arguments)
+                    let rows = try Row.fetchAll(db, sql: query, arguments: StatementArguments(arguments))
                     let suggestions = rows.compactMap { try parseSuggestedTodo(from: $0) }
 
                     continuation.resume(returning: suggestions)
@@ -144,22 +145,25 @@ class SuggestedTodosEngine {
 
     func recordUserFeedback(for suggestionId: UUID, feedback: UserFeedback, accept: Bool = false) async throws {
         try databaseQueue.write { db in
+            let dismissReason = accept ? nil : feedback.comment
+            let arguments: [DatabaseValueConvertible?] = [
+                feedback.score,
+                feedback.timestamp,
+                feedback.comment,
+                accept,
+                accept || feedback.score < 0.5,
+                dismissReason,
+                0.0, // Will be updated by learning system
+                Date(),
+                suggestionId.uuidString
+            ]
+
             try db.execute(sql: """
                 UPDATE suggested_todos
                 SET user_feedback_score = ?, user_feedback_timestamp = ?, user_feedback_comment = ?,
                     is_accepted = ?, is_dismissed = ?, dismiss_reason = ?, learning_score = ?, last_shown = ?
                 WHERE id = ?
-            """, arguments: [
-                DatabaseValue.double(feedback.score),
-                DatabaseValue.date(feedback.timestamp),
-                DatabaseValue.string(feedback.comment),
-                DatabaseValue.boolean(accept),
-                DatabaseValue.boolean(accept || feedback.score < 0.5),
-                DatabaseValue.string(accept ? nil : feedback.comment),
-                DatabaseValue.double(0.0), // Will be updated by learning system
-                DatabaseValue.date(Date()),
-                DatabaseValue.string(suggestionId.uuidString)
-            ])
+            """, arguments: StatementArguments(arguments))
         }
 
         // Update user preferences based on feedback
@@ -500,10 +504,11 @@ class SuggestedTodosEngine {
 
     private func calculateConfidence(for task: String, in sentence: String, context: String) -> Double {
         var confidence = 0.5 // Base confidence
+        let lowercaseTask = task.lowercased()
 
         // Higher confidence for clear action verbs
         let strongActions = ["complete", "submit", "send", "finish", "review", "check"]
-        if strongActions.contains(where: { task.lowercased().contains($0) }) {
+        if strongActions.contains(where: { lowercaseTask.contains($0) }) {
             confidence += 0.2
         }
 
@@ -515,7 +520,7 @@ class SuggestedTodosEngine {
 
         // Higher confidence for tasks with specific details
         let detailIndicators = ["by", "before", "after", "at", "on", "due"]
-        if detailIndicators.contains(where: { task.lowercased().contains($0) }) {
+        if detailIndicators.contains(where: { lowercaseTask.contains($0) }) {
             confidence += 0.1
         }
 
@@ -579,16 +584,17 @@ class SuggestedTodosEngine {
 
     private func estimateDuration(for task: String) -> TimeInterval {
         let wordCount = task.components(separatedBy: .whitespaces).count
+        let lowercaseTask = task.lowercased()
 
         // Base estimation: 1 minute per word
         var baseEstimate = TimeInterval(wordCount * 60)
 
         // Adjust for task complexity
-        if task.lowercased().contains("create") || task.lowercased().contains("write") {
+        if lowercaseTask.contains("create") || lowercaseTask.contains("write") {
             baseEstimate *= 1.5
-        } else if task.lowercased().contains("review") || task.lowercased.contains("check") {
+        } else if lowercaseTask.contains("review") || lowercaseTask.contains("check") {
             baseEstimate *= 0.8
-        } else if task.lowercased().contains("research") || task.lowercased.contains("study") {
+        } else if lowercaseTask.contains("research") || lowercaseTask.contains("study") {
             baseEstimate *= 2.0
         }
 
@@ -712,6 +718,25 @@ class SuggestedTodosEngine {
         try databaseQueue.write { db in
             let tagsData = try JSONEncoder().encode(suggestion.contextTags)
             let tagsString = String(data: tagsData, encoding: .utf8)
+            let estimatedDuration = suggestion.estimatedDuration.map { Int64($0) }
+
+            let arguments: [DatabaseValueConvertible?] = [
+                suggestion.id.uuidString,
+                suggestion.title,
+                suggestion.description,
+                suggestion.priority.rawValue,
+                suggestion.confidence,
+                suggestion.sourceContent,
+                suggestion.sourceType.rawValue,
+                suggestion.sourceActivityId?.uuidString,
+                tagsString,
+                estimatedDuration,
+                suggestion.deadline,
+                suggestion.createdAt,
+                suggestion.urgencyScore,
+                suggestion.relevanceScore,
+                suggestion.learningScore
+            ]
 
             try db.execute(sql: """
                 INSERT OR REPLACE INTO suggested_todos
@@ -719,23 +744,7 @@ class SuggestedTodosEngine {
                  source_activity_id, context_tags, estimated_duration, deadline, created_at,
                  urgency_score, relevance_score, learning_score)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, arguments: [
-                DatabaseValue.string(suggestion.id.uuidString),
-                DatabaseValue.string(suggestion.title),
-                DatabaseValue.string(suggestion.description),
-                DatabaseValue.string(suggestion.priority.rawValue),
-                DatabaseValue.double(suggestion.confidence),
-                DatabaseValue.string(suggestion.sourceContent),
-                DatabaseValue.string(suggestion.sourceType.rawValue),
-                DatabaseValue.string(suggestion.sourceActivityId?.uuidString),
-                DatabaseValue.string(tagsString),
-                DatabaseValue.integer64(suggestion.estimatedDuration.map { Int64($0) } ?? nil),
-                DatabaseValue.date(suggestion.deadline),
-                DatabaseValue.date(suggestion.createdAt),
-                DatabaseValue.double(suggestion.urgencyScore),
-                DatabaseValue.double(suggestion.relevanceScore),
-                DatabaseValue.double(suggestion.learningScore)
-            ])
+            """, arguments: StatementArguments(arguments))
         }
     }
 
@@ -802,19 +811,38 @@ class SuggestedTodosEngine {
         try data.write(to: prefsPath)
     }
 
+    private func saveConfiguration() async throws {
+        let currentConfig = config
+
+        try await Task.detached(priority: .utility) {
+            let directoryURL = try FileManager.default
+                .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                .appendingPathComponent("FocusLock")
+
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+            let configURL = directoryURL.appendingPathComponent("SuggestionEngineConfig.json")
+            let data = try JSONEncoder().encode(currentConfig)
+            try data.write(to: configURL, options: .atomic)
+        }.value
+    }
+
     private func updateLearningScores(for suggestion: SuggestedTodo, feedback: UserFeedback) async {
         // Update learning scores for similar suggestions
         do {
             try databaseQueue.write { db in
+                let contextPattern = "%\(suggestion.contextTags.joined(separator: ","))%"
+                let arguments: [DatabaseValueConvertible?] = [
+                    feedback.score,
+                    contextPattern,
+                    suggestion.id.uuidString
+                ]
+
                 try db.execute(sql: """
                     UPDATE suggested_todos
                     SET learning_score = learning_score * 0.9 + ? * 0.1
                     WHERE context_tags LIKE ? AND id != ?
-                """, arguments: [
-                    DatabaseValue.double(feedback.score),
-                    DatabaseValue.string("%\(suggestion.contextTags.joined(separator: ","))%"),
-                    DatabaseValue.string(suggestion.id.uuidString)
-                ])
+                """, arguments: StatementArguments(arguments))
             }
         } catch {
             logger.error("Failed to update learning scores: \(error.localizedDescription)")
@@ -841,7 +869,10 @@ class SuggestedTodosEngine {
 
         do {
             try databaseQueue.write { db in
-                try db.execute(sql: "DELETE FROM suggested_todos WHERE created_at < ?", arguments: [DatabaseValue.date(cutoffDate)])
+                try db.execute(
+                    sql: "DELETE FROM suggested_todos WHERE created_at < ?",
+                    arguments: StatementArguments([cutoffDate])
+                )
             }
             logger.info("Cleaned up old suggestions older than \(config.contextRetentionDays) days")
         } catch {
