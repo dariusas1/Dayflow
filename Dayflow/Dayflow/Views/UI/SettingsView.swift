@@ -13,6 +13,7 @@ struct SettingsView: View {
     private enum SettingsTab: String, CaseIterable, Identifiable {
         case storage
         case providers
+        case focuslock
         case other
 
         var id: String { rawValue }
@@ -21,6 +22,7 @@ struct SettingsView: View {
             switch self {
             case .storage: return "Storage"
             case .providers: return "Providers"
+            case .focuslock: return "FocusLock"
             case .other: return "Other"
             }
         }
@@ -29,6 +31,7 @@ struct SettingsView: View {
             switch self {
             case .storage: return "Recording status and disk usage"
             case .providers: return "Manage LLM providers and customize prompts"
+            case .focuslock: return "Focus sessions and productivity features"
             case .other: return "General preferences & support"
             }
         }
@@ -274,6 +277,8 @@ struct SettingsView: View {
             storageContent
         case .providers:
             providersContent
+        case .focuslock:
+            focusLockContent
         case .other:
             otherContent
         }
@@ -754,6 +759,233 @@ struct SettingsView: View {
         case "gemini": return "Bring your own API keys"
         case "dayflow": return "Dayflow Pro"
         default: return id.capitalized
+        }
+    }
+
+    // MARK: - FocusLock Tab
+
+    private var focusLockContent: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            SettingsCard(title: "Focus Session Settings", subtitle: "Configure your focus work sessions") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Focus sessions help you stay on task by blocking distractions and tracking your time.")
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.black.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Feature flags integration
+                    FeatureFlagsSettingsView()
+                        .environmentObject(FeatureFlagManager.shared)
+
+                    Divider()
+
+                    // Default Session Duration
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Default Session Duration")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Set the default length for focus sessions")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Text("25 min")
+                            .font(.custom("Nunito", size: 14))
+                            .foregroundColor(.black.opacity(0.7))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.05))
+                            .cornerRadius(6)
+                    }
+
+                    // Auto-start Breaks
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Auto-start Breaks")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Automatically start breaks after focus sessions")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Toggle("", isOn: .constant(true))
+                            .labelsHidden()
+                    }
+                }
+            }
+
+            SettingsCard(title: "Emergency Break Settings", subtitle: "Configure break duration and behavior") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Emergency breaks give you short pauses during intense focus sessions.")
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.black.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Break Duration
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Break Duration")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Set the length of emergency breaks")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Text("5 min")
+                            .font(.custom("Nunito", size: 14))
+                            .foregroundColor(.black.opacity(0.7))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.05))
+                            .cornerRadius(6)
+                    }
+
+                    // Daily Break Limit
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Daily Break Limit")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Maximum number of emergency breaks per day")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Text("3 breaks")
+                            .font(.custom("Nunito", size: 14))
+                            .foregroundColor(.black.opacity(0.7))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.05))
+                            .cornerRadius(6)
+                    }
+
+                    // Break Reason Required
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Require Break Reason")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Require a reason when taking emergency breaks")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Toggle("", isOn: .constant(false))
+                            .labelsHidden()
+                    }
+                }
+            }
+
+            SettingsCard(title: "Data & Privacy", subtitle: "Manage your FocusLock data") {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Control how your focus data is stored and used.")
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.black.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // Export Data
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Export FocusLock Data")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Download your focus sessions and productivity data")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Button("Export") {
+                            // TODO: Implement export functionality
+                        }
+                        .font(.custom("Nunito", size: 13))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color(red: 0.25, green: 0.17, blue: 0))
+                        .cornerRadius(8)
+                    }
+
+                    // Clear Analytics Data
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Clear Analytics Data")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Remove all analytics and usage statistics")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Button("Clear") {
+                            // TODO: Implement clear analytics functionality
+                        }
+                        .font(.custom("Nunito", size: 13))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.red)
+                        .cornerRadius(8)
+                    }
+
+                    // Reset Settings
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text("Reset Focus Settings")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.medium)
+                                .foregroundColor(.black)
+
+                            Text("Reset all FocusLock settings to defaults")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.black.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Button("Reset") {
+                            // TODO: Implement reset functionality
+                        }
+                        .font(.custom("Nunito", size: 13))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.orange)
+                        .cornerRadius(8)
+                    }
+                }
+            }
         }
     }
 

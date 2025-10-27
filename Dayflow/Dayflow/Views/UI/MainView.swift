@@ -14,6 +14,8 @@ import Sentry
 struct MainView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var categoryStore: CategoryStore
+    @StateObject private var featureFlagManager = FeatureFlagManager.shared
+    @StateObject private var migrationManager = DataMigrationManager.shared
     @State private var selectedIcon: SidebarIcon = .timeline
     @State private var selectedDate = timelineDisplayDate(from: Date())
     @State private var showDatePicker = false
@@ -42,6 +44,13 @@ struct MainView: View {
     }()
     @State private var showCategoryEditor = false
 
+    // FocusLock specific state
+    @State private var showMigration = false
+    @State private var showFeatureOnboarding = false
+    @State private var onboardingFeature: FeatureFlag?
+    @State private var showFocusLockOnboarding = false
+    @AppStorage("focusLockOnboardingCompleted") private var focusLockOnboardingCompleted = false
+
     private static let maxDateTitleWidth: CGFloat = {
         let referenceText = "Today, Sep 30"
         let font = NSFont(name: "InstrumentSerif-Regular", size: 36) ?? NSFont.systemFont(ofSize: 36)
@@ -50,6 +59,36 @@ struct MainView: View {
     }()
 
     var body: some View {
+        // Check for migration first
+        Group {
+            if migrationManager.needsMigration() {
+                DataMigrationView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                mainAppContent
+            }
+        }
+        .onAppear {
+            checkForFeatureOnboarding()
+        }
+        .sheet(isPresented: $showFeatureOnboarding) {
+            if let feature = onboardingFeature {
+                FeatureOnboardingView(feature: feature) {
+                    showFeatureOnboarding = false
+                    featureFlagManager.setOnboardingStatus(for: feature, status: .completed)
+                }
+                .frame(minWidth: 600, minHeight: 500)
+            }
+        }
+        .sheet(isPresented: $showFocusLockOnboarding) {
+            FocusLockOnboardingFlow()
+                .environmentObject(featureFlagManager)
+                .frame(minWidth: 800, minHeight: 600)
+        }
+    }
+
+    @ViewBuilder
+    private var mainAppContent: some View {
         // Two-column layout: left logo + sidebar; right white panel with header, filters, timeline
         HStack(alignment: .top, spacing: 0) {
             // Left column: Logo on top, sidebar centered
@@ -83,16 +122,19 @@ struct MainView: View {
             ZStack {
                 switch selectedIcon {
                 case .settings:
-                    SettingsView()
+                    enhancedSettingsView
                         .padding(15)
                 case .dashboard:
-                    DashboardView()
+                    enhancedDashboardView
                         .padding(15)
                 case .journal:
-                    JournalView()
+                    enhancedJournalView
                         .padding(15)
                 case .bug:
                     BugReportView()
+                        .padding(15)
+                case .focuslock:
+                    enhancedFocusLockView
                         .padding(15)
                 case .timeline:
                     GeometryReader { geo in
@@ -328,6 +370,7 @@ struct MainView: View {
             case .dashboard: tabName = "dashboard"
             case .journal: tabName = "journal"
             case .bug: tabName = "bug_report"
+            case .focuslock: tabName = "focuslock"
             case .settings: tabName = "settings"
             }
 
@@ -426,6 +469,134 @@ struct MainView: View {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
+
+    // MARK: - Enhanced Views with Feature Flag Integration
+
+    @ViewBuilder
+    private var enhancedSettingsView: some View {
+        VStack {
+            SettingsView()
+
+            if featureFlagManager.isEnabled(.suggestedTodos) ||
+               featureFlagManager.isEnabled(.planner) ||
+               featureFlagManager.isEnabled(.dailyJournal) ||
+               featureFlagManager.isEnabled(.enhancedDashboard) ||
+               featureFlagManager.isEnabled(.jarvisChat) {
+                Divider()
+                    .padding(.horizontal, 20)
+
+                FeatureFlagsSettingsView()
+                    .environmentObject(featureFlagManager)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var enhancedDashboardView: some View {
+        VStack {
+            DashboardView()
+
+            if featureFlagManager.isEnabled(.enhancedDashboard) {
+                EnhancedDashboardView()
+                    .environmentObject(featureFlagManager)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var enhancedJournalView: some View {
+        VStack {
+            JournalView()
+
+            if featureFlagManager.isEnabled(.dailyJournal) {
+                DailyJournalView()
+                    .environmentObject(featureFlagManager)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var enhancedFocusLockView: some View {
+        VStack {
+            FocusLockView()
+
+            // Suggested Todos Section
+            if featureFlagManager.isEnabled(.suggestedTodos) {
+                SuggestedTodosView()
+                    .environmentObject(featureFlagManager)
+            }
+
+            // Planner Section
+            if featureFlagManager.isEnabled(.planner) {
+                PlannerView()
+                    .environmentObject(featureFlagManager)
+            }
+        }
+    }
+
+    // MARK: - Feature Onboarding Helpers
+
+    private func checkForFeatureOnboarding() {
+        // Check if FocusLock onboarding is needed
+        if !focusLockOnboardingCompleted && hasAnyFocusLockFeaturesEnabled() {
+            showFocusLockOnboarding = true
+            return
+        }
+
+        // Check if any enabled features need onboarding
+        let enabledFeatures = featureFlagManager.getAllEnabledFeatures()
+
+        for feature in enabledFeatures {
+            if featureFlagManager.needsOnboarding(for: feature) {
+                onboardingFeature = feature
+                showFeatureOnboarding = true
+                break
+            }
+        }
+    }
+
+    private func hasAnyFocusLockFeaturesEnabled() -> Bool {
+        return featureFlagManager.isEnabled(.focusSessions) ||
+               featureFlagManager.isEnabled(.emergencyBreaks) ||
+               featureFlagManager.isEnabled(.suggestedTodos) ||
+               featureFlagManager.isEnabled(.planner)
+    }
+
+    private func shouldShowFeatureBadge(for icon: SidebarIcon) -> Bool {
+        switch icon {
+        case .dashboard:
+            return featureFlagManager.isEnabled(.enhancedDashboard) && featureFlagManager.getOnboardingStatus(for: .enhancedDashboard) == .completed
+        case .journal:
+            return featureFlagManager.isEnabled(.dailyJournal) && featureFlagManager.getOnboardingStatus(for: .dailyJournal) == .completed
+        case .focuslock:
+            let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
+                                   featureFlagManager.isEnabled(.emergencyBreaks) ||
+                                   featureFlagManager.isEnabled(.suggestedTodos) ||
+                                   featureFlagManager.isEnabled(.planner)
+            return hasAnyFocusFeature
+        default:
+            return false
+        }
+    }
+
+    private func getSidebarIconName(for icon: SidebarIcon) -> String? {
+        switch icon {
+        case .timeline: return "TimelineIcon"
+        case .dashboard:
+            return featureFlagManager.isEnabled(.enhancedDashboard) ? "EnhancedDashboardIcon" : "DashboardIcon"
+        case .journal:
+            return featureFlagManager.isEnabled(.dailyJournal) ? "DailyJournalIcon" : "JournalIcon"
+        case .bug: return nil
+        case .focuslock:
+            // Show enhanced icon when any FocusLock features are enabled
+            let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
+                                   featureFlagManager.isEnabled(.emergencyBreaks) ||
+                                   featureFlagManager.isEnabled(.suggestedTodos) ||
+                                   featureFlagManager.isEnabled(.planner)
+            return hasAnyFocusFeature ? "EnhancedFocusLockIcon" : "FocusLockIcon"
+        case .settings: return nil
+        }
+    }
 }
 
 enum SidebarIcon: CaseIterable {
@@ -433,6 +604,7 @@ enum SidebarIcon: CaseIterable {
     case dashboard
     case journal
     case bug
+    case focuslock
     case settings
 
     var assetName: String? {
@@ -441,6 +613,7 @@ enum SidebarIcon: CaseIterable {
         case .dashboard: return "DashboardIcon"
         case .journal: return "JournalIcon"
         case .bug: return nil
+        case .focuslock: return nil
         case .settings: return nil
         }
     }
@@ -448,6 +621,7 @@ enum SidebarIcon: CaseIterable {
     var systemNameFallback: String? {
         switch self {
         case .bug: return "exclamationmark.bubble"
+        case .focuslock: return "lock.shield"
         case .settings: return "gearshape"
         default: return nil
         }
@@ -476,7 +650,31 @@ struct SidebarIconButton: View {
     let icon: SidebarIcon
     let isSelected: Bool
     let action: () -> Void
-    
+    @StateObject private var featureFlagManager = FeatureFlagManager.shared
+
+    private var iconName: String? {
+        return icon.systemNameFallback // This will be handled by the parent component
+    }
+
+    private var shouldShowBadge: Bool {
+        switch icon {
+        case .dashboard:
+            return featureFlagManager.isEnabled(.enhancedDashboard) &&
+                   featureFlagManager.getOnboardingStatus(for: .enhancedDashboard) == .completed
+        case .journal:
+            return featureFlagManager.isEnabled(.dailyJournal) &&
+                   featureFlagManager.getOnboardingStatus(for: .dailyJournal) == .completed
+        case .focuslock:
+            let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
+                                   featureFlagManager.isEnabled(.emergencyBreaks) ||
+                                   featureFlagManager.isEnabled(.suggestedTodos) ||
+                                   featureFlagManager.isEnabled(.planner)
+            return hasAnyFocusFeature
+        default:
+            return false
+        }
+    }
+
     var body: some View {
         Button(action: action) {
             ZStack {
@@ -499,6 +697,20 @@ struct SidebarIconButton: View {
                     Image(systemName: sys)
                         .font(.system(size: 18))
                         .foregroundColor(isSelected ? Color(hex: "F96E00") : Color(red: 0.6, green: 0.4, blue: 0.3))
+                }
+
+                // Feature badge indicator
+                if shouldShowBadge {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Circle()
+                                .fill(Color(red: 1, green: 0.54, blue: 0.17))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .frame(width: 40, height: 40)
                 }
             }
             .frame(width: 40, height: 40)

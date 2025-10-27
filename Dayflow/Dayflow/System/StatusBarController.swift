@@ -1,6 +1,6 @@
 //
 //  StatusBarController.swift
-//  Dayflow
+//  FocusLock
 //
 
 import AppKit
@@ -30,7 +30,7 @@ final class StatusBarController {
         // Keep menu label in sync with recording state
         sub = AppState.shared.$isRecording.sink { [weak self] rec in
             guard let self = self else { return }
-            self.toggleItem.title = rec ? "Pause Dayflow" : "Resume Dayflow"
+            self.toggleItem.title = rec ? "Pause FocusLock" : "Resume FocusLock"
         }
     }
     
@@ -38,7 +38,7 @@ final class StatusBarController {
         let m = NSMenu()
 
         // Pause / Resume
-        let t = NSMenuItem(title: "Pause Dayflow",
+        let t = NSMenuItem(title: "Pause FocusLock",
                            action: #selector(toggle),
                            keyEquivalent: "")
         t.target = self
@@ -47,8 +47,8 @@ final class StatusBarController {
 
         m.addItem(NSMenuItem.separator())
 
-        // Open Dayflow (show main UI)
-        let openMain = NSMenuItem(title: "Open Dayflow…",
+        // Open FocusLock (show main UI)
+        let openMain = NSMenuItem(title: "Open FocusLock…",
                                   action: #selector(openMainUI),
                                   keyEquivalent: "")
         openMain.target = self

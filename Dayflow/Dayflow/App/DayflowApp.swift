@@ -1,6 +1,6 @@
 //
-//  DayflowApp.swift
-//  Dayflow
+//  FocusLockApp.swift
+//  FocusLock
 //
 
 import SwiftUI
@@ -67,7 +67,7 @@ struct AppRootView: View {
 }
 
 @main
-struct DayflowApp: App {
+struct FocusLockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @AppStorage("didOnboard") private var didOnboard = false
     @AppStorage("useBlankUI") private var useBlankUI = false

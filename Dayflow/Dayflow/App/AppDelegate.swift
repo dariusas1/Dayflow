@@ -1,6 +1,6 @@
 //
 //  AppDelegate.swift
-//  Dayflow
+//  FocusLock
 //
 
 import AppKit
@@ -24,8 +24,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingDeepLinkURLs: [URL] = []
     private var pendingRecordingAnalyticsReason: String?
 
+    // FocusLock autostart properties
+    private var launchAgentManager: LaunchAgentManager?
+    private var backgroundMonitor: BackgroundMonitor?
+    private var focusLockSettings: FocusLockSettingsManager?
+    private var isAutostartMode: Bool = false
+
     override init() {
         UserDefaultsMigrator.migrateIfNeeded()
+
+        // Check for autostart mode
+        let arguments = CommandLine.arguments
+        isAutostartMode = arguments.contains("--autostart")
+
         super.init()
     }
 
@@ -132,7 +143,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Register login item helper (Ventura+). Non-fatal if user disabled it.
         if #available(macOS 13.0, *) {
             do {
-                try SMAppService.loginItem(identifier: "teleportlabs.com.Dayflow.LoginItem").register()
+                try SMAppService.loginItem(identifier: "teleportlabs.com.FocusLock.LoginItem").register()
             } catch {
                 print("Login item register failed: \(error)")
             }
@@ -143,6 +154,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Start inactivity monitoring for idle reset
         InactivityMonitor.shared.start()
+
+        // Initialize FocusLock components
+        setupFocusLock()
 
         // Observe recording state
         analyticsSub = AppState.shared.$isRecording
@@ -198,6 +212,80 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - FocusLock Setup
+
+    private func setupFocusLock() {
+        // Initialize FocusLock components
+        launchAgentManager = LaunchAgentManager.shared
+        backgroundMonitor = BackgroundMonitor.shared
+        focusLockSettings = FocusLockSettingsManager.shared
+
+        // Load settings and validate
+        focusLockSettings?.loadSettings()
+        let validationIssues = focusLockSettings?.validateSettings() ?? []
+        if !validationIssues.isEmpty {
+            print("AppDelegate: FocusLock settings validation issues: \(validationIssues)")
+        }
+
+        // Refresh autostart status from system
+        focusLockSettings?.refreshAutostartStatus()
+
+        // Handle autostart mode
+        if isAutostartMode {
+            print("AppDelegate: FocusLock started in autostart mode")
+            handleAutostartLaunch()
+        } else {
+            print("AppDelegate: FocusLock started in normal mode")
+            // For normal launches, ensure LaunchAgent status is checked
+            launchAgentManager?.checkAgentStatus()
+        }
+
+        // Start background monitoring if enabled
+        if focusLockSettings?.enableBackgroundMonitoring == true {
+            if SessionManager.shared.currentState != .idle {
+                backgroundMonitor?.startMonitoring()
+            }
+        }
+
+        print("AppDelegate: FocusLock components initialized")
+        print("AppDelegate: Autostart status: \(focusLockSettings?.autostartStatusDescription ?? "Unknown")")
+    }
+
+    private func handleAutostartLaunch() {
+        // In autostart mode, we want to minimize UI and start background services
+        let isBackgroundMode = CommandLine.arguments.contains("--background")
+
+        if isBackgroundMode {
+            print("AppDelegate: FocusLock running in background mode")
+            // Start background monitoring without showing main UI
+            if focusLockSettings?.enableBackgroundMonitoring == true {
+                backgroundMonitor?.startMonitoring()
+            }
+
+            // Show notification if enabled
+            if focusLockSettings?.enableNotifications == true {
+                let notification = NSUserNotification()
+                notification.title = "FocusLock Active"
+                notification.informativeText = "FocusLock is running in the background"
+                notification.soundName = nil // Quiet notification
+                NSUserNotificationCenter.default.deliver(notification)
+            }
+        } else {
+            print("AppDelegate: FocusLock autostart with UI")
+            // Autostart with UI - proceed with normal launch but maybe minimize
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                // Optional: minimize window after launch
+                if let window = NSApp.windows.first {
+                    window.miniaturize(nil)
+                }
+            }
+        }
+
+        // Ensure LaunchAgent is properly installed and status is current
+        launchAgentManager?.checkAgentStatus()
+        focusLockSettings?.refreshAutostartStatus()
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         if deepLinkRouter == nil {
             pendingDeepLinkURLs.append(contentsOf: urls)
@@ -210,6 +298,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Cleanup FocusLock components
+        backgroundMonitor?.stopMonitoring()
+        launchAgentManager = nil
+        backgroundMonitor = nil
+        focusLockSettings = nil
+
         if let observer = powerObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             powerObserver = nil

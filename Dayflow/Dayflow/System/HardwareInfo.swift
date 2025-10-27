@@ -49,18 +49,18 @@ class HardwareInfo {
     var macOSVersion: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
         let versionString = "\(version.majorVersion).\(version.minorVersion)"
-        
+
         // Add the patch version if it's not 0
         if version.patchVersion > 0 {
             return "\(versionString).\(version.patchVersion)"
         }
-        
+
         return versionString
     }
     
     var macOSVersionName: String {
         let version = ProcessInfo.processInfo.operatingSystemVersion
-        
+
         switch version.majorVersion {
         case 15:
             return "macOS Sequoia \(macOSVersion)"

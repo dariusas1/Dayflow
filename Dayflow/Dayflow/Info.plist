@@ -4,23 +4,19 @@
 <dict>
 	<key>ATSApplicationFontsPath</key>
 	<string>.</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.1.20</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>teleportlabs.com.Dayflow</string>
+			<string>teleportlabs.com.FocusLock</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>dayflow</string>
+				<string>focuslock</string>
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleVersion</key>
-	<string>60</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Dayflow uses screen access to create your timeline. Recordings stay on your Mac and you can pause or delete them anytime.</string>
+	<string>FocusLock uses screen access to detect tasks and ensure focus sessions. Screen recordings stay on your Mac and you can delete them anytime.</string>
 	<key>SUAllowsAutomaticUpdates</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>
@@ -30,7 +26,7 @@
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://dayflow.so/appcast.xml</string>
+	<string>https://focuslock.so/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>lf33Kn/Gx26j9zfGtsNNc6Lk2QTBHyXkFxxwnsXmdYA=</string>
 	<key>SUScheduledCheckInterval</key>
