@@ -5,6 +5,7 @@
 //  Comprehensive insights and recommendations for productivity optimization
 //
 
+import Foundation
 import SwiftUI
 
 struct InsightsView: View {
@@ -36,7 +37,7 @@ struct InsightsView: View {
                 if !insights.isEmpty {
                     InsightsSection(
                         title: "Key Insights",
-                        insights: insights.filter { $0.priority == .high || $0.priority == .medium },
+                        insights: insights.filter { $0.priority.level >= Recommendation.Priority.medium.level },
                         selectedInsight: $selectedInsight
                     )
                 }
@@ -228,7 +229,7 @@ struct TrendCard: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.black)
 
-                    Text(trend.period)
+                    Text(trend.periodDescription)
                         .font(.custom("Nunito", size: 12))
                         .foregroundColor(.gray)
                 }
@@ -308,8 +309,7 @@ struct MiniTrendView: View {
             }
             .trim(from: 0, to: 1)
             .stroke(
-                trend.trendDirection == .positive ? Color.green :
-                trend.trendDirection == .negative ? Color.red : Color.gray,
+                trend.trendDirection.color,
                 style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
             )
         }
@@ -384,7 +384,7 @@ struct RecommendationCard: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.black)
 
-                    Text(recommendation.category.rawValue.capitalized)
+                    Text(recommendation.category.displayName)
                         .font(.custom("Nunito", size: 12))
                         .foregroundColor(.gray)
                 }
@@ -429,16 +429,14 @@ struct RecommendationCard: View {
                         }
                     }
 
-                    if let expectedImpact = recommendation.expectedImpact {
-                        HStack {
-                            Image(systemName: "chart.line.uptrend.xyaxis")
-                                .font(.system(size: 12))
-                                .foregroundColor(.green)
+                    HStack {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                            .font(.system(size: 12))
+                            .foregroundColor(.green)
 
-                            Text("Expected impact: \(expectedImpact)")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.green)
-                        }
+                        Text("Expected impact: \(recommendation.impactDescription)")
+                            .font(.custom("Nunito", size: 12))
+                            .foregroundColor(.green)
                     }
 
                     Button(action: onApplyAction) {
@@ -748,7 +746,7 @@ struct GoalProgressSection: View {
                 .foregroundColor(.black)
 
             let goalInsights = insights.filter { $0.category == .goal }
-            let goalRecommendations = recommendations.filter { $0.category == .goal }
+            let goalRecommendations = recommendations.filter { $0.category == .goalSetting }
 
             if !goalInsights.isEmpty || !goalRecommendations.isEmpty {
                 VStack(spacing: 8) {
@@ -792,31 +790,31 @@ struct GoalProgressRow: View {
 
                 Spacer()
 
-                if let value = insight.value {
-                    Text(String(format: "%.0f%%", value * 100))
-                        .font(.custom("Nunito", size: 12))
-                        .fontWeight(.medium)
-                        .foregroundColor(insight.color)
-                }
-            }
-
-            if let value = insight.value {
-                ProgressView(value: value)
-                    .progressViewStyle(LinearProgressViewStyle(tint: insight.color))
-                    .scaleEffect(y: 0.8)
+            if let progress = insight.progressValue {
+                Text(String(format: "%.0f%%", progress * 100))
+                    .font(.custom("Nunito", size: 12))
+                    .fontWeight(.medium)
+                    .foregroundColor(insight.color)
             }
         }
+
+        if let progress = insight.progressValue {
+            ProgressView(value: progress)
+                .progressViewStyle(LinearProgressViewStyle(tint: insight.color))
+                .scaleEffect(y: 0.8)
+        }
     }
+}
 }
 
 // MARK: - Supporting Views
 
 struct PriorityIndicator: View {
-    let priority: Priority
+    let priority: Recommendation.Priority
 
     var body: some View {
         HStack(spacing: 2) {
-            ForEach(0..<priority.rawValue, id: \.self) { _ in
+            ForEach(0..<priority.level, id: \.self) { _ in
                 Circle()
                     .fill(priority.color)
                     .frame(width: 4, height: 4)
@@ -929,7 +927,7 @@ struct InsightDetailView: View {
 }
 
 struct DetailedDataView: View {
-    let data: [String: Any]
+    let data: [String: String]
     let color: Color
 
     var body: some View {
@@ -943,7 +941,7 @@ struct DetailedDataView: View {
 
                     Spacer()
 
-                    Text(String(describing: data[key] ?? ""))
+                    Text(data[key] ?? "")
                         .font(.custom("Nunito", size: 14))
                         .foregroundColor(color)
                 }
@@ -952,43 +950,247 @@ struct DetailedDataView: View {
     }
 }
 
+private extension ProductivityInsight {
+    enum Category {
+        case productivity
+        case pattern
+        case timeManagement
+        case trend
+        case goal
+    }
+
+    var category: Category {
+        switch type {
+        case .peakPerformance, .focusQuality:
+            return .productivity
+        case .productivityPattern, .taskEfficiency:
+            return .pattern
+        case .schedulingImprovement:
+            return .timeManagement
+        case .goalProgress:
+            return .goal
+        case .energyOptimization, .burnoutRisk:
+            return .trend
+        }
+    }
+
+    var icon: String {
+        switch type {
+        case .peakPerformance: return "speedometer"
+        case .productivityPattern: return "chart.line.uptrend.xyaxis"
+        case .energyOptimization: return "bolt.fill"
+        case .taskEfficiency: return "checkmark.seal.fill"
+        case .schedulingImprovement: return "calendar"
+        case .goalProgress: return "target"
+        case .burnoutRisk: return "exclamationmark.triangle.fill"
+        case .focusQuality: return "eye.fill"
+        }
+    }
+
+    var color: Color {
+        switch type {
+        case .peakPerformance: return .green
+        case .productivityPattern: return .purple
+        case .energyOptimization: return .orange
+        case .taskEfficiency: return .blue
+        case .schedulingImprovement: return .teal
+        case .goalProgress: return .pink
+        case .burnoutRisk: return .red
+        case .focusQuality: return .indigo
+        }
+    }
+
+    var priority: Recommendation.Priority {
+        switch confidenceLevel {
+        case ..<0.4: return .low
+        case ..<0.7: return .medium
+        case ..<0.9: return .high
+        default: return .urgent
+        }
+    }
+
+    var relatedMetrics: [String] {
+        metrics.map(\.name)
+    }
+
+    var value: Double? {
+        metrics.first?.value
+    }
+
+    var progressValue: Double? {
+        guard let metric = metrics.first else { return nil }
+        if metric.unit.contains("%") {
+            return min(max(metric.value / 100, 0), 1)
+        }
+        if (0...1).contains(metric.value) {
+            return metric.value
+        }
+        return min(max(metric.value / 100, 0), 1)
+    }
+
+    var impact: String? {
+        recommendations.first?.expectedImpact.displayName
+    }
+
+    var data: [String: String]? {
+        let formatter = NumberFormatter()
+        formatter.maximumFractionDigits = 1
+        formatter.minimumFractionDigits = 0
+        let entries = metrics.reduce(into: [String: String]()) { result, metric in
+            let number = NSNumber(value: metric.value)
+            let formattedValue = formatter.string(from: number) ?? String(format: "%.1f", metric.value)
+            if metric.unit.isEmpty {
+                result[metric.name] = formattedValue
+            } else {
+                result[metric.name] = "\(formattedValue) \(metric.unit)"
+            }
+        }
+        return entries.isEmpty ? nil : entries
+    }
+}
+
+private extension ProductivityRecommendation.ImpactLevel {
+    var displayName: String {
+        switch self {
+        case .minimal: return "Minimal"
+        case .moderate: return "Moderate"
+        case .significant: return "Significant"
+        case .transformative: return "Transformative"
+        }
+    }
+}
+
+private extension Recommendation {
+    var icon: String { category.icon }
+
+    var color: Color { category.color }
+
+    var steps: [String] {
+        suggestedActions.flatMap { action in
+            var items = [action.title]
+            items.append(contentsOf: action.steps)
+            return items
+        }
+    }
+
+    var impactDescription: String { estimatedImpact.displayName }
+}
+
+private extension TrendData {
+    var periodDescription: String {
+        TrendData.periodFormatter.string(from: dateRange) ?? ""
+    }
+
+    static var periodFormatter: DateIntervalFormatter = {
+        let formatter = DateIntervalFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
+}
+
+#if DEBUG
 #Preview {
     InsightsView(
         insights: [
             ProductivityInsight(
-                id: UUID(),
+                type: .productivityPattern,
                 title: "Peak Productivity Hours",
                 description: "You're most productive between 9 AM and 12 PM",
-                type: .pattern,
-                category: .productivity,
-                priority: .high,
-                icon: "clock.fill",
-                color: .blue,
-                value: 0.85,
-                impact: "Focus important tasks during morning hours",
-                relatedMetrics: ["Focus Time", "Productivity Score"],
-                data: ["peak_hours": "9-12", "efficiency": "85%"]
+                metrics: [
+                    ProductivityMetric(
+                        name: "Focus Time",
+                        value: 195,
+                        unit: "minutes",
+                        category: .focusTime
+                    ),
+                    ProductivityMetric(
+                        name: "Productivity Score",
+                        value: 88,
+                        unit: "%",
+                        category: .productivity
+                    )
+                ],
+                recommendations: [
+                    ProductivityRecommendation(
+                        category: .focus,
+                        title: "Optimize Morning Routine",
+                        description: "Start your most important work during peak hours",
+                        expectedImpact: .significant,
+                        difficulty: .moderate,
+                        estimatedTimeToImplement: 900,
+                        steps: [
+                            "Schedule important tasks before 12 PM",
+                            "Minimize meetings during morning hours",
+                            "Prepare work materials the night before"
+                        ]
+                    )
+                ],
+                confidenceLevel: 0.88
             )
         ],
         recommendations: [
             Recommendation(
-                id: UUID(),
                 title: "Optimize Morning Routine",
                 description: "Start your most important work during peak hours",
-                category: .productivity,
+                category: .focusImprovement,
                 priority: .high,
-                type: .optimization,
-                icon: "sunrise.fill",
-                color: .orange,
-                steps: [
-                    "Schedule important tasks before 12 PM",
-                    "Minimize meetings during morning hours",
-                    "Prepare work materials the night before"
+                actionable: true,
+                estimatedImpact: .significant,
+                suggestedActions: [
+                    Recommendation.SuggestedAction(
+                        title: "Schedule focus blocks",
+                        description: "Plan dedicated deep work sessions each morning",
+                        difficulty: .moderate,
+                        estimatedTime: 1800,
+                        steps: [
+                            "Reserve 9-11 AM for deep work",
+                            "Silence notifications",
+                            "Review top priorities"
+                        ]
+                    ),
+                    Recommendation.SuggestedAction(
+                        title: "Prepare the night before",
+                        description: "Lay out tasks and context to start strong",
+                        difficulty: .easy,
+                        estimatedTime: 600,
+                        steps: [
+                            "Review tomorrow's agenda",
+                            "List the top three tasks",
+                            "Stage supporting documents"
+                        ]
+                    )
                 ],
-                expectedImpact: "15% productivity increase"
+                evidence: [
+                    ProductivityMetric(
+                        name: "Morning Focus Time",
+                        value: 120,
+                        unit: "minutes",
+                        category: .focusTime
+                    )
+                ],
+                createdAt: Date(),
+                dismissedAt: nil
             )
         ],
-        trends: [],
+        trends: [
+            TrendData(
+                metricName: "Focus Time",
+                datapoints: [
+                    TrendData.DataPoint(date: Date().addingTimeInterval(-3 * 24 * 3600), value: 150),
+                    TrendData.DataPoint(date: Date().addingTimeInterval(-2 * 24 * 3600), value: 165),
+                    TrendData.DataPoint(date: Date().addingTimeInterval(-1 * 24 * 3600), value: 175),
+                    TrendData.DataPoint(date: Date(), value: 185)
+                ],
+                trendDirection: .increasing,
+                trendStrength: 0.7,
+                insights: [],
+                dateRange: DateInterval(
+                    start: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date(),
+                    end: Date()
+                )
+            )
+        ],
         configuration: DashboardConfiguration(
             widgets: [],
             timeRange: .week,
@@ -996,3 +1198,4 @@ struct DetailedDataView: View {
         )
     )
 }
+#endif
