@@ -111,14 +111,7 @@ class JarvisChat: ObservableObject {
     }
 
     func startNewConversation() {
-        let newConversation = Conversation(id: UUID(), messages: [], createdAt: Date())
-        currentConversation = newConversation
-        conversations.insert(newConversation, at: 0)
-
-        // Maintain conversation history limit
-        if conversations.count > maxConversationHistory {
-            conversations = Array(conversations.prefix(maxConversationHistory))
-        }
+        var newConversation = Conversation(id: UUID(), messages: [], createdAt: Date())
 
         // Add welcome message
         let welcomeMessage = ChatMessage(
@@ -130,6 +123,14 @@ class JarvisChat: ObservableObject {
             citations: []
         )
         newConversation.messages.append(welcomeMessage)
+
+        currentConversation = newConversation
+        conversations.insert(newConversation, at: 0)
+
+        // Maintain conversation history limit
+        if conversations.count > maxConversationHistory {
+            conversations = Array(conversations.prefix(maxConversationHistory))
+        }
     }
 
     func executeAction(_ action: ChatAction) async {
@@ -250,7 +251,7 @@ class JarvisChat: ObservableObject {
         Analyze the user's message and determine their intent. Consider the conversation context.
 
         Message: "\(message)"
-        Recent messages: \(context.messages.suffix(3).map { "\($0.role.rawValue): \($0.content.prefix(100))" }.joined(separator: "\n"))
+        Recent messages: \(context.messages.suffix(3).map { "\($0.role.rawValue): \(String($0.content.prefix(100)))" }.joined(separator: "\n"))
 
         Respond with a JSON object containing:
         {
@@ -284,7 +285,7 @@ class JarvisChat: ObservableObject {
         if intent.primaryIntent == .search || intent.primaryIntent == .insight {
             let searchResults = try await memoryStore.hybridSearch(message, limit: 5)
             context.relevantMemories = searchResults.map { $0.item }
-            context.memoryCitations = searchResults.map { Citation(source: "Memory", id: $0.id, content: $0.item.content.prefix(200)) }
+            context.memoryCitations = searchResults.map { Citation(source: "Memory", id: $0.id, content: String($0.item.content.prefix(200))) }
         }
 
         // Add current activity context
@@ -379,7 +380,7 @@ class JarvisChat: ObservableObject {
         if !context.recentMessages.isEmpty {
             prompt += "\n\nRecent conversation:\n"
             for msg in context.recentMessages.suffix(5) {
-                prompt += "\(msg.role.rawValue): \(msg.content.prefix(100))\n"
+                prompt += "\(msg.role.rawValue): \(String(msg.content.prefix(100)))\n"
             }
         }
 
@@ -390,7 +391,7 @@ class JarvisChat: ObservableObject {
         if !context.relevantMemories.isEmpty {
             prompt += "\n\nRelevant information from your activity:\n"
             for memory in context.relevantMemories.prefix(3) {
-                prompt += "- \(memory.content.prefix(150))\n"
+                prompt += "- \(String(memory.content.prefix(150)))\n"
             }
         }
 
@@ -444,13 +445,19 @@ class JarvisChat: ObservableObject {
     private func extractToolParameters(for toolName: String, intent: UserIntent, context: ConversationContext) -> [String: Any] {
         switch toolName {
         case "search_memories":
-            return ["query": context.recentMessages.last?.content ?? ""]
+            return ["query": AnyCodable(context.recentMessages.last?.content ?? "")]
         case "get_activity_summary":
-            return ["timeRange": "24h"]
+            return ["timeRange": AnyCodable("24h")]
         case "create_todo":
-            return ["title": "Suggested task based on conversation", "priority": "medium"]
+            return [
+                "title": AnyCodable("Suggested task based on conversation"),
+                "priority": AnyCodable("medium")
+            ]
         case "schedule_focus_session":
-            return ["taskName": "Focus session", "duration": 30]
+            return [
+                "taskName": AnyCodable("Focus session"),
+                "duration": AnyCodable(30)
+            ]
         default:
             return [:]
         }
@@ -507,7 +514,7 @@ class JarvisChat: ObservableObject {
             ChatAction(
                 toolName: "get_activity_summary",
                 description: "Get today's activity summary",
-                parameters: ["timeRange": "today"]
+                parameters: ["timeRange": AnyCodable("today")]
             ),
             ChatAction(
                 toolName: "get_productivity_insights",
@@ -644,7 +651,7 @@ struct ChatAction: Identifiable {
     let id = UUID()
     let toolName: String
     let description: String
-    let parameters: [String: Any]
+    let parameters: [String: AnyCodable]
 }
 
 struct ContextualInfo: Identifiable {
@@ -675,7 +682,7 @@ struct ToolExecutionResult {
 class ToolOrchestrator {
     private let logger = Logger(subsystem: "FocusLock", category: "ToolOrchestrator")
 
-    func executeTool(name: String, parameters: [String: Any]) async throws -> ToolResult {
+    func executeTool(name: String, parameters: [String: AnyCodable]) async throws -> ToolResult {
         logger.info("Executing tool: \(name)")
 
         switch name {
@@ -694,12 +701,12 @@ class ToolOrchestrator {
         }
     }
 
-    private func searchMemories(parameters: [String: Any]) async throws -> ToolResult {
-        let query = parameters["query"] as? String ?? ""
+    private func searchMemories(parameters: [String: AnyCodable]) async throws -> ToolResult {
+        let query = parameters["query"]?.stringValue ?? ""
         let memoryStore = try! HybridMemoryStore.shared
         let results = try await memoryStore.hybridSearch(query, limit: 5)
 
-        let content = results.map { "• \($0.item.content.prefix(200))" }.joined(separator: "\n")
+        let content = results.map { "• \(String($0.item.content.prefix(200)))" }.joined(separator: "\n")
 
         return ToolResult(
             success: true,
@@ -711,8 +718,8 @@ class ToolOrchestrator {
         )
     }
 
-    private func getActivitySummary(parameters: [String: Any]) async throws -> ToolResult {
-        let timeRange = parameters["timeRange"] as? String ?? "24h"
+    private func getActivitySummary(parameters: [String: AnyCodable]) async throws -> ToolResult {
+        let timeRange = parameters["timeRange"]?.stringValue ?? "24h"
         let dateRange = getDateRange(from: timeRange)
         let summary = ActivityTap.shared.getActivitySummary(for: dateRange)
 
@@ -735,9 +742,9 @@ class ToolOrchestrator {
         )
     }
 
-    private func createTodo(parameters: [String: Any]) async throws -> ToolResult {
-        let title = parameters["title"] as? String ?? "New Task"
-        let priority = parameters["priority"] as? String ?? "medium"
+    private func createTodo(parameters: [String: AnyCodable]) async throws -> ToolResult {
+        let title = parameters["title"]?.stringValue ?? "New Task"
+        let priority = parameters["priority"]?.stringValue ?? "medium"
 
         // This would integrate with your todo system
         // For now, return a placeholder result
@@ -753,9 +760,9 @@ class ToolOrchestrator {
         )
     }
 
-    private func scheduleFocusSession(parameters: [String: Any]) async throws -> ToolResult {
-        let taskName = parameters["taskName"] as? String ?? "Focus Session"
-        let duration = parameters["duration"] as? Int ?? 30
+    private func scheduleFocusSession(parameters: [String: AnyCodable]) async throws -> ToolResult {
+        let taskName = parameters["taskName"]?.stringValue ?? "Focus Session"
+        let duration = parameters["duration"]?.intValue ?? 30
 
         // This would integrate with your FocusLock system
         // For now, return a placeholder result
@@ -771,7 +778,7 @@ class ToolOrchestrator {
         )
     }
 
-    private func getProductivityInsights(parameters: [String: Any]) async throws -> ToolResult {
+    private func getProductivityInsights(parameters: [String: AnyCodable]) async throws -> ToolResult {
         let stats = ActivityTap.shared.getActivityStatistics()
 
         let content = """
