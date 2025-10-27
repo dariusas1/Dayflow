@@ -111,6 +111,7 @@ struct PlannerView: View {
         .onAppear {
             // Initialize with today's plan
             Task {
+                _ = await plannerEngine.ensureCalendarAuthorization()
                 if plannerEngine.currentPlan == nil {
                     try? await plannerEngine.generateDailyPlan(for: selectedDate)
                 }
@@ -328,8 +329,16 @@ struct PlannerView: View {
             if let plan = plannerEngine.currentPlan,
                !plan.timeBlocks.isEmpty {
                 Button(action: {
-                    Task {
-                        try? await plannerEngine.exportToCalendar(plan: plan)
+                    if plannerEngine.hasCalendarAccess {
+                        Task {
+                            try? await plannerEngine.exportToCalendar(plan: plan)
+                        }
+                    } else {
+                        Task {
+                            if await plannerEngine.ensureCalendarAuthorization() {
+                                try? await plannerEngine.exportToCalendar(plan: plan)
+                            }
+                        }
                     }
                 }) {
                     HStack(spacing: 6) {
