@@ -13,8 +13,6 @@ import GRDB
 import os.log
 
 class SuggestedTodosEngine {
-    static let shared = SuggestedTodosEngine()
-
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
 
     // Dependencies
@@ -144,6 +142,9 @@ class SuggestedTodosEngine {
 
     func recordUserFeedback(for suggestionId: UUID, feedback: UserFeedback, accept: Bool = false) async throws {
         try databaseQueue.write { db in
+            let isDismissed = accept || feedback.score < 0.5
+            let dismissReason: String? = accept ? nil : feedback.comment
+
             try db.execute(sql: """
                 UPDATE suggested_todos
                 SET user_feedback_score = ?, user_feedback_timestamp = ?, user_feedback_comment = ?,
@@ -154,8 +155,8 @@ class SuggestedTodosEngine {
                 feedback.timestamp,
                 feedback.comment,
                 accept,
-                accept || feedback.score < 0.5,
-                accept ? nil : feedback.comment,
+                isDismissed,
+                dismissReason,
                 0.0, // Will be updated by learning system
                 Date(),
                 suggestionId.uuidString
@@ -336,7 +337,7 @@ class SuggestedTodosEngine {
 
         // Extract from OCR content
         if let ocrResult = activity.ocrResult {
-            suggestions.append(contentsOf: extractFromOCR(ocrResult))
+            suggestions.append(contentsOf: extractFromOCR(ocrResult, insights: activity.fusionResult.ocrInsights))
         }
 
         // Extract from accessibility content
@@ -361,16 +362,16 @@ class SuggestedTodosEngine {
         return suggestions
     }
 
-    private func extractFromOCR(_ ocrResult: OCRResult) -> [TaskSuggestion] {
+    private func extractFromOCR(_ ocrResult: OCRResult, insights: [OCRInsight]) -> [TaskSuggestion] {
         var suggestions: [TaskSuggestion] = []
 
         suggestions.append(contentsOf: extractActionItems(from: ocrResult.text, context: "ocr"))
 
         // Extract specific patterns from OCR insights
-        for insight in ocrResult.ocrInsights {
+        for insight in insights {
             switch insight.type {
             case "date":
-                if let date = parseDate(from: insight.value) {
+                if parseDate(from: insight.value) != nil {
                     suggestions.append(TaskSuggestion(
                         originalText: insight.value,
                         extractedTask: "Follow up on deadline: \(insight.value)",
@@ -405,6 +406,10 @@ class SuggestedTodosEngine {
             }
         }
 
+        for region in ocrResult.regions {
+            suggestions.append(contentsOf: extractActionItems(from: region.text, context: "ocr_region"))
+        }
+
         return suggestions
     }
 
@@ -417,16 +422,19 @@ class SuggestedTodosEngine {
 
         // Extract from structured data
         if let structuredData = axResult.structuredData {
-            for element in structuredData.forms {
-                if element.value.contains("submit") || element.value.contains("send") {
-                    suggestions.append(TaskSuggestion(
-                        originalText: element.value,
-                        extractedTask: "Complete form: \(element.title ?? "Form")",
-                        confidence: 0.7,
-                        actionType: .complete,
-                        context: "form",
-                        suggestedPriority: .medium
-                    ))
+            for form in structuredData.forms {
+                for element in form.elements {
+                    guard let value = element.value?.lowercased() else { continue }
+                    if value.contains("submit") || value.contains("send") {
+                        suggestions.append(TaskSuggestion(
+                            originalText: element.value ?? "",
+                            extractedTask: "Complete form: \(element.title ?? "Form")",
+                            confidence: 0.7,
+                            actionType: .complete,
+                            context: "form",
+                            suggestedPriority: .medium
+                        ))
+                    }
                 }
             }
         }
@@ -436,13 +444,15 @@ class SuggestedTodosEngine {
 
     private func extractFromDetectedTasks(_ tasks: [DetectedTask]) -> [TaskSuggestion] {
         return tasks.map { task in
+            let taskText = task.pattern
+            let originalText = task.context.isEmpty ? taskText : task.context
             TaskSuggestion(
-                originalText: task.description,
-                extractedTask: task.taskName,
+                originalText: originalText,
+                extractedTask: taskText,
                 confidence: task.confidence,
-                actionType: inferActionType(from: task.taskName),
+                actionType: inferActionType(from: taskText),
                 context: task.category,
-                suggestedPriority: inferPriority(from: task.taskName, confidence: task.confidence)
+                suggestedPriority: inferPriority(from: taskText, confidence: task.confidence)
             )
         }
     }
@@ -589,9 +599,9 @@ class SuggestedTodosEngine {
         // Adjust for task complexity
         if lowercaseTask.contains("create") || lowercaseTask.contains("write") {
             baseEstimate *= 1.5
-        } else if lowercaseTask.contains("review") || lowercaseTask.contains("check") {
+        } else if task.lowercased().contains("review") || task.lowercased().contains("check") {
             baseEstimate *= 0.8
-        } else if lowercaseTask.contains("research") || lowercaseTask.contains("study") {
+        } else if task.lowercased().contains("research") || task.lowercased().contains("study") {
             baseEstimate *= 2.0
         }
 
@@ -844,7 +854,10 @@ class SuggestedTodosEngine {
 
         do {
             try databaseQueue.write { db in
-                try db.execute(sql: "DELETE FROM suggested_todos WHERE created_at < ?", arguments: StatementArguments([cutoffDate]))
+                try db.execute(
+                    sql: "DELETE FROM suggested_todos WHERE created_at < ?",
+                    arguments: StatementArguments([cutoffDate])
+                )
             }
             logger.info("Cleaned up old suggestions older than \(config.contextRetentionDays) days")
         } catch {
@@ -933,7 +946,7 @@ private extension DatabaseError {
 }
 
 private extension Formatter {
-    func then(_ configure: (Formatter) -> Void) -> Formatter {
+    func then(_ configure: (Self) -> Void) -> Self {
         configure(self)
         return self
     }
