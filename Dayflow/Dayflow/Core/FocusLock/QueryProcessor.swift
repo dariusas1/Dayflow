@@ -14,7 +14,7 @@ class QueryProcessor: ObservableObject {
     static let shared = QueryProcessor()
 
     private let logger = Logger(subsystem: "FocusLock", category: "QueryProcessor")
-    private let nlpModel = NLEmbedding.embed(for: .english)
+    private let nlpModel = NLEmbedding.wordEmbedding(for: .english)
 
     // Query patterns and keywords
     private let timePatterns: [String: DateComponents]
@@ -78,7 +78,7 @@ class QueryProcessor: ObservableObject {
 
     // MARK: - Public Interface
 
-    func processQuery(_ query: String) async -> ProcessedQuery {
+    func processQuery(_ query: String) async -> QueryContext {
         let startTime = CFAbsoluteTimeGetCurrent()
 
         logger.info("Processing query: \(query)")
@@ -87,23 +87,41 @@ class QueryProcessor: ObservableObject {
         let normalizedQuery = normalizeQuery(query)
 
         // Extract query components
-        let timeRange = extractTimeRange(from: normalizedQuery)
+        let timeRangeInfo = extractTimeRange(from: normalizedQuery)
         let metrics = extractMetrics(from: normalizedQuery)
         let apps = extractApps(from: normalizedQuery)
         let operations = extractOperations(from: normalizedQuery)
         let filters = extractFilters(from: normalizedQuery)
 
-        // Build query context
-        let context = QueryContext(
+        let processingTime = CFAbsoluteTimeGetCurrent() - startTime
+
+        let baseContext = QueryContext(
             originalQuery: query,
             normalizedQuery: normalizedQuery,
-            timeRange: timeRange,
+            timeKeyword: timeRangeInfo.keyword,
+            timeRange: timeRangeInfo.range,
             targetMetrics: metrics,
             targetApps: apps,
             operations: operations,
             filters: filters,
-            confidence: calculateQueryConfidence(context: nil),
-            processingTime: CFAbsoluteTimeGetCurrent() - startTime
+            confidence: 0.0,
+            processingTime: processingTime
+        )
+
+        let confidence = calculateQueryConfidence(context: baseContext)
+
+        // Build query context
+        let context = QueryContext(
+            originalQuery: baseContext.originalQuery,
+            normalizedQuery: baseContext.normalizedQuery,
+            timeKeyword: baseContext.timeKeyword,
+            timeRange: baseContext.timeRange,
+            targetMetrics: baseContext.targetMetrics,
+            targetApps: baseContext.targetApps,
+            operations: baseContext.operations,
+            filters: baseContext.filters,
+            confidence: confidence,
+            processingTime: processingTime
         )
 
         logger.info("Query processed with \(metrics.count) metrics, confidence: \(context.confidence)")
@@ -223,25 +241,18 @@ class QueryProcessor: ObservableObject {
             .replacingOccurrences(of: "[^a-z0-9\\s]", with: "", options: .regularExpression)
     }
 
-    private func extractTimeRange(from query: String) -> TimeRange {
+    private func extractTimeRange(from query: String) -> (keyword: String, range: DateInterval) {
         for (pattern, components) in timePatterns {
             if query.contains(pattern) {
-                return TimeRange(
-                    keyword: pattern,
-                    components: components,
-                    startDate: calculateDate(from: components),
-                    endDate: Date()
-                )
+                let startDate = calculateDate(from: components)
+                return (pattern, DateInterval(start: startDate, end: Date()))
             }
         }
 
         // Default to last week if no time range found
-        return TimeRange(
-            keyword: "last week",
-            components: DateComponents(day: -7),
-            startDate: calculateDate(from: DateComponents(day: -7)),
-            endDate: Date()
-        )
+        let defaultComponents = DateComponents(day: -7)
+        let startDate = calculateDate(from: defaultComponents)
+        return ("last week", DateInterval(start: startDate, end: Date()))
     }
 
     private func extractMetrics(from query: String) -> [ProductivityMetric.MetricCategory] {
@@ -318,29 +329,30 @@ class QueryProcessor: ObservableObject {
         let lessThanPattern = #"less than (\d+)"#
         let betweenPattern = #"between (\d+) and (\d+)"#
 
-        if let match = query.range(of: moreThanPattern, options: .regularExpression) {
-            let numberString = String(query[match])
-            if let number = Double(numberString) {
-                return number...Double.greatestFiniteMagnitude
-            }
+        let searchRange = NSRange(query.startIndex..., in: query)
+
+        if let moreThanRegex = try? NSRegularExpression(pattern: moreThanPattern),
+           let match = moreThanRegex.firstMatch(in: query, options: [], range: searchRange),
+           let range = Range(match.range(at: 1), in: query),
+           let number = Double(query[range]) {
+            return number...Double.greatestFiniteMagnitude
         }
 
-        if let match = query.range(of: lessThanPattern, options: .regularExpression) {
-            let numberString = String(query[match])
-            if let number = Double(numberString) {
-                return Double.leastFiniteMagnitude...number
-            }
+        if let lessThanRegex = try? NSRegularExpression(pattern: lessThanPattern),
+           let match = lessThanRegex.firstMatch(in: query, options: [], range: searchRange),
+           let range = Range(match.range(at: 1), in: query),
+           let number = Double(query[range]) {
+            return (-Double.greatestFiniteMagnitude)...number
         }
 
-        if let range = query.range(of: betweenPattern, options: .regularExpression) {
-            let captures = query.captures(with: NSRegularExpression(pattern: betweenPattern))
-            if captures.count > 1 {
-                let startString = String(captures[0])
-                let endString = String(captures[1])
-                if let start = Double(startString), let end = Double(endString) {
-                    return min(start, end)...max(start, end)
-                }
-            }
+        if let betweenRegex = try? NSRegularExpression(pattern: betweenPattern),
+           let match = betweenRegex.firstMatch(in: query, options: [], range: searchRange),
+           match.numberOfRanges >= 3,
+           let startRange = Range(match.range(at: 1), in: query),
+           let endRange = Range(match.range(at: 2), in: query),
+           let start = Double(query[startRange]),
+           let end = Double(query[endRange]) {
+            return min(start, end)...max(start, end)
         }
 
         return nil
@@ -397,25 +409,25 @@ class QueryProcessor: ObservableObject {
             case .focusTime:
                 let hours = value / 60
                 let minutes = value % 60
-                return "You've spent \(hours) hours and \(minutes) minutes in focused work \(context.timeRange.keyword)."
+                return "You've spent \(hours) hours and \(minutes) minutes in focused work \(context.timeKeyword)."
 
             case .taskCompletion:
-                return "You've completed \(value) tasks \(context.timeRange.keyword)."
+                return "You've completed \(value) tasks \(context.timeKeyword)."
 
             case .appUsage:
-                return "You've spent \(value) minutes using \(metric.name) \(context.timeRange.keyword)."
+                return "You've spent \(value) minutes using \(metric.name) \(context.timeKeyword)."
 
             case .productivity:
                 let percentage = Int(value * 100)
-                return "Your productivity score is \(percentage)% \(context.timeRange.keyword)."
+                return "Your productivity score is \(percentage)% \(context.timeKeyword)."
 
             case .wellness:
                 let minutes = value
-                return "Your average session length is \(minutes) minutes \(context.timeRange.keyword)."
+                return "Your average session length is \(minutes) minutes \(context.timeKeyword)."
 
             case .goals:
                 let percentage = Int(value * 100)
-                return "You're \(percentage)% of the way to your goals \(context.timeRange.keyword)."
+                return "You're \(percentage)% of the way to your goals \(context.timeKeyword)."
             }
         }
 
@@ -465,7 +477,7 @@ class QueryProcessor: ObservableObject {
         let totalAppTime = appData.reduce(0) { $0 + $1.value }
         let topApp = appData.max { $0.value < $1.value }
 
-        var answer = "For \(context.targetApps.joined(separator: ", ")) \(context.timeRange.keyword):"
+        var answer = "For \(context.targetApps.joined(separator: ", ")) \(context.timeKeyword):"
 
         if let top = topApp {
             answer += " \(top.name): \(Int(top.value)) minutes."
@@ -486,7 +498,7 @@ class QueryProcessor: ObservableObject {
             return "I don't have enough data to provide a ranking."
         }
 
-        var answer = "Here are your top metrics \(context.timeRange.keyword):"
+        var answer = "Here are your top metrics \(context.timeKeyword):"
         for (index, metric) in sortedData.prefix(5).enumerated() {
             answer += "\n\(index + 1). \(metric.name): \(Int(metric.value)) \(metric.unit)"
         }
@@ -540,7 +552,7 @@ class QueryProcessor: ObservableObject {
     }
 
     private func filterDataForContext(_ context: QueryContext, data: [ProductivityMetric]) -> [ProductivityMetric] {
-        let startDate = context.timeRange.startDate
+        let startDate = context.timeRange.start
 
         return data.filter { metric in
             // Filter by time range
@@ -581,7 +593,7 @@ class QueryProcessor: ObservableObject {
         var suggestions: [String] = []
 
         // Time-based suggestions
-        if context.timeRange.keyword != "today" {
+        if context.timeKeyword != "today" {
             suggestions.append("How does this compare to today?")
         }
 
@@ -811,20 +823,14 @@ class QueryProcessor: ObservableObject {
 struct QueryContext {
     let originalQuery: String
     let normalizedQuery: String
-    let timeRange: TimeRange
+    let timeKeyword: String
+    let timeRange: DateInterval
     let targetMetrics: [ProductivityMetric.MetricCategory]
     let targetApps: [String]
     let operations: [QueryOperation]
     let filters: [QueryFilter]
     let confidence: Double
     let processingTime: TimeInterval
-}
-
-struct TimeRange {
-    let keyword: String
-    let components: DateComponents
-    let startDate: Date
-    let endDate: Date
 }
 
 enum QueryOperation {
