@@ -494,7 +494,7 @@ struct JournalEntryCard: View {
     }
 }
 
-// MARK: - Feature Onboarding View
+// MARK: - Feature Flag Onboarding Steps View
 
 struct FeatureOnboardingFlowView: View {
     let feature: FeatureFlag
