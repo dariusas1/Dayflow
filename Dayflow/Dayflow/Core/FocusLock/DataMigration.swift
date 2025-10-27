@@ -14,7 +14,7 @@ import CoreData
 class DataMigrationManager: ObservableObject {
     static let shared = DataMigrationManager()
 
-    @Published var migrationStatus: MigrationStatus = .notStarted
+    @Published var migrationStatus: DataMigration.MigrationStatus = .notStarted
     @Published var migrationProgress: Double = 0.0
     @Published var migrationError: String?
     @Published var migrationResults: MigrationResults?
@@ -306,18 +306,20 @@ class DataMigrationManager: ObservableObject {
 
 // MARK: - Migration Data Models
 
-enum MigrationStatus: String {
-    case notStarted = "not_started"
-    case inProgress = "in_progress"
-    case completed = "completed"
-    case failed = "failed"
+enum DataMigration {
+    enum MigrationStatus: String {
+        case notStarted = "not_started"
+        case inProgress = "in_progress"
+        case completed = "completed"
+        case failed = "failed"
 
-    var displayName: String {
-        switch self {
-        case .notStarted: return "Not Started"
-        case .inProgress: return "In Progress"
-        case .completed: return "Completed"
-        case .failed: return "Failed"
+        var displayName: String {
+            switch self {
+            case .notStarted: return "Not Started"
+            case .inProgress: return "In Progress"
+            case .completed: return "Completed"
+            case .failed: return "Failed"
+            }
         }
     }
 }

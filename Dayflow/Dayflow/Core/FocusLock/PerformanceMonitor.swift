@@ -13,6 +13,7 @@ import Combine
 import os.log
 import IOKit
 import CoreFoundation
+import AppKit
 
 // MARK: - Performance Monitor Main Class
 
@@ -25,8 +26,8 @@ class PerformanceMonitor: ObservableObject {
     @Published var systemHealth: SystemHealthScore = .excellent
     @Published var isOptimizationActive: Bool = false
     @Published var performanceAlerts: [PerformanceAlert] = []
-    @Published var resourceBudgets: ResourceBudgets = .default
-    @Published var batteryStatus: BatteryStatus?
+    @Published var resourceBudgets: SystemResourceBudgets = .default
+    @Published var batteryStatus: BatteryMetrics?
     @Published var backgroundTaskSchedule: BackgroundTaskSchedule = .default
 
     // MARK: - Private Properties
@@ -34,7 +35,7 @@ class PerformanceMonitor: ObservableObject {
     private var optimizationTimer: Timer?
     private var backgroundTaskTimer: Timer?
     private var metricsHistory: [PerformanceMetrics] = []
-    private var componentMetrics: [String: ComponentMetrics] = [:]
+    private var componentMetrics: [String: ComponentPerformanceTracker] = [:]
     private var isMonitoring = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -102,15 +103,15 @@ class PerformanceMonitor: ObservableObject {
     }
 
     func recordComponentOperation(_ component: FocusLockComponent, operation: ComponentOperation, duration: TimeInterval, resources: ResourceUsage) {
-        var metrics = componentMetrics[component.rawValue] ?? ComponentMetrics(component: component)
-        metrics.recordOperation(operation, duration: duration, resources: resources)
-        componentMetrics[component.rawValue] = metrics
+        var tracker = componentMetrics[component.rawValue] ?? ComponentPerformanceTracker(component: component)
+        tracker.recordOperation(operation, duration: duration, resources: resources)
+        componentMetrics[component.rawValue] = tracker
 
         // Check for immediate performance issues
-        checkComponentPerformance(component, metrics: metrics)
+        checkComponentPerformance(component, tracker: tracker)
     }
 
-    func requestResourceBudgetAdjustment(component: FocusLockComponent, proposedBudget: ResourceBudget) -> Bool {
+    func requestResourceBudgetAdjustment(component: FocusLockComponent, proposedBudget: ComponentResourceBudget) -> Bool {
         // Intelligent budget allocation based on current system state and historical performance
         guard let currentMetrics = currentMetrics else { return false }
 
@@ -142,16 +143,21 @@ class PerformanceMonitor: ObservableObject {
     // MARK: - Private Methods
 
     private func collectMetrics() {
-        let metrics = PerformanceMetrics(
-            timestamp: Date(),
+        let systemMetrics = SystemPerformanceMetric(
             cpuUsage: getCurrentCPUUsage(),
-            memoryUsage: getCurrentMemoryUsage(),
-            diskUsage: getCurrentDiskUsage(),
-            networkUsage: getCurrentNetworkUsage(),
-            batteryLevel: batteryStatus?.level,
-            batteryState: batteryStatus?.state,
-            thermalState: getCurrentThermalState(),
-            componentMetrics: componentMetrics
+            memoryUsage: createSystemMemoryUsage(usedMB: getCurrentMemoryUsage()),
+            diskIO: getCurrentDiskMetrics(),
+            networkIO: getCurrentNetworkMetrics(),
+            processCount: currentProcessCount(),
+            threadCount: currentThreadCount()
+        )
+
+        let componentSnapshots = componentMetrics.values.flatMap { $0.recentMetrics(limit: 5) }
+        let metrics = PerformanceMetrics(
+            componentMetrics: componentSnapshots,
+            systemMetrics: systemMetrics,
+            batteryMetrics: batteryStatus,
+            thermalMetrics: currentThermalMetrics()
         )
 
         currentMetrics = metrics
@@ -172,12 +178,12 @@ class PerformanceMonitor: ObservableObject {
         var optimizationsNeeded: [OptimizationAction] = []
 
         // CPU optimization
-        if metrics.cpuUsage > activeCPUBudget {
+        if metrics.systemMetrics.cpuUsage > activeCPUBudget {
             optimizationsNeeded.append(.reduceCPUFrequency)
         }
 
         // Memory optimization
-        if metrics.memoryUsage > memoryBudget {
+        if metrics.systemMetrics.memoryUsage.used > memoryBudget {
             optimizationsNeeded.append(.clearMemoryCache)
         }
 
@@ -187,7 +193,7 @@ class PerformanceMonitor: ObservableObject {
         }
 
         // Thermal optimization
-        if metrics.thermalState == .critical {
+        if metrics.thermalMetrics?.state == .critical {
             optimizationsNeeded.append(.reduceProcessingIntensity)
         }
 
@@ -240,13 +246,15 @@ class PerformanceMonitor: ObservableObject {
         var tasks: [BackgroundTask] = []
 
         // Memory indexing (only when system is idle)
-        if let metrics = currentMetrics, metrics.cpuUsage < idleCPUBudget && metrics.memoryUsage < memoryBudget * 0.7 {
+        if let metrics = currentMetrics,
+           metrics.systemMetrics.cpuUsage < idleCPUBudget,
+           metrics.systemMetrics.memoryUsage.used < memoryBudget * 0.7 {
             tasks.append(BackgroundTask(
                 id: "memory_indexing",
                 component: .memoryStore,
                 priority: .low,
                 estimatedDuration: 30.0,
-                resourceBudget: ResourceBudget(cpuPercent: 0.05, memoryMB: 50, diskMB: 10),
+                resourceBudget: ComponentResourceBudget(cpuPercent: 0.05, memoryMB: 50, diskMB: 10),
                 scheduleTime: Date().addingTimeInterval(60)
             ))
         }
@@ -257,7 +265,7 @@ class PerformanceMonitor: ObservableObject {
             component: .ocrExtractor,
             priority: .medium,
             estimatedDuration: 15.0,
-            resourceBudget: ResourceBudget(cpuPercent: 0.15, memoryMB: 100, diskMB: 5),
+            resourceBudget: ComponentResourceBudget(cpuPercent: 0.15, memoryMB: 100, diskMB: 5),
             scheduleTime: Date().addingTimeInterval(30)
         ))
 
@@ -268,7 +276,7 @@ class PerformanceMonitor: ObservableObject {
                 component: .jarvisChat,
                 priority: .low,
                 estimatedDuration: 60.0,
-                resourceBudget: ResourceBudget(cpuPercent: 0.08, memoryMB: 150, diskMB: 20),
+                resourceBudget: ComponentResourceBudget(cpuPercent: 0.08, memoryMB: 150, diskMB: 20),
                 scheduleTime: Date().addingTimeInterval(300)
             ))
         }
@@ -323,33 +331,60 @@ class PerformanceMonitor: ObservableObject {
         return 0.0
     }
 
-    private func getCurrentDiskUsage() -> Double {
+    private func getCurrentDiskMetrics() -> DiskIOMetrics {
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
 
         do {
-            let resourceValues = try documentsPath.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
-            if let available = resourceValues.volumeAvailableCapacityForImportantUsage {
-                return Double(available) / (1024 * 1024) // Convert to MB
-            }
+            _ = try documentsPath.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         } catch {
             logger.error("Failed to get disk usage: \(error)")
         }
 
-        return 0.0
+        return DiskIOMetrics()
     }
 
-    private func getCurrentNetworkUsage() -> NetworkUsage {
+    private func getCurrentNetworkMetrics() -> NetworkIOMetrics {
         // Simplified network monitoring - would need more sophisticated implementation
-        return NetworkUsage(
-            bytesReceived: 0,
-            bytesSent: 0,
-            timestamp: Date()
-        )
+        return NetworkIOMetrics()
     }
 
     private func getCurrentThermalState() -> ThermalState {
         // This would need IOKit integration for actual thermal monitoring
         return .normal
+    }
+
+    private func createSystemMemoryUsage(usedMB: Double) -> SystemMemoryUsage {
+        let totalMemory = Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024)
+        let availableMemory = max(totalMemory - usedMB, 0)
+        return SystemMemoryUsage(
+            used: usedMB,
+            available: availableMemory,
+            total: totalMemory,
+            pressure: 0,
+            purgeable: 0
+        )
+    }
+
+    private func currentProcessCount() -> Int {
+        return NSWorkspace.shared.runningApplications.count
+    }
+
+    private func currentThreadCount() -> Int {
+        return ProcessInfo.processInfo.activeProcessorCount
+    }
+
+    private func currentThermalMetrics() -> ThermalMetrics? {
+        let state = getCurrentThermalState()
+        let baselineTemperature: Double
+
+        switch state {
+        case .normal: baselineTemperature = 35
+        case .fair: baselineTemperature = 45
+        case .serious: baselineTemperature = 55
+        case .critical: baselineTemperature = 65
+        }
+
+        return ThermalMetrics(temperature: baselineTemperature, state: state)
     }
 
     // MARK: - Battery Monitoring
@@ -380,7 +415,7 @@ class PerformanceMonitor: ObservableObject {
                 let level = Double(currentCapacity) / Double(maxCapacity)
                 let state: BatteryState = isPowered == kIOPSACPowerValue ? .plugged : (isCharging ? .charging : .unplugged)
 
-                batteryStatus = BatteryStatus(level: level, state: state, timeRemaining: nil)
+                batteryStatus = BatteryMetrics(level: level, state: state, timeRemaining: nil)
                 return
             }
         }
@@ -406,7 +441,7 @@ class PerformanceMonitor: ObservableObject {
 
     private func initializeComponentMetrics() {
         for component in FocusLockComponent.allCases {
-            componentMetrics[component.rawValue] = ComponentMetrics(component: component)
+            componentMetrics[component.rawValue] = ComponentPerformanceTracker(component: component)
         }
     }
 
@@ -458,21 +493,21 @@ class PerformanceMonitor: ObservableObject {
         var healthScore: Double = 1.0
 
         // CPU health
-        if metrics.cpuUsage > activeCPUBudget * 2 {
+        if metrics.systemMetrics.cpuUsage > activeCPUBudget * 2 {
             healthScore *= 0.3
-        } else if metrics.cpuUsage > activeCPUBudget {
+        } else if metrics.systemMetrics.cpuUsage > activeCPUBudget {
             healthScore *= 0.7
         }
 
         // Memory health
-        if metrics.memoryUsage > memoryBudget * 2 {
+        if metrics.systemMetrics.memoryUsage.used > memoryBudget * 2 {
             healthScore *= 0.3
-        } else if metrics.memoryUsage > memoryBudget {
+        } else if metrics.systemMetrics.memoryUsage.used > memoryBudget {
             healthScore *= 0.7
         }
 
         // Battery health
-        if let battery = metrics.batteryLevel {
+        if let battery = metrics.batteryMetrics?.level {
             if battery < 0.1 {
                 healthScore *= 0.5
             } else if battery < 0.2 {
@@ -481,9 +516,9 @@ class PerformanceMonitor: ObservableObject {
         }
 
         // Thermal health
-        if metrics.thermalState == .critical {
+        if metrics.thermalMetrics?.state == .critical {
             healthScore *= 0.4
-        } else if metrics.thermalState == .fair {
+        } else if metrics.thermalMetrics?.state == .fair {
             healthScore *= 0.8
         }
 
@@ -496,24 +531,24 @@ class PerformanceMonitor: ObservableObject {
         var newAlerts: [PerformanceAlert] = []
 
         // CPU alerts
-        if metrics.cpuUsage > activeCPUBudget * 1.5 {
+        if metrics.systemMetrics.cpuUsage > activeCPUBudget * 1.5 {
             newAlerts.append(PerformanceAlert(
                 id: UUID(),
                 type: .highCPUUsage,
                 severity: .warning,
-                message: "CPU usage (\(Int(metrics.cpuUsage * 100))%) exceeds recommended limit",
+                message: "CPU usage (\(Int(metrics.systemMetrics.cpuUsage * 100))%) exceeds recommended limit",
                 timestamp: Date(),
                 recommendations: ["Consider reducing background processing", "Check for runaway processes"]
             ))
         }
 
         // Memory alerts
-        if metrics.memoryUsage > memoryBudget * 1.5 {
+        if metrics.systemMetrics.memoryUsage.used > memoryBudget * 1.5 {
             newAlerts.append(PerformanceAlert(
                 id: UUID(),
                 type: .highMemoryUsage,
                 severity: .critical,
-                message: "Memory usage (\(Int(metrics.memoryUsage))MB) exceeds budget",
+                message: "Memory usage (\(Int(metrics.systemMetrics.memoryUsage.used))MB) exceeds budget",
                 timestamp: Date(),
                 recommendations: ["Clear memory caches", "Reduce concurrent operations", "Consider restarting application"]
             ))
@@ -531,16 +566,28 @@ class PerformanceMonitor: ObservableObject {
             ))
         }
 
+        // Thermal alerts
+        if metrics.thermalMetrics?.state == .critical {
+            newAlerts.append(PerformanceAlert(
+                id: UUID(),
+                type: .thermalThrottle,
+                severity: .critical,
+                message: "Thermal state critical - reducing performance",
+                timestamp: Date(),
+                recommendations: ["Allow device to cool", "Reduce processing intensity", "Close background applications"]
+            ))
+        }
+
         performanceAlerts = newAlerts
     }
 
-    private func checkComponentPerformance(_ component: FocusLockComponent, metrics: ComponentMetrics) {
+    private func checkComponentPerformance(_ component: FocusLockComponent, tracker: ComponentPerformanceTracker) {
         // Check if component is within performance budgets
-        let recentOperations = metrics.recentOperations(prefix: 60) // Last minute
+        let recentMetrics = tracker.recentMetrics(within: 60)
 
-        for operation in recentOperations {
-            if operation.duration > getExpectedDuration(for: operation.type, component: component) * 2 {
-                logger.warning("Component \(component.rawValue) operation \(operation.type) took longer than expected: \(operation.duration)s")
+        for metric in recentMetrics {
+            if metric.responseTime > getExpectedDuration(for: metric.operation, component: component) * 2 {
+                logger.warning("Component \(component.rawValue) operation \(metric.operation) took longer than expected: \(metric.responseTime)s")
 
                 // Could trigger optimization or alerting here
             }
@@ -586,7 +633,8 @@ class PerformanceMonitor: ObservableObject {
             // Check if we have resources available
             guard let currentMetrics = currentMetrics else { continue }
 
-            if currentMetrics.cpuUsage > idleCPUBudget || currentMetrics.memoryUsage > memoryBudget * 0.8 {
+            if currentMetrics.systemMetrics.cpuUsage > idleCPUBudget ||
+                currentMetrics.systemMetrics.memoryUsage.used > memoryBudget * 0.8 {
                 logger.info("Skipping background task \(task.id) due to resource constraints")
                 continue
             }
@@ -603,7 +651,7 @@ class PerformanceMonitor: ObservableObject {
 
     // MARK: - Helper Methods
 
-    private func calculateCPUImpact(for component: FocusLockComponent, budget: ResourceBudget) -> Double {
+    private func calculateCPUImpact(for component: FocusLockComponent, budget: ComponentResourceBudget) -> Double {
         // Estimate CPU impact based on component type and historical performance
         return budget.cpuPercent
     }
@@ -622,7 +670,7 @@ class PerformanceMonitor: ObservableObject {
 
     private func loadPerformanceSettings() {
         // Load performance settings from UserDefaults or configuration
-        resourceBudgets = ResourceBudgets(
+        resourceBudgets = SystemResourceBudgets(
             idleCPU: idleCPUBudget,
             activeCPU: activeCPUBudget,
             memory: memoryBudget
@@ -630,187 +678,100 @@ class PerformanceMonitor: ObservableObject {
     }
 }
 
-// MARK: - Performance Data Models
+// MARK: - Component Performance Tracking
 
-struct PerformanceMetrics: Codable {
-    let timestamp: Date
-    let cpuUsage: Double
-    let memoryUsage: Double
-    let diskUsage: Double
-    let networkUsage: NetworkUsage
-    let batteryLevel: Double?
-    let batteryState: BatteryState?
-    let thermalState: ThermalState
-    let componentMetrics: [String: ComponentMetrics]
-
-    var isWithinBudgets: Bool {
-        return cpuUsage < 0.08 && memoryUsage < 250.0 // Basic budget check
-    }
-
-    var performanceScore: Double {
-        var score: Double = 1.0
-
-        if cpuUsage > 0.08 { score *= 0.7 }
-        if memoryUsage > 250.0 { score *= 0.7 }
-        if thermalState == .critical { score *= 0.5 }
-
-        return score
-    }
-}
-
-struct ComponentMetrics: Codable {
+struct ComponentPerformanceTracker {
     let component: FocusLockComponent
-    var operations: [ComponentOperationRecord] = []
-    var currentResourceBudget: ResourceBudget = ResourceBudget(cpuPercent: 0.05, memoryMB: 50, diskMB: 10)
+    private(set) var metrics: [ComponentPerformanceMetric] = []
+    var currentResourceBudget: ComponentResourceBudget
 
-    init(component: FocusLockComponent) {
+    init(component: FocusLockComponent, currentResourceBudget: ComponentResourceBudget = .standard) {
         self.component = component
+        self.currentResourceBudget = currentResourceBudget
     }
 
     mutating func recordOperation(_ operation: ComponentOperation, duration: TimeInterval, resources: ResourceUsage) {
-        let record = ComponentOperationRecord(
-            operation: operation,
-            duration: duration,
-            resources: resources,
-            timestamp: Date()
+        let existingPeak = metrics.map { $0.memoryUsage.peak }.max() ?? 0
+        let peakMemory = max(existingPeak, resources.memoryMB)
+
+        let averageMemory: Double
+        if metrics.isEmpty {
+            averageMemory = resources.memoryMB
+        } else {
+            let totalMemory = metrics.reduce(0.0) { $0 + $1.memoryUsage.current } + resources.memoryMB
+            averageMemory = totalMemory / Double(metrics.count + 1)
+        }
+
+        let memoryUsage = MemoryUsage(
+            current: resources.memoryMB,
+            peak: peakMemory,
+            average: averageMemory,
+            allocations: 0,
+            deallocations: 0
         )
 
-        operations.append(record)
+        let throughput = duration > 0 ? 1.0 / duration : 0.0
 
-        // Keep only last 100 operations
-        if operations.count > 100 {
-            operations.removeFirst(operations.count - 100)
+        let metric = ComponentPerformanceMetric(
+            component: component,
+            operation: operation,
+            responseTime: duration,
+            memoryUsage: memoryUsage,
+            cpuUsage: resources.cpuPercent,
+            errorRate: 0.0,
+            throughput: throughput
+        )
+
+        metrics.append(metric)
+
+        if metrics.count > 100 {
+            metrics.removeFirst(metrics.count - 100)
         }
     }
 
-    func recentOperations(prefix seconds: TimeInterval = 300) -> [ComponentOperationRecord] {
+    func recentMetrics(limit: Int) -> [ComponentPerformanceMetric] {
+        guard limit > 0 else { return [] }
+        if metrics.count <= limit {
+            return metrics
+        }
+        return Array(metrics.suffix(limit))
+    }
+
+    func recentMetrics(within seconds: TimeInterval) -> [ComponentPerformanceMetric] {
         let cutoff = Date().addingTimeInterval(-seconds)
-        return operations.filter { $0.timestamp >= cutoff }
+        return metrics.filter { $0.timestamp >= cutoff }
     }
 
     var averageResponseTime: TimeInterval {
-        guard !operations.isEmpty else { return 0 }
-        return operations.reduce(0) { $0 + $1.duration } / Double(operations.count)
+        guard !metrics.isEmpty else { return 0 }
+        let total = metrics.reduce(0.0) { $0 + $1.responseTime }
+        return total / Double(metrics.count)
     }
 
     var currentLoad: Double {
-        recentOperations(prefix: 60).count / 60.0 // Operations per second
+        let recent = recentMetrics(within: 60)
+        return Double(recent.count) / 60.0
+    }
+
+    var latestMetric: ComponentPerformanceMetric? {
+        metrics.last
     }
 }
 
-struct ComponentOperationRecord: Codable {
-    let operation: ComponentOperation
-    let duration: TimeInterval
-    let resources: ResourceUsage
-    let timestamp: Date
+struct ComponentResourceBudget: Codable {
+    var cpuPercent: Double
+    var memoryMB: Double
+    var diskMB: Double
+
+    static let standard = ComponentResourceBudget(cpuPercent: 0.05, memoryMB: 50, diskMB: 10)
 }
 
-struct ResourceUsage: Codable {
-    let timestamp: Date
-    let cpuPercent: Double
-    let memoryMB: Double
-    let diskUsageMB: Double
-    let networkActivity: NetworkActivity
-
-    var isOptimal: Bool {
-        return cpuPercent < 50 && memoryMB < 200 && diskUsageMB < 100
-    }
-}
-
-struct NetworkUsage: Codable {
-    let bytesReceived: Int64
-    let bytesSent: Int64
-    let timestamp: Date
-}
-
-struct NetworkActivity: Codable {
-    let incomingBytesPerSecond: Double
-    let outgoingBytesPerSecond: Double
-    let totalBytesPerSecond: Double
-}
-
-struct ResourceBudget: Codable {
-    let cpuPercent: Double
-    let memoryMB: Double
-    let diskMB: Double
-}
-
-struct ResourceBudgets: Codable {
+struct SystemResourceBudgets: Codable {
     let idleCPU: Double
     let activeCPU: Double
     let memory: Double
 
-    static let `default` = ResourceBudgets(idleCPU: 0.015, activeCPU: 0.08, memory: 250.0)
-}
-
-struct BatteryStatus: Codable {
-    let level: Double // 0.0 to 1.0
-    let state: BatteryState
-    let timeRemaining: TimeInterval? // in seconds, nil if calculating
-
-    var levelPercentage: Int {
-        return Int(level * 100)
-    }
-
-    var isLow: Bool {
-        return level < 0.2
-    }
-
-    var isCritical: Bool {
-        return level < 0.1
-    }
-}
-
-enum BatteryState: String, Codable {
-    case unplugged = "unplugged"
-    case charging = "charging"
-    case plugged = "plugged"
-    case unknown = "unknown"
-}
-
-enum ThermalState: String, Codable {
-    case normal = "normal"
-    case fair = "fair"
-    case serious = "serious"
-    case critical = "critical"
-}
-
-enum FocusLockComponent: String, CaseIterable, Codable {
-    case memoryStore = "memory_store"
-    case activityTap = "activity_tap"
-    case ocrExtractor = "ocr_extractor"
-    case axExtractor = "ax_extractor"
-    case jarvisChat = "jarvis_chat"
-
-    var displayName: String {
-        switch self {
-        case .memoryStore: return "Memory Store"
-        case .activityTap: return "Activity Tap"
-        case .ocrExtractor: return "OCR Extractor"
-        case .axExtractor: return "AX Extractor"
-        case .jarvisChat: return "Jarvis Chat"
-        }
-    }
-}
-
-enum ComponentOperation: String, CaseIterable, Codable {
-    case search = "search"
-    case index = "index"
-    case embed = "embed"
-    case extract = "extract"
-    case process = "process"
-    case other = "other"
-
-    var displayName: String {
-        switch self {
-        case .search: return "Search"
-        case .index: return "Index"
-        case .embed: return "Embed"
-        case .extract: return "Extract"
-        case .process: return "Process"
-        case .other: return "Other"
-        }
-    }
+    static let `default` = SystemResourceBudgets(idleCPU: 0.015, activeCPU: 0.08, memory: 250.0)
 }
 
 enum SystemHealthScore: String, CaseIterable, Codable {
@@ -905,24 +866,8 @@ struct BackgroundTask: Identifiable, Codable {
     let component: FocusLockComponent
     let priority: TaskPriority
     let estimatedDuration: TimeInterval
-    let resourceBudget: ResourceBudget
+    let resourceBudget: ComponentResourceBudget
     let scheduleTime: Date
-
-    enum TaskPriority: Int, CaseIterable, Codable {
-        case critical = 1
-        case high = 2
-        case medium = 3
-        case low = 4
-
-        var displayName: String {
-            switch self {
-            case .critical: return "Critical"
-            case .high: return "High"
-            case .medium: return "Medium"
-            case .low: return "Low"
-            }
-        }
-    }
 }
 
 // MARK: - Notification Extensions
