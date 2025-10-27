@@ -1277,7 +1277,7 @@ class GoalBasedPlanner {
         var score = 0.0
 
         // Check for keyword matches in task title and description
-        let taskText = (task.title + " " + (task.description ?? "")).lowercased()
+        let taskText = (task.title + " " + task.description).lowercased()
         let goalKeywords = extractGoalKeywords(goal: goal)
 
         for keyword in goalKeywords {
@@ -1482,13 +1482,15 @@ class PriorityResolver {
             adjustedTasks = applyCategoryBalanceConstraint(constraint, tasks: adjustedTasks)
         case .maxWorkHours:
             adjustedTasks = applyMaxWorkHoursConstraint(constraint, tasks: adjustedTasks)
+        case .startTime, .endTime, .maxDailyTasks, .energyLevel, .dependency, .deadline, .focusSessionOnly:
+            break
         }
 
         return adjustedTasks
     }
 
     private func applyMaxFocusTimeConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let maxFocusMinutes = constraint.value
+        let maxFocusMinutes = constraint.intValue
         let focusTasks = tasks.filter { $0.isFocusSessionProtected }
 
         let totalFocusMinutes = focusTasks.reduce(0) { $0 + Int($1.estimatedDuration / 60) }
@@ -1503,7 +1505,7 @@ class PriorityResolver {
     }
 
     private func applyMinBreakTimeConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let minBreakMinutes = constraint.value
+        let minBreakMinutes = constraint.intValue
         let totalWorkMinutes = tasks.reduce(0) { $0 + Int($1.estimatedDuration / 60) }
 
         // Ensure adequate break time (15% of work time minimum)
@@ -1533,7 +1535,7 @@ class PriorityResolver {
                 let daysUntilDeadline = Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 999
 
                 // Boost priority for tasks with approaching deadlines
-                if daysUntilDeadline <= constraint.value {
+                if daysUntilDeadline <= constraint.intValue {
                     if adjustedTask.priority == .low {
                         adjustedTask.priority = .medium
                     } else if adjustedTask.priority == .medium && daysUntilDeadline <= 3 {
@@ -1569,7 +1571,7 @@ class PriorityResolver {
     }
 
     private func applyMaxWorkHoursConstraint(_ constraint: SchedulingConstraint, tasks: [PlannerTask]) -> [PlannerTask] {
-        let maxWorkHours = Double(constraint.value) / 60.0 // Convert minutes to hours
+        let maxWorkHours = constraint.value / 60.0 // Convert minutes to hours
         let totalWorkHours = tasks.reduce(0) { $0 + $1.estimatedDuration / 3600 }
 
         if totalWorkHours > maxWorkHours {

@@ -342,8 +342,17 @@ struct PlannerTask: Codable, Identifiable, Equatable {
     var estimatedDuration: TimeInterval // in seconds
     var priority: PlannerPriority
     var deadline: Date?
-    var isCompleted: Bool
-    var isFocusSessionProtected: Bool
+    var category: TaskCategory = .work
+    var complexity: Double = 0.5
+    var requiredResources: Set<String> = []
+    var relatedGoalID: UUID?
+    var goalAlignmentScore: Double?
+    var sourceIdentifier: String?
+    var externalSource: Bool = false
+    var isCompleted: Bool = false
+    var isOverdue: Bool = false
+    var hasResourceConflict: Bool = false
+    var isFocusSessionProtected: Bool = false
     var preferredEnergyLevel: PlannerEnergyLevel?
     var tags: [String]
     var createdAt: Date
@@ -369,11 +378,6 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         return scheduledStartTime != nil && scheduledEndTime != nil
     }
 
-    var isOverdue: Bool {
-        guard let deadline = deadline else { return false }
-        return Date() > deadline && !isCompleted
-    }
-
     var durationFormatted: String {
         let duration = Int(estimatedDuration)
         let hours = duration / 3600
@@ -390,10 +394,19 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         description: String = "",
         estimatedDuration: TimeInterval,
         priority: PlannerPriority = .medium,
+        category: TaskCategory = .work,
         deadline: Date? = nil,
+        complexity: Double = 0.5,
+        requiredResources: Set<String> = [],
+        relatedGoalID: UUID? = nil,
+        goalAlignmentScore: Double? = nil,
+        sourceIdentifier: String? = nil,
+        externalSource: Bool = false,
         isFocusSessionProtected: Bool = false,
         preferredEnergyLevel: PlannerEnergyLevel? = nil,
-        tags: [String] = []
+        tags: [String] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
     ) {
         self.id = UUID()
         self.title = title
@@ -401,14 +414,30 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         self.estimatedDuration = estimatedDuration
         self.priority = priority
         self.deadline = deadline
+        self.category = category
+        self.complexity = max(0.0, min(complexity, 1.0))
+        self.requiredResources = requiredResources
+        self.relatedGoalID = relatedGoalID
+        self.goalAlignmentScore = goalAlignmentScore
+        self.sourceIdentifier = sourceIdentifier
+        self.externalSource = externalSource
         self.isCompleted = false
+        self.isOverdue = deadline.map { Date() > $0 } ?? false
+        self.hasResourceConflict = false
         self.isFocusSessionProtected = isFocusSessionProtected
         self.preferredEnergyLevel = preferredEnergyLevel
         self.tags = tags
-        self.createdAt = Date()
-        self.updatedAt = Date()
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.completedAt = nil
+        self.scheduledStartTime = nil
+        self.scheduledEndTime = nil
+        self.actualStartTime = nil
+        self.actualEndTime = nil
+        self.parentTaskID = nil
         self.dependencyIDs = []
         self.dependentIDs = []
+        self.optimalStartTime = nil
         self.confidenceScore = 0.5
         self.completionProbability = 0.8
         self.focusSessionRecommendation = isFocusSessionProtected
@@ -418,6 +447,7 @@ struct PlannerTask: Codable, Identifiable, Equatable {
         isCompleted = true
         completedAt = Date()
         actualEndTime = Date()
+        isOverdue = false
         updatedAt = Date()
     }
 
@@ -641,8 +671,9 @@ struct SchedulingConstraint: Codable {
     let id: UUID
     var type: ConstraintType
     var taskID: UUID
-    var parameter: String // Constraint-specific parameter
-    var value: String // Constraint value
+    var parameter: String?
+    private var numericValueStorage: Double?
+    private var stringValueStorage: String?
     var isActive: Bool
 
     enum ConstraintType: String, CaseIterable, Codable {
@@ -654,15 +685,119 @@ struct SchedulingConstraint: Codable {
         case dependency = "dependency"
         case deadline = "deadline"
         case focusSessionOnly = "focus_session_only"
+        case maxFocusTime = "max_focus_time"
+        case energyAlignment = "energy_alignment"
+        case deadlinePriority = "deadline_priority"
+        case categoryBalance = "category_balance"
+        case maxWorkHours = "max_work_hours"
     }
 
-    init(type: ConstraintType, taskID: UUID, parameter: String, value: String) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case taskID
+        case parameter
+        case numericValue
+        case stringValue
+        case legacyValue = "value"
+        case isActive
+    }
+
+    var value: Double {
+        get {
+            if let numericValueStorage {
+                return numericValueStorage
+            }
+            if let stringValueStorage, let numeric = Double(stringValueStorage) {
+                return numeric
+            }
+            return 0
+        }
+        set {
+            numericValueStorage = newValue
+            stringValueStorage = nil
+        }
+    }
+
+    var intValue: Int {
+        return Int(value.rounded())
+    }
+
+    var stringValue: String? {
+        get {
+            if let stringValueStorage {
+                return stringValueStorage
+            }
+            if let numericValueStorage {
+                return String(numericValueStorage)
+            }
+            return nil
+        }
+        set {
+            stringValueStorage = newValue
+            if let newValue, let numeric = Double(newValue) {
+                numericValueStorage = numeric
+            } else {
+                numericValueStorage = nil
+            }
+        }
+    }
+
+    init(type: ConstraintType, taskID: UUID, parameter: String? = nil, value: Double, isActive: Bool = true) {
         self.id = UUID()
         self.type = type
         self.taskID = taskID
         self.parameter = parameter
-        self.value = value
-        self.isActive = true
+        self.numericValueStorage = value
+        self.stringValueStorage = nil
+        self.isActive = isActive
+    }
+
+    init(type: ConstraintType, taskID: UUID, parameter: String? = nil, stringValue: String, isActive: Bool = true) {
+        self.id = UUID()
+        self.type = type
+        self.taskID = taskID
+        self.parameter = parameter
+        self.numericValueStorage = Double(stringValue)
+        self.stringValueStorage = stringValue
+        self.isActive = isActive
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        type = try container.decode(ConstraintType.self, forKey: .type)
+        taskID = try container.decode(UUID.self, forKey: .taskID)
+        parameter = try container.decodeIfPresent(String.self, forKey: .parameter)
+        isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
+
+        numericValueStorage = try container.decodeIfPresent(Double.self, forKey: .numericValue)
+        stringValueStorage = try container.decodeIfPresent(String.self, forKey: .stringValue)
+
+        if numericValueStorage == nil {
+            if let legacyNumeric = try container.decodeIfPresent(Double.self, forKey: .legacyValue) {
+                numericValueStorage = legacyNumeric
+            } else if stringValueStorage == nil,
+                      let legacyString = try container.decodeIfPresent(String.self, forKey: .legacyValue) {
+                stringValueStorage = legacyString
+                numericValueStorage = Double(legacyString)
+            }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(type, forKey: .type)
+        try container.encode(taskID, forKey: .taskID)
+        try container.encodeIfPresent(parameter, forKey: .parameter)
+        try container.encode(isActive, forKey: .isActive)
+
+        if let numericValueStorage {
+            try container.encode(numericValueStorage, forKey: .numericValue)
+        } else if let stringValueStorage {
+            try container.encode(stringValueStorage, forKey: .stringValue)
+        }
     }
 }
 
