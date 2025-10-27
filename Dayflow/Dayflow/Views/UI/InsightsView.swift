@@ -8,6 +8,83 @@
 import Foundation
 import SwiftUI
 
+private struct InsightPresentation {
+    let iconName: String
+    let accentColor: Color
+    let categoryTitle: String
+
+    static func make(for type: ProductivityInsight.InsightType) -> InsightPresentation {
+        switch type {
+        case .peakPerformance:
+            return InsightPresentation(iconName: "chart.line.uptrend.xyaxis", accentColor: .green, categoryTitle: "Peak Performance")
+        case .productivityPattern:
+            return InsightPresentation(iconName: "square.grid.2x2", accentColor: .blue, categoryTitle: "Productivity Pattern")
+        case .energyOptimization:
+            return InsightPresentation(iconName: "bolt.fill", accentColor: .yellow, categoryTitle: "Energy Optimization")
+        case .taskEfficiency:
+            return InsightPresentation(iconName: "checkmark.circle.fill", accentColor: .teal, categoryTitle: "Task Efficiency")
+        case .schedulingImprovement:
+            return InsightPresentation(iconName: "calendar.badge.clock", accentColor: .purple, categoryTitle: "Scheduling Improvement")
+        case .goalProgress:
+            return InsightPresentation(iconName: "target", accentColor: .orange, categoryTitle: "Goal Progress")
+        case .burnoutRisk:
+            return InsightPresentation(iconName: "exclamationmark.triangle.fill", accentColor: .red, categoryTitle: "Burnout Risk")
+        case .focusQuality:
+            return InsightPresentation(iconName: "eye.circle.fill", accentColor: .indigo, categoryTitle: "Focus Quality")
+        }
+    }
+}
+
+private extension ProductivityInsight {
+    var presentation: InsightPresentation { .make(for: type) }
+
+    var isHighConfidence: Bool { confidenceLevel >= 0.7 }
+
+    var isTrendRelated: Bool {
+        switch type {
+        case .peakPerformance, .productivityPattern, .taskEfficiency, .schedulingImprovement, .goalProgress:
+            return true
+        case .energyOptimization, .burnoutRisk, .focusQuality:
+            return metrics.contains { $0.category == .focusTime || $0.category == .productivity }
+        }
+    }
+
+    var isPatternInsight: Bool {
+        switch type {
+        case .productivityPattern, .taskEfficiency, .focusQuality:
+            return true
+        case .peakPerformance, .energyOptimization, .schedulingImprovement, .goalProgress, .burnoutRisk:
+            return false
+        }
+    }
+
+    var isTimeRelated: Bool {
+        type == .schedulingImprovement || metrics.contains { $0.category == .focusTime || $0.category == .taskCompletion }
+    }
+
+    var isGoalRelated: Bool {
+        type == .goalProgress || metrics.contains { $0.category == .goals }
+    }
+
+    var isProductivityRelated: Bool {
+        type == .peakPerformance || type == .productivityPattern || metrics.contains { $0.category == .productivity }
+    }
+}
+
+private extension Array where Element == ProductivityInsight {
+    var highConfidence: [ProductivityInsight] {
+        let sortedInsights = sorted { $0.confidenceLevel > $1.confidenceLevel }
+        let filtered = sortedInsights.filter { $0.isHighConfidence }
+        return filtered.isEmpty ? sortedInsights : filtered
+    }
+}
+
+private extension ProductivityRecommendation.ImpactLevel {
+    var displayName: String {
+        rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+}
+
 struct InsightsView: View {
     let insights: [ProductivityInsight]
     let recommendations: [Recommendation]
@@ -46,7 +123,7 @@ struct InsightsView: View {
                 if !trends.isEmpty {
                     TrendAnalysisSection(
                         trends: trends,
-                        insights: insights.filter { $0.category == .trend }
+                        insights: insights.filter { $0.isTrendRelated }
                     )
                 }
 
@@ -63,7 +140,7 @@ struct InsightsView: View {
 
                 // Performance Patterns Section
                 if !insights.isEmpty {
-                    PerformancePatternsSection(insights: insights.filter { $0.category == .pattern })
+                    PerformancePatternsSection(insights: insights.filter { $0.isPatternInsight })
                 }
 
                 // Quick Actions Section
@@ -148,16 +225,19 @@ struct InsightCard: View {
     let insight: ProductivityInsight
     let onTap: () -> Void
 
+    private var metadata: InsightPresentation { insight.presentation }
+    private var primaryRecommendation: ProductivityRecommendation? { insight.recommendations.first }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: insight.icon)
+                Image(systemName: metadata.iconName)
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(insight.color)
+                    .foregroundColor(metadata.accentColor)
 
                 Spacer()
 
-                PriorityIndicator(priority: insight.priority)
+                ConfidenceIndicator(confidence: insight.confidenceLevel, color: metadata.accentColor)
             }
 
             Text(insight.title)
@@ -171,13 +251,13 @@ struct InsightCard: View {
                 .foregroundColor(.gray)
                 .lineLimit(3)
 
-            if let impact = insight.impact {
-                Text("Impact: \(impact)")
+            if let recommendation = primaryRecommendation {
+                Text("Top Recommendation: \(recommendation.title)")
                     .font(.custom("Nunito", size: 12))
-                    .foregroundColor(insight.color.opacity(0.8))
+                    .foregroundColor(metadata.accentColor.opacity(0.8))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(insight.color.opacity(0.1))
+                    .background(metadata.accentColor.opacity(0.1))
                     .cornerRadius(6)
             }
         }
@@ -220,6 +300,17 @@ struct TrendCard: View {
     let trend: TrendData
     let insights: [ProductivityInsight]
 
+    private static let dateIntervalFormatter: DateIntervalFormatter = {
+        let formatter = DateIntervalFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .none
+        return formatter
+    }()
+
+    private var dateRangeDescription: String {
+        Self.dateIntervalFormatter.string(from: trend.dateRange.start, to: trend.dateRange.end)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -257,7 +348,7 @@ struct TrendCard: View {
 
             // Related insights
             let relatedInsights = insights.filter { insight in
-                insight.relatedMetrics.contains(trend.metricName)
+                insight.metrics.contains { $0.name == trend.metricName }
             }
 
             if !relatedInsights.isEmpty {
@@ -268,9 +359,10 @@ struct TrendCard: View {
                         .foregroundColor(.gray)
 
                     ForEach(relatedInsights.prefix(2), id: \.id) { insight in
+                        let metadata = insight.presentation
                         HStack {
                             Circle()
-                                .fill(insight.color)
+                                .fill(metadata.accentColor)
                                 .frame(width: 4, height: 4)
 
                             Text(insight.title)
@@ -371,12 +463,15 @@ struct RecommendationCard: View {
     let onToggle: () -> Void
     let onApplyAction: () -> Void
 
+    private var accentColor: Color { recommendation.category.color }
+    private var iconName: String { recommendation.category.icon }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: recommendation.icon)
+                Image(systemName: iconName)
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundColor(recommendation.color)
+                    .foregroundColor(accentColor)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(recommendation.title)
@@ -405,25 +500,33 @@ struct RecommendationCard: View {
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
-                    if !recommendation.steps.isEmpty {
-                        Text("Steps to implement:")
+                    if !recommendation.suggestedActions.isEmpty {
+                        Text("Suggested actions")
                             .font(.custom("Nunito", size: 12))
                             .fontWeight(.medium)
                             .foregroundColor(.gray)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(recommendation.steps.enumerated()), id: \.offset) { index, step in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Text("\(index + 1).")
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(recommendation.suggestedActions.prefix(2)) { action in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(action.title)
                                         .font(.custom("Nunito", size: 12))
                                         .fontWeight(.medium)
-                                        .foregroundColor(recommendation.color)
+                                        .foregroundColor(accentColor)
 
-                                    Text(step)
+                                    Text(action.description)
                                         .font(.custom("Nunito", size: 12))
                                         .foregroundColor(.gray)
 
-                                    Spacer()
+                                    if !action.steps.isEmpty {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            ForEach(Array(action.steps.enumerated()), id: \.offset) { index, step in
+                                                Text("\(index + 1). \(step)")
+                                                    .font(.custom("Nunito", size: 11))
+                                                    .foregroundColor(.gray)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -446,7 +549,7 @@ struct RecommendationCard: View {
                             .foregroundColor(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(recommendation.color)
+                            .background(accentColor)
                             .cornerRadius(8)
                     }
                 }
@@ -487,16 +590,18 @@ struct PerformancePatternsSection: View {
 struct PatternCard: View {
     let insight: ProductivityInsight
 
+    private var metadata: InsightPresentation { insight.presentation }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: insight.icon)
+                Image(systemName: metadata.iconName)
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(insight.color)
+                    .foregroundColor(metadata.accentColor)
 
                 Spacer()
 
-                Text(insight.type.rawValue.capitalized)
+                Text(metadata.categoryTitle)
                     .font(.custom("Nunito", size: 10))
                     .foregroundColor(.gray)
                     .padding(.horizontal, 6)
@@ -659,11 +764,12 @@ struct ProductivityScoreBreakdown: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.black)
 
-            let scoreInsights = insights.filter { $0.category == .productivity }
+            let scoreInsights = insights.filter { $0.isProductivityRelated }
 
             if !scoreInsights.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(scoreInsights, id: \.id) { insight in
+                        let metric = insight.metrics.first { $0.category == .productivity } ?? insight.metrics.first
                         HStack {
                             Text(insight.title)
                                 .font(.custom("Nunito", size: 14))
@@ -671,8 +777,13 @@ struct ProductivityScoreBreakdown: View {
 
                             Spacer()
 
-                            if let value = insight.value {
-                                Text(String(format: "%.1f", value))
+                            if let metric {
+                                Text(String(format: "%.1f %@", metric.value, metric.unit))
+                                    .font(.custom("Nunito", size: 14))
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.black)
+                            } else {
+                                Text("Confidence \(Int(insight.confidenceLevel * 100))%")
                                     .font(.custom("Nunito", size: 14))
                                     .fontWeight(.medium)
                                     .foregroundColor(.black)
@@ -700,15 +811,17 @@ struct TimeAnalysisSection: View {
                 .fontWeight(.semibold)
                 .foregroundColor(.black)
 
-            let timeInsights = insights.filter { $0.category == .timeManagement }
+            let timeInsights = insights.filter { $0.isTimeRelated }
 
             if !timeInsights.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(timeInsights.prefix(3), id: \.id) { insight in
+                        let metadata = insight.presentation
+                        let metric = insight.metrics.first
                         HStack {
-                            Image(systemName: insight.icon)
+                            Image(systemName: metadata.iconName)
                                 .font(.system(size: 16))
-                                .foregroundColor(insight.color)
+                                .foregroundColor(metadata.accentColor)
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(insight.title)
@@ -719,6 +832,11 @@ struct TimeAnalysisSection: View {
                                     .font(.custom("Nunito", size: 12))
                                     .foregroundColor(.gray)
                                     .lineLimit(1)
+                                if let metric {
+                                    Text(String(format: "%.0f %@", metric.value, metric.unit))
+                                        .font(.custom("Nunito", size: 11))
+                                        .foregroundColor(metadata.accentColor)
+                                }
                             }
 
                             Spacer()
@@ -756,9 +874,9 @@ struct GoalProgressSection: View {
 
                     ForEach(goalRecommendations.prefix(2), id: \.id) { recommendation in
                         HStack {
-                            Image(systemName: "target")
+                            Image(systemName: recommendation.category.icon)
                                 .font(.system(size: 16))
-                                .foregroundColor(recommendation.color)
+                                .foregroundColor(recommendation.category.color)
 
                             Text(recommendation.title)
                                 .font(.custom("Nunito", size: 14))
@@ -781,6 +899,11 @@ struct GoalProgressSection: View {
 struct GoalProgressRow: View {
     let insight: ProductivityInsight
 
+    private var metadata: InsightPresentation { insight.presentation }
+    private var goalMetric: ProductivityMetric? {
+        insight.metrics.first { $0.category == .goals } ?? insight.metrics.first
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -790,11 +913,17 @@ struct GoalProgressRow: View {
 
                 Spacer()
 
-            if let progress = insight.progressValue {
-                Text(String(format: "%.0f%%", progress * 100))
-                    .font(.custom("Nunito", size: 12))
-                    .fontWeight(.medium)
-                    .foregroundColor(insight.color)
+                if let metric = goalMetric {
+                    Text(String(format: "%.0f%@", metric.value, metric.unit))
+                        .font(.custom("Nunito", size: 12))
+                        .fontWeight(.medium)
+                        .foregroundColor(metadata.accentColor)
+                } else {
+                    Text("Confidence \(Int(insight.confidenceLevel * 100))%")
+                        .font(.custom("Nunito", size: 12))
+                        .fontWeight(.medium)
+                        .foregroundColor(metadata.accentColor)
+                }
             }
         }
 
@@ -820,6 +949,39 @@ struct PriorityIndicator: View {
                     .frame(width: 4, height: 4)
             }
         }
+        .accessibilityLabel("\(priority.rawValue.capitalized) priority")
+    }
+}
+
+struct ConfidenceIndicator: View {
+    let confidence: Double
+    let color: Color
+
+    private var normalizedConfidence: Double {
+        min(max(confidence, 0), 1)
+    }
+
+    private var filledSegments: Int {
+        min(5, max(0, Int((normalizedConfidence * 5).rounded())))
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            HStack(spacing: 2) {
+                ForEach(0..<5, id: \.self) { index in
+                    Capsule()
+                        .fill(index < filledSegments ? color : Color.gray.opacity(0.2))
+                        .frame(width: 6, height: 8)
+                }
+            }
+
+            Text("\(Int(normalizedConfidence * 100))%")
+                .font(.custom("Nunito", size: 11))
+                .fontWeight(.medium)
+                .foregroundColor(color)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Confidence level \(Int(normalizedConfidence * 100)) percent")
     }
 }
 
@@ -829,29 +991,38 @@ struct InsightDetailView: View {
     let insight: ProductivityInsight
     @Environment(\.dismiss) private var dismiss
 
+    private var metadata: InsightPresentation { insight.presentation }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     // Header
                     HStack {
-                        Image(systemName: insight.icon)
+                        Image(systemName: metadata.iconName)
                             .font(.system(size: 28))
-                            .foregroundColor(insight.color)
+                            .foregroundColor(metadata.accentColor)
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text(insight.title)
                                 .font(.custom("InstrumentSerif-Regular", size: 24))
                                 .foregroundColor(.black)
 
-                            Text(insight.type.rawValue.capitalized)
+                            Text(metadata.categoryTitle)
                                 .font(.custom("Nunito", size: 16))
                                 .foregroundColor(.gray)
                         }
 
                         Spacer()
 
-                        PriorityIndicator(priority: insight.priority)
+                        ConfidenceIndicator(confidence: insight.confidenceLevel, color: metadata.accentColor)
                     }
 
                     // Description
@@ -861,53 +1032,84 @@ struct InsightDetailView: View {
                         .lineLimit(nil)
 
                     // Detailed content
-                    if let data = insight.data {
+                    if !insight.metrics.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Detailed Analysis")
+                            Text("Key Metrics")
                                 .font(.custom("Nunito", size: 18))
                                 .fontWeight(.semibold)
                                 .foregroundColor(.black)
 
-                            // Render detailed data based on type
-                            DetailedDataView(data: data, color: insight.color)
+                            DetailedDataView(metrics: insight.metrics, color: metadata.accentColor)
                         }
                     }
 
-                    // Impact and recommendations
-                    if let impact = insight.impact {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Expected Impact")
+                    if !insight.recommendations.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Recommendations")
                                 .font(.custom("Nunito", size: 18))
                                 .fontWeight(.semibold)
                                 .foregroundColor(.black)
 
-                            Text(impact)
-                                .font(.custom("Nunito", size: 16))
-                                .foregroundColor(.gray)
-                        }
-                    }
-
-                    // Related metrics
-                    if !insight.relatedMetrics.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Related Metrics")
-                                .font(.custom("Nunito", size: 18))
-                                .fontWeight(.semibold)
-                                .foregroundColor(.black)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(insight.relatedMetrics, id: \.self) { metric in
-                                    HStack {
-                                        Circle()
-                                            .fill(insight.color)
-                                            .frame(width: 6, height: 6)
-
-                                        Text(metric)
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(insight.recommendations.prefix(3)) { recommendation in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(recommendation.title)
                                             .font(.custom("Nunito", size: 14))
+                                            .fontWeight(.medium)
+                                            .foregroundColor(metadata.accentColor)
+
+                                        Text(recommendation.description)
+                                            .font(.custom("Nunito", size: 13))
+                                            .foregroundColor(.gray)
+
+                                        Text("Impact: \(recommendation.expectedImpact.displayName)")
+                                            .font(.custom("Nunito", size: 12))
                                             .foregroundColor(.gray)
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    if !insight.actionableItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Actionable Items")
+                                .font(.custom("Nunito", size: 18))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.black)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(insight.actionableItems) { item in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(item.isCompleted ? .green : metadata.accentColor)
+                                            .font(.system(size: 14))
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.title)
+                                                .font(.custom("Nunito", size: 14))
+                                                .fontWeight(.medium)
+                                                .foregroundColor(.black)
+
+                                            Text(item.description)
+                                                .font(.custom("Nunito", size: 12))
+                                                .foregroundColor(.gray)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Generated: \(Self.dateFormatter.string(from: insight.createdAt))")
+                            .font(.custom("Nunito", size: 12))
+                            .foregroundColor(.gray)
+
+                        if let validUntil = insight.validUntil {
+                            Text("Valid until: \(Self.dateFormatter.string(from: validUntil))")
+                                .font(.custom("Nunito", size: 12))
+                                .foregroundColor(.gray)
                         }
                     }
                 }
@@ -932,18 +1134,29 @@ struct DetailedDataView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(data.keys.sorted()), id: \.self) { key in
-                HStack {
-                    Text(key + ":")
-                        .font(.custom("Nunito", size: 14))
-                        .fontWeight(.medium)
-                        .foregroundColor(.black)
+            ForEach(metrics) { metric in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(metric.name)
+                            .font(.custom("Nunito", size: 14))
+                            .fontWeight(.medium)
+                            .foregroundColor(.black)
 
-                    Spacer()
+                        Spacer()
 
-                    Text(data[key] ?? "")
-                        .font(.custom("Nunito", size: 14))
-                        .foregroundColor(color)
+                        Text(String(format: "%.1f %@", metric.value, metric.unit))
+                            .font(.custom("Nunito", size: 14))
+                            .foregroundColor(color)
+                    }
+
+                    Text(metric.category.displayName)
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.gray)
+                }
+                .padding(.vertical, 4)
+
+                if metric.id != metrics.last?.id {
+                    Divider()
                 }
             }
         }
@@ -1091,124 +1304,157 @@ private extension TrendData {
 
 #if DEBUG
 #Preview {
-    let focusTimeMetric = ProductivityMetric(
+    let focusMetric = ProductivityMetric(
         name: "Focus Time",
         value: 180,
-        unit: "minutes",
+        unit: "min",
         category: .focusTime,
-        metadata: ["trend": "up"]
+        timestamp: Date().addingTimeInterval(-3600)
     )
 
-    let productivityScoreMetric = ProductivityMetric(
+    let productivityMetric = ProductivityMetric(
         name: "Productivity Score",
-        value: 0.85,
-        unit: "index",
+        value: 0.82,
+        unit: "%",
         category: .productivity,
-        metadata: ["trend": "steady"]
+        timestamp: Date().addingTimeInterval(-7200)
+    )
+
+    let productivityRecommendation = ProductivityRecommendation(
+        category: .focus,
+        title: "Protect morning focus block",
+        description: "Reserve 90 minutes before noon for high-impact work.",
+        expectedImpact: .significant,
+        difficulty: .moderate,
+        estimatedTimeToImplement: 900,
+        steps: [
+            "Block a 90-minute session before noon",
+            "Silence notifications during that time",
+            "Review priority tasks the evening before"
+        ]
+    )
+
+    let energyMetric = ProductivityMetric(
+        name: "Energy Stability",
+        value: 0.7,
+        unit: "index",
+        category: .wellness,
+        timestamp: Date().addingTimeInterval(-5400)
+    )
+
+    let focusInsight = ProductivityInsight(
+        type: .productivityPattern,
+        title: "Morning focus peaks",
+        description: "Your focus quality consistently peaks between 9 AM and 11 AM.",
+        metrics: [focusMetric, productivityMetric],
+        recommendations: [productivityRecommendation],
+        confidenceLevel: 0.82,
+        actionableItems: [
+            ActionableItem(
+                title: "Plan tomorrow's deep work",
+                description: "Choose one priority task for the 9–11 AM window.",
+                type: .habit,
+                isCompleted: false,
+                completedAt: nil
+            )
+        ],
+        validUntil: Calendar.current.date(byAdding: .day, value: 7, to: Date())
+    )
+
+    let energyInsight = ProductivityInsight(
+        type: .energyOptimization,
+        title: "Afternoon energy dip",
+        description: "Energy levels drop after 2 PM compared to the rest of the day.",
+        metrics: [energyMetric],
+        recommendations: [productivityRecommendation],
+        confidenceLevel: 0.68
+    )
+
+    let dashboardMetric = ProductivityMetric(
+        name: "Tasks Completed",
+        value: 12,
+        unit: "tasks",
+        category: .taskCompletion,
+        timestamp: Date()
+    )
+
+    let dashboardRecommendation = Recommendation(
+        title: "Strengthen morning focus",
+        description: "Use your peak focus window for planning and execution.",
+        category: .focusImprovement,
+        priority: .high,
+        actionable: true,
+        estimatedImpact: .significant,
+        suggestedActions: [
+            Recommendation.SuggestedAction(
+                title: "Schedule focus session",
+                description: "Create a 90-minute block before noon.",
+                difficulty: .easy,
+                estimatedTime: 600,
+                steps: [
+                    "Open calendar",
+                    "Block a recurring session",
+                    "Mute notifications"
+                ]
+            )
+        ],
+        evidence: [dashboardMetric],
+        createdAt: Date(),
+        dismissedAt: nil
+    )
+
+    let trend = TrendData(
+        metricName: "Focus Time",
+        datapoints: [
+            TrendData.DataPoint(date: Date().addingTimeInterval(-86400 * 4), value: 150),
+            TrendData.DataPoint(date: Date().addingTimeInterval(-86400 * 3), value: 165),
+            TrendData.DataPoint(date: Date().addingTimeInterval(-86400 * 2), value: 172),
+            TrendData.DataPoint(date: Date().addingTimeInterval(-86400), value: 178),
+            TrendData.DataPoint(date: Date(), value: 185)
+        ],
+        trendDirection: .increasing,
+        trendStrength: 0.65,
+        insights: [
+            TrendData.TrendInsight(
+                type: .peakPerformance,
+                title: "Consistent focus gains",
+                description: "Focus time has improved for four consecutive days.",
+                severity: .medium,
+                actionable: true,
+                suggestions: ["Maintain the morning routine that supports these gains."]
+            )
+        ],
+        dateRange: DateInterval(start: Date().addingTimeInterval(-86400 * 4), end: Date())
+    )
+
+    let widget = DashboardWidget(
+        type: .insights,
+        title: "Insights",
+        configuration: DashboardWidget.WidgetConfiguration(
+            timeRange: .lastWeek,
+            refreshInterval: 300,
+            customSettings: [:]
+        ),
+        position: DashboardWidget.WidgetPosition(x: 0, y: 0, width: 4, height: 2),
+        isVisible: true,
+        refreshInterval: 300
+    )
+
+    let configuration = DashboardConfiguration(
+        widgets: [widget],
+        theme: DashboardConfiguration.DashboardTheme(
+            colorScheme: .light,
+            accentColor: "blue",
+            chartStyle: .colorful
+        ),
+        layout: .default,
+        preferences: .default
     )
 
     return InsightsView(
-        insights: [
-            ProductivityInsight(
-                type: .productivityPattern,
-                title: "Peak Productivity Hours",
-                description: "You're most productive between 9 AM and 12 PM",
-                metrics: [
-                    ProductivityMetric(
-                        name: "Focus Time",
-                        value: 195,
-                        unit: "minutes",
-                        category: .focusTime
-                    ),
-                    ProductivityMetric(
-                        name: "Productivity Score",
-                        value: 88,
-                        unit: "%",
-                        category: .productivity
-                    )
-                ],
-                recommendations: [
-                    ProductivityRecommendation(
-                        category: .focus,
-                        title: "Optimize Morning Routine",
-                        description: "Start your most important work during peak hours",
-                        expectedImpact: .significant,
-                        difficulty: .moderate,
-                        estimatedTimeToImplement: 900,
-                        steps: [
-                            "Schedule important tasks before 12 PM",
-                            "Minimize meetings during morning hours",
-                            "Prepare work materials the night before"
-                        ]
-                    )
-                ],
-                confidenceLevel: 0.88
-            )
-        ],
-        recommendations: [
-            Recommendation(
-                title: "Optimize Morning Routine",
-                description: "Start your most important work during peak hours",
-                category: .focusImprovement,
-                priority: .high,
-                actionable: true,
-                estimatedImpact: .significant,
-                suggestedActions: [
-                    Recommendation.SuggestedAction(
-                        title: "Schedule focus blocks",
-                        description: "Plan dedicated deep work sessions each morning",
-                        difficulty: .moderate,
-                        estimatedTime: 1800,
-                        steps: [
-                            "Reserve 9-11 AM for deep work",
-                            "Silence notifications",
-                            "Review top priorities"
-                        ]
-                    ),
-                    Recommendation.SuggestedAction(
-                        title: "Prepare the night before",
-                        description: "Lay out tasks and context to start strong",
-                        difficulty: .easy,
-                        estimatedTime: 600,
-                        steps: [
-                            "Review tomorrow's agenda",
-                            "List the top three tasks",
-                            "Stage supporting documents"
-                        ]
-                    )
-                ],
-                evidence: [
-                    ProductivityMetric(
-                        name: "Morning Focus Time",
-                        value: 120,
-                        unit: "minutes",
-                        category: .focusTime
-                    )
-                ],
-                createdAt: Date(),
-                dismissedAt: nil
-            )
-        ],
-        trends: [
-            TrendData(
-                metricName: "Focus Time",
-                datapoints: [
-                    TrendData.DataPoint(date: Date().addingTimeInterval(-3 * 24 * 3600), value: 150),
-                    TrendData.DataPoint(date: Date().addingTimeInterval(-2 * 24 * 3600), value: 165),
-                    TrendData.DataPoint(date: Date().addingTimeInterval(-1 * 24 * 3600), value: 175),
-                    TrendData.DataPoint(date: Date(), value: 185)
-                ],
-                trendDirection: .increasing,
-                trendStrength: 0.7,
-                insights: [],
-                dateRange: DateInterval(
-                    start: Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date(),
-                    end: Date()
-                )
-            )
-        ],
-        trends: [],
-        showDetailedAnalysis: true
+        insights: [focusInsight, energyInsight],
+        recommendations: [dashboardRecommendation],
+        trends: [trend],
+        configuration: configuration
     )
 }
-#endif
