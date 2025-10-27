@@ -9,12 +9,17 @@ import Foundation
 import AppKit
 
 @MainActor
-class LockController: ObservableObject {
-    static let shared = LockController()
+public final class LockController: ObservableObject {
+    public static let shared = LockController()
 
     // MARK: - Private Properties
-    private var isBlockingActive = false
+    private var blockingActive = false
     private var currentAllowedApps: [String] = []
+
+    // MARK: - Public State
+    public var isBlockingActive: Bool {
+        blockingActive
+    }
 
     // MARK: - Initialization
     private init() {
@@ -23,29 +28,29 @@ class LockController: ObservableObject {
     }
 
     // MARK: - Public Methods
-    func applyBlocking(allowedApps: [String]) {
+    public func applyBlocking(allowedApps: [String]) {
         print("[LockController] Applying app blocking for allowed apps: \(allowedApps)")
 
         currentAllowedApps = allowedApps
-        isBlockingActive = true
+        blockingActive = true
 
         // Simplified blocking using NSWorkspace
         print("[LockController] Simplified blocking applied for \(allowedApps.count) allowed apps")
         print("[LockController] Note: Full app blocking requires ManagedSettings framework which is iOS-only")
     }
 
-    func removeBlocking() {
+    public func removeBlocking() {
         print("[LockController] Removing app blocking")
 
         // ManagedSettings is iOS-only, so we just clear the state on macOS
         currentAllowedApps = []
-        isBlockingActive = false
+        blockingActive = false
 
         print("[LockController] Blocking removed")
     }
 
-    func isAppAllowed(bundleID: String) -> Bool {
-        if !isBlockingActive {
+    public func isAppAllowed(bundleID: String) -> Bool {
+        if !blockingActive {
             return true
         }
         return currentAllowedApps.contains(bundleID)
@@ -95,7 +100,7 @@ class LockController: ObservableObject {
     }
 
     // MARK: - Helper Methods
-    func getAppName(for bundleID: String) -> String? {
+    public func getAppName(for bundleID: String) -> String? {
         // Try to get the app name from NSWorkspace
         if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
             return app.localizedName ?? app.bundleIdentifier
@@ -105,7 +110,7 @@ class LockController: ObservableObject {
         return bundleID
     }
 
-    func getRunningApp() -> (name: String?, bundleID: String?) {
+    public func getRunningApp() -> (name: String?, bundleID: String?) {
         guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
             return (nil, nil)
         }
