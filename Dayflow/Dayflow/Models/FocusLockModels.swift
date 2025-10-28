@@ -1364,12 +1364,6 @@ struct DashboardConfiguration: Codable {
         var accentColor: String
         var chartStyle: ChartStyle
 
-        static let `default` = DashboardTheme(
-            colorScheme: .system,
-            accentColor: "blue",
-            chartStyle: .colorful
-        )
-
         enum ColorScheme: String, Codable, CaseIterable {
             case light = "light"
             case dark = "dark"
@@ -1644,12 +1638,16 @@ struct MemoryUsage: Codable {
         return .low
     }
 
-    init(current: Double, peak: Double = current, average: Double = current, allocations: Int = 0, deallocations: Int = 0) {
+    init(current: Double, peak: Double? = nil, average: Double? = nil, allocations: Int = 0, deallocations: Int = 0) {
         self.current = current
-        self.peak = peak
-        self.average = average
+        self.peak = peak ?? current
+        self.average = average ?? current
         self.allocations = allocations
         self.deallocations = deallocations
+    }
+
+    convenience init(current: Double) {
+        self.init(current: current, peak: current, average: current, allocations: 0, deallocations: 0)
     }
 }
 
@@ -1972,6 +1970,90 @@ struct BackgroundTaskMetrics: Codable {
     }
 }
 
+// MARK: - Missing Types
+
+struct BackgroundTaskInfo: Codable, Identifiable {
+    let id: UUID = UUID()
+    let name: String
+    let identifier: String
+    let startTime: Date
+    let endTime: Date?
+    let isActive: Bool
+    let resourceUsage: ResourceUsage?
+
+    var displayName: String {
+        return name
+    }
+
+    var description: String {
+        return isActive ? "Currently running" : "Completed"
+    }
+
+    init(name: String, identifier: String, isActive: Bool = true, resourceUsage: ResourceUsage? = nil) {
+        self.name = name
+        self.identifier = identifier
+        self.startTime = Date()
+        self.endTime = nil
+        self.isActive = isActive
+        self.resourceUsage = resourceUsage
+    }
+}
+
+struct ComponentBatteryUsage: Codable, Identifiable {
+    let id: UUID = UUID()
+    let component: FocusLockComponent
+    let usageLevel: Double
+    let timestamp: Date
+    let duration: TimeInterval
+
+    var displayName: String {
+        return component.displayName
+    }
+
+    var description: String {
+        return "Battery usage: \(String(format: "%.1f", usageLevel * 100))%"
+    }
+
+    var color: Color {
+        switch usageLevel {
+        case 0..<0.3: return .green
+        case 0.3..<0.6: return .yellow
+        case 0.6..<0.8: return .orange
+        default: return .red
+        }
+    }
+
+    init(component: FocusLockComponent, usageLevel: Double, duration: TimeInterval = 60.0) {
+        self.component = component
+        self.usageLevel = usageLevel
+        self.timestamp = Date()
+        self.duration = duration
+    }
+}
+
+struct PowerOptimizationRecommendation: Codable, Identifiable {
+    let id: UUID = UUID()
+    let type: PowerRecommendationType
+    let title: String
+    let description: String
+    let priority: PowerRecommendationPriority
+    let potentialSavings: Double
+    let impact: String
+
+    var displayName: String {
+        return title
+    }
+
+    init(type: PowerRecommendationType, title: String, description: String, priority: PowerRecommendationPriority = .medium, potentialSavings: Double = 0.0, impact: String = "Low") {
+        self.type = type
+        self.title = title
+        self.description = description
+        self.priority = priority
+        self.potentialSavings = potentialSavings
+        self.impact = impact
+    }
+}
+
 // MARK: - Supporting Enums
 
 enum MemoryPressure: String, CaseIterable, Codable {
@@ -2263,6 +2345,15 @@ struct TaskSuggestion: Codable {
     let estimatedDuration: TimeInterval?
     let tags: [String]
 
+    // Computed properties for backward compatibility
+    var title: String {
+        return extractedTask
+    }
+
+    var description: String {
+        return context.isEmpty ? originalText : context
+    }
+
     enum ActionType: String, Codable, CaseIterable {
         case create = "create"
         case review = "review"
@@ -2302,7 +2393,9 @@ struct TaskSuggestion: Codable {
             }
         }
     }
+}
 
+extension TaskSuggestion {
     init(
         originalText: String,
         extractedTask: String,
@@ -2325,8 +2418,12 @@ struct TaskSuggestion: Codable {
     }
 }
 
+extension TaskSuggestion {
+    typealias LegacyActionType = ActionType
+}
+
 struct UserPreferenceProfile: Codable {
-    var preferredActionTypes: [ActionType: Double] // Preference scores 0.0-1.0
+    var preferredActionTypes: [TaskSuggestion.ActionType: Double] // Preference scores 0.0-1.0
     var preferredCategories: [String: Double]
     var typicalWorkingHours: TimeRange
     var averageTaskDuration: TimeInterval
@@ -2994,6 +3091,61 @@ enum JournalTemplate: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Journal Engagement
+struct JournalEngagement: Codable {
+    let sessionDuration: TimeInterval
+    let entryCount: Int
+    let averageEntryLength: Int
+    let reflectionQuality: Double
+    let engagementScore: Double
+    let timestamp: Date
+
+    init(sessionDuration: TimeInterval, entryCount: Int, averageEntryLength: Int, reflectionQuality: Double = 0.5) {
+        self.sessionDuration = sessionDuration
+        self.entryCount = entryCount
+        self.averageEntryLength = averageEntryLength
+        self.reflectionQuality = reflectionQuality
+        self.engagementScore = calculateEngagementScore(duration: sessionDuration, entries: entryCount, quality: reflectionQuality)
+        self.timestamp = Date()
+    }
+
+    private func calculateEngagementScore(duration: TimeInterval, entries: Int, quality: Double) -> Double {
+        let durationScore = min(duration / 300.0, 1.0) // 5 minutes = full score
+        let entryScore = min(Double(entries) / 3.0, 1.0) // 3 entries = full score
+        return (durationScore + entryScore + quality) / 3.0
+    }
+}
+
+struct JournalEngagementData: Codable {
+    let averageSessionDuration: TimeInterval
+    let totalEntries: Int
+    let streakDays: Int
+    let lastEngagement: Date
+    let engagementTrend: EngagementTrend
+
+    enum EngagementTrend: String, Codable, CaseIterable {
+        case improving = "improving"
+        case stable = "stable"
+        case declining = "declining"
+
+        var displayName: String {
+            switch self {
+            case .improving: return "Improving"
+            case .stable: return "Stable"
+            case .declining: return "Declining"
+            }
+        }
+    }
+
+    init(averageSessionDuration: TimeInterval, totalEntries: Int, streakDays: Int, lastEngagement: Date, engagementTrend: EngagementTrend = .stable) {
+        self.averageSessionDuration = averageSessionDuration
+        self.totalEntries = totalEntries
+        self.streakDays = streakDays
+        self.lastEngagement = lastEngagement
+        self.engagementTrend = engagementTrend
+    }
+}
+
 struct DailyJournal: Codable, Identifiable {
     let id: UUID
     let date: Date
@@ -3385,4 +3537,355 @@ struct JournalQuestion: Identifiable, Codable {
         self.isPersonalized = isPersonalized
         self.generatedAt = Date()
     }
+}
+
+// MARK: - Missing Type Definitions
+
+// Journal retention period for journal entries
+enum JournalRetentionPeriod: String, CaseIterable, Codable {
+    case oneWeek = "one_week"
+    case twoWeeks = "two_weeks"
+    case oneMonth = "one_month"
+    case threeMonths = "three_months"
+    case sixMonths = "six_months"
+    case oneYear = "one_year"
+    case forever = "forever"
+
+    var displayName: String {
+        switch self {
+        case .oneWeek: return "1 Week"
+        case .twoWeeks: return "2 Weeks"
+        case .oneMonth: return "1 Month"
+        case .threeMonths: return "3 Months"
+        case .sixMonths: return "6 Months"
+        case .oneYear: return "1 Year"
+        case .forever: return "Forever"
+        }
+    }
+}
+
+// MARK: - Focus Area
+enum FocusArea: String, CaseIterable, Codable {
+    case productivity = "productivity"
+    case wellbeing = "wellbeing"
+    case learning = "learning"
+    case creativity = "creativity"
+    case relationships = "relationships"
+    case health = "health"
+    case finance = "finance"
+    case personal = "personal"
+
+    var displayName: String {
+        switch self {
+        case .productivity: return "Productivity"
+        case .wellbeing: return "Wellbeing"
+        case .learning: return "Learning"
+        case .creativity: return "Creativity"
+        case .relationships: return "Relationships"
+        case .health: return "Health"
+        case .finance: return "Finance"
+        case .personal: return "Personal"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .productivity: return "briefcase"
+        case .wellbeing: return "heart"
+        case .learning: return "book"
+        case .creativity: return "paintbrush"
+        case .relationships: return "person.2"
+        case .health: return "cross.circle"
+        case .finance: return "dollarsign.circle"
+        case .personal: return "person.circle"
+        }
+    }
+}
+
+// Focus activity tracking model
+struct FocusActivity: Codable, Identifiable {
+    let id: UUID
+    let title: String
+    let category: FocusCategory
+    let startTime: Date
+    let endTime: Date?
+    let duration: TimeInterval?
+    let metadata: [String: AnyCodable]
+
+    init(id: UUID = UUID(), title: String, category: FocusCategory, startTime: Date, endTime: Date? = nil, duration: TimeInterval? = nil, metadata: [String: AnyCodable] = [:]) {
+        self.id = id
+        self.title = title
+        self.category = category
+        self.startTime = startTime
+        self.endTime = endTime
+        self.duration = duration
+        self.metadata = metadata
+    }
+}
+
+// Focus category model
+struct FocusCategory: Codable, Identifiable {
+    let id: UUID
+    let name: String
+    let color: String
+    let icon: String
+    let isActive: Bool
+
+    init(id: UUID = UUID(), name: String, color: String, icon: String, isActive: Bool = true) {
+        self.id = id
+        self.name = name
+        self.color = color
+        self.icon = icon
+        self.isActive = isActive
+    }
+}
+
+// Focus analytics model
+struct FocusAnalytics: Codable, Identifiable {
+    let id: UUID
+    let date: Date
+    let totalFocusTime: TimeInterval
+    let tasksCompleted: Int
+    let distractionCount: Int
+    let productivityScore: Double
+    let topCategories: [String]
+
+    init(id: UUID = UUID(), date: Date, totalFocusTime: TimeInterval, tasksCompleted: Int, distractionCount: Int, productivityScore: Double, topCategories: [String]) {
+        self.id = id
+        self.date = date
+        self.totalFocusTime = totalFocusTime
+        self.tasksCompleted = tasksCompleted
+        self.distractionCount = distractionCount
+        self.productivityScore = productivityScore
+        self.topCategories = topCategories
+    }
+}
+
+// Component metrics for performance monitoring
+struct ComponentMetrics: Codable, Identifiable {
+    let id: UUID
+    let componentName: String
+    let cpuUsage: Double
+    let memoryUsage: Double
+    let responseTime: TimeInterval
+    let errorRate: Double
+    let timestamp: Date
+
+    init(id: UUID = UUID(), componentName: String, cpuUsage: Double, memoryUsage: Double, responseTime: TimeInterval, errorRate: Double, timestamp: Date = Date()) {
+        self.id = id
+        self.componentName = componentName
+        self.cpuUsage = cpuUsage
+        self.memoryUsage = memoryUsage
+        self.responseTime = responseTime
+        self.errorRate = errorRate
+        self.timestamp = timestamp
+    }
+}
+
+// Component health status
+struct ComponentHealth: Codable, Identifiable {
+    let id: UUID
+    let componentName: String
+    let status: HealthStatus
+    let lastCheck: Date
+    let issues: [String]
+    let metrics: ComponentMetrics
+
+    enum HealthStatus: String, Codable, CaseIterable {
+        case healthy = "healthy"
+        case warning = "warning"
+        case critical = "critical"
+        case unknown = "unknown"
+
+        var displayName: String {
+            switch self {
+            case .healthy: return "Healthy"
+            case .warning: return "Warning"
+            case .critical: return "Critical"
+            case .unknown: return "Unknown"
+            }
+        }
+
+        var color: String {
+            switch self {
+            case .healthy: return "green"
+            case .warning: return "yellow"
+            case .critical: return "red"
+            case .unknown: return "gray"
+            }
+        }
+    }
+
+    init(id: UUID = UUID(), componentName: String, status: HealthStatus, lastCheck: Date = Date(), issues: [String] = [], metrics: ComponentMetrics) {
+        self.id = id
+        self.componentName = componentName
+        self.status = status
+        self.lastCheck = lastCheck
+        self.issues = issues
+        self.metrics = metrics
+    }
+}
+
+// Additional missing types for journal and analytics
+
+// Highlight category for journal entries
+enum HighlightCategory: String, CaseIterable, Codable {
+    case important = "important"
+    case question = "question"
+    case insight = "insight"
+    case task = "task"
+    case goal = "goal"
+    case achievement = "achievement"
+    case challenge = "challenge"
+    case learning = "learning"
+    case gratitude = "gratitude"
+    case reflection = "reflection"
+
+    var displayName: String {
+        switch self {
+        case .important: return "Important"
+        case .question: return "Question"
+        case .insight: return "Insight"
+        case .task: return "Task"
+        case .goal: return "Goal"
+        case .achievement: return "Achievement"
+        case .challenge: return "Challenge"
+        case .learning: return "Learning"
+        case .gratitude: return "Gratitude"
+        case .reflection: return "Reflection"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .important: return "red"
+        case .question: return "blue"
+        case .insight: return "purple"
+        case .task: return "orange"
+        case .goal: return "green"
+        case .achievement: return "gold"
+        case .challenge: return "yellow"
+        case .learning: return "indigo"
+        case .gratitude: return "pink"
+        case .reflection: return "teal"
+        }
+    }
+}
+
+// Emotion type for journal entries
+enum EmotionType: String, CaseIterable, Codable {
+    case happy = "happy"
+    case sad = "sad"
+    case anxious = "anxious"
+    case excited = "excited"
+    case calm = "calm"
+    case frustrated = "frustrated"
+    case proud = "proud"
+    case grateful = "grateful"
+    case confused = "confused"
+    case hopeful = "hopeful"
+
+    var displayName: String {
+        switch self {
+        case .happy: return "Happy"
+        case .sad: return "Sad"
+        case .anxious: return "Anxious"
+        case .excited: return "Excited"
+        case .calm: return "Calm"
+        case .frustrated: return "Frustrated"
+        case .proud: return "Proud"
+        case .grateful: return "Grateful"
+        case .confused: return "Confused"
+        case .hopeful: return "Hopeful"
+        }
+    }
+
+    var emoji: String {
+        switch self {
+        case .happy: return "😊"
+        case .sad: return "😢"
+        case .anxious: return "😰"
+        case .excited: return "🎉"
+        case .calm: return "😌"
+        case .frustrated: return "😤"
+        case .proud: return "🏆"
+        case .grateful: return "🙏"
+        case .confused: return "😕"
+        case .hopeful: return "🌟"
+        }
+    }
+}
+
+// Calendar source for calendar integration
+enum CalendarSource: String, CaseIterable, Codable {
+    case icloud = "icloud"
+    case google = "google"
+    case outlook = "outlook"
+    case exchange = "exchange"
+    case caldav = "caldav"
+    case local = "local"
+
+    var displayName: String {
+        switch self {
+        case .icloud: return "iCloud"
+        case .google: return "Google Calendar"
+        case .outlook: return "Outlook"
+        case .exchange: return "Exchange"
+        case .caldav: return "CalDAV"
+        case .local: return "Local"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .icloud: return "icloud"
+        case .google: return "calendar"
+        case .outlook: return "envelope"
+        case .exchange: return "server.rack"
+        case .caldav: return "network"
+        case .local: return "desktopcomputer"
+        }
+    }
+}
+
+// MARK: - Resource Optimization Types
+
+enum OptimizationPriority: Int, CaseIterable, Codable {
+    case critical = 1
+    case high = 2
+    case normal = 3
+    case low = 4
+}
+
+enum OptimizationImpact: String, CaseIterable, Codable {
+    case low = "low"
+    case medium = "medium"
+    case high = "high"
+}
+
+enum CacheTarget: String, CaseIterable, Codable {
+    case memory = "memory"
+    case disk = "disk"
+    case index = "index"
+    case embedding = "embedding"
+    case metadata = "metadata"
+}
+
+enum OptimizationAction: Codable {
+    case clearCache(target: CacheTarget, percentage: Double)
+    case reduceProcessingIntensity(component: FocusLockComponent, intensity: Double)
+    case reduceMemoryFootprint(component: FocusLockComponent, reduction: Double)
+    case pauseBackgroundTasks(except: [TaskPriority])
+    case enableLowPowerMode
+    case reduceBatchSize(component: FocusLockComponent, reduction: Double)
+    case optimizeIndexing(component: FocusLockComponent)
+    case reduceProcessingFrequency(component: FocusLockComponent, interval: TimeInterval)
+    case lowerQuality(component: FocusLockComponent)
+    case deferProcessing(component: FocusLockComponent, delay: TimeInterval)
+    case reducePollingFrequency(component: FocusLockComponent, interval: TimeInterval)
+    case enableLazyLoading(component: FocusLockComponent)
+    case useSimplifiedModel(component: FocusLockComponent)
+    case reduceContextLength(component: FocusLockComponent, maxLength: Int)
+    case enableResponseCaching(component: FocusLockComponent)
+    case reduceSamplingRate(component: FocusLockComponent, rate: Double)
 }
