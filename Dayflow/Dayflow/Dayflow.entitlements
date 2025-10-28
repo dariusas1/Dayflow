@@ -12,6 +12,12 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<false/>
+	<key>com.apple.security.device.camera</key>
+	<false/>
 
 	<!-- Allow Sparkle's installer launcher XPC services to be looked up from sandbox -->
 	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>

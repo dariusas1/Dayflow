@@ -20,8 +20,8 @@ struct SunriseGlassPillToggleStyle: ToggleStyle {
         Button {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
                 configuration.isOn.toggle()
-                #if os(iOS)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                #if os(macOS)
+                // macOS haptic feedback alternative (e.g., NSSound.beep())
                 #endif
             }
         } label: {
