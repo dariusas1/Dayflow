@@ -52,9 +52,7 @@ class BackgroundMonitor: ObservableObject {
     }
 
     deinit {
-        Task { @MainActor in
-            stopMonitoring()
-        }
+        stopMonitoring()
     }
 
     // MARK: - Public Interface
@@ -80,7 +78,14 @@ class BackgroundMonitor: ObservableObject {
         performBasicHealthCheck()
     }
 
-    func stopMonitoring() {
+    nonisolated func stopMonitoring() {
+        Task { @MainActor in
+            await self.performStopMonitoring()
+        }
+    }
+
+    @MainActor
+    private func performStopMonitoring() {
         guard isMonitoring else { return }
 
         logger.info("Stopping background monitoring")
@@ -115,29 +120,39 @@ class BackgroundMonitor: ObservableObject {
     private func setupNotifications() {
         // Observe session state changes
         sessionManager.$currentState
-            .sink { _ in
-                self.handleSessionStateChange()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleSessionStateChange()
+                }
             }
             .store(in: &cancellables)
 
         // Observe app lifecycle
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { _ in
-                self.handleAppBecameActive()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleAppBecameActive()
+                }
             }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
-            .sink { _ in
-                self.handleAppResignedActive()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.handleAppResignedActive()
+                }
             }
             .store(in: &cancellables)
     }
 
     private func startUptimeTimer() {
         let startTime = Date()
-        uptimeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            self.uptime = Date().timeIntervalSince(startTime)
+        uptimeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.uptime = Date().timeIntervalSince(startTime)
+            }
         }
     }
 
@@ -149,7 +164,8 @@ class BackgroundMonitor: ObservableObject {
 
     private func startConsolidatedTimer() {
         // Use the shorter interval for consolidated checks
-        consolidatedTimer = Timer.scheduledTimer(withTimeInterval: monitoringInterval, repeats: true) { [weak self] _ in
+        let interval = monitoringInterval
+        consolidatedTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
 
             // Perform both basic health and integrity checks in one timer
@@ -344,9 +360,9 @@ class BackgroundMonitor: ObservableObject {
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
 
         let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
                 task_info(mach_task_self_,
-                         mach_task_basic_info_t,
+                         task_flavor_t(MACH_TASK_BASIC_INFO),
                          $0,
                          &count)
             }
@@ -374,8 +390,11 @@ class BackgroundMonitor: ObservableObject {
 
     private func getFreeDiskSpace(at path: URL) -> Int64? {
         do {
-            let resourceValues = try path.resourceValues(forKeys: [.availableCapacityKey])
-            return resourceValues.availableCapacity
+            let resourceValues = try path.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+            if let capacity = resourceValues.volumeAvailableCapacity {
+                return Int64(capacity)
+            }
+            return nil
         } catch {
             logger.error("Failed to get disk space: \(error)")
             return nil

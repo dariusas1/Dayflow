@@ -120,7 +120,7 @@ struct DashboardCustomizationView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 20)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color(NSColor.controlBackgroundColor))
         }
         .sheet(isPresented: $showingWidgetEditor) {
             if let widget = editingWidget {
@@ -603,16 +603,15 @@ struct WidgetEditorView: View {
             }
             .padding(20)
             .navigationTitle("Edit Widget")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         onCancel()
                     }
                     .font(.custom("Nunito", size: 16))
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         onSave(editedWidget)
                     }

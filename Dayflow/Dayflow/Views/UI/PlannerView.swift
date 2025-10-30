@@ -33,6 +33,12 @@ struct PlannerView: View {
         case analytics = "analytics"
     }
 
+    private var settingsToolbarButton: some View {
+        Button(action: { showingSettings = true }) {
+            Image(systemName: "gearshape")
+        }
+    }
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -50,13 +56,19 @@ struct PlannerView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Planner")
+#if os(iOS)
             .navigationBarTitleDisplayMode(.large)
+#endif
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { showingSettings = true }) {
-                        Image(systemName: "gearshape")
-                    }
+                    settingsToolbarButton
                 }
+                #else
+                ToolbarItem(placement: .automatic) {
+                    settingsToolbarButton
+                }
+                #endif
             }
         }
         .sheet(isPresented: $showingTaskCreation) {
@@ -127,7 +139,7 @@ struct PlannerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(plannerEngine.currentPlan?.dateFormatted ?? selectedDate.formatted(date: .abbreviated, time: .omitted))
                         .font(.custom("InstrumentSerif-Regular", size: 24))
-                        .foregroundColor(Color(.label))
+                        .foregroundColor(.primary)
 
                     if let plan = plannerEngine.currentPlan {
                         HStack(spacing: 12) {
@@ -205,13 +217,14 @@ struct PlannerView: View {
             }
         }
         .padding()
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(Color.secondary.opacity(0.1))
     }
 
     // MARK: - View Mode Selector
 
-    private var viewModeSelector: View {
-        ScrollView(.horizontal, showsIndicators: false) {
+    @ViewBuilder
+    private var viewModeSelector: some View {
+        ScrollView(Axis.Set.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(PlannerViewMode.allCases, id: \.self) { mode in
                     Button(action: {
@@ -290,7 +303,8 @@ struct PlannerView: View {
 
     // MARK: - Action Bar
 
-    private var actionBar: View {
+    @ViewBuilder
+    private var actionBar: some View {
         HStack(spacing: 16) {
             Button(action: {
                 showingTaskCreation = true
@@ -356,7 +370,7 @@ struct PlannerView: View {
             }
         }
         .padding()
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(Color.secondary.opacity(0.1))
     }
 
     // MARK: - Helper Methods
@@ -405,7 +419,7 @@ struct PlannerView: View {
         isOptimizing = true
 
         do {
-            let progress = Timer.publish(every: 0.1)
+            let progress = Timer.publish(every: 0.1, on: .main, in: .common)
                 .autoconnect()
                 .sink { _ in
                     if optimizationProgress < 0.9 {
@@ -469,13 +483,13 @@ struct ProductivityScoreView: View {
         .padding(.vertical, 4)
         .background(scoreColor.opacity(0.1))
         .cornerRadius(6)
+    }
 
-        private var scoreColor: Color {
-            if score >= 0.8 { return .green }
-            if score >= 0.6 { return .blue }
-            if score >= 0.4 { return .orange }
-            return .red
-        }
+    private var scoreColor: Color {
+        if score >= 0.8 { return .green }
+        if score >= 0.6 { return .blue }
+        if score >= 0.4 { return .orange }
+        return .red
     }
 }
 
@@ -587,14 +601,27 @@ struct TaskCreationView: View {
     @State private var description = ""
     @State private var estimatedDuration: Double = 3600 // 1 hour
     @State private var priority: PlannerPriority = .medium
-    @State private var deadline: Date?
+    @State private var deadline: Date
     @State private var isFocusProtected = false
     @State private var selectedEnergyLevel: PlannerEnergyLevel?
+
+    private var cancelToolbarButton: some View {
+        Button("Cancel") {
+            isPresented = false
+        }
+    }
+
+    private var createToolbarButton: some View {
+        Button("Create") {
+            createTask()
+        }
+        .disabled(title.isEmpty)
+    }
 
     var body: some View {
         NavigationView {
             Form {
-                Section(header: "Task Details") {
+                Section(header: Text("Task Details")) {
                     TextField("Title", text: $title)
                         .font(.custom("Nunito", size: 16))
 
@@ -603,7 +630,7 @@ struct TaskCreationView: View {
                         .lineLimit(3...6)
                 }
 
-                Section(header: "Timing") {
+                Section(header: Text("Timing")) {
                     HStack {
                         Text("Duration")
                         Spacer()
@@ -623,7 +650,7 @@ struct TaskCreationView: View {
                     Toggle("Focus Session Protected", isOn: $isFocusProtected)
                 }
 
-                Section(header: "Priority") {
+                Section(header: Text("Priority")) {
                     Picker("Priority", selection: $priority) {
                         Text("Low").tag(PlannerPriority.low)
                         Text("Medium").tag(PlannerPriority.medium)
@@ -633,7 +660,7 @@ struct TaskCreationView: View {
                     .pickerStyle(SegmentedPickerStyle())
                 }
 
-                Section(header: "Energy Level (Optional)") {
+                Section(header: Text("Energy Level (Optional)")) {
                     Picker("Energy Level", selection: $selectedEnergyLevel) {
                         Text("None").tag(nil as PlannerEnergyLevel?)
                         Text("Low").tag(PlannerEnergyLevel.low)
@@ -645,20 +672,25 @@ struct TaskCreationView: View {
                 }
             }
             .navigationTitle("New Task")
+#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
+                    cancelToolbarButton
                 }
-
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Create") {
-                        createTask()
-                    }
-                    .disabled(title.isEmpty)
+                    createToolbarButton
                 }
+                #else
+                ToolbarItem(placement: .automatic) {
+                    cancelToolbarButton
+                }
+                ToolbarItem(placement: .automatic) {
+                    createToolbarButton
+                }
+                #endif
             }
         }
         .frame(width: 500, height: 600)
@@ -704,13 +736,23 @@ struct DatePickerView: View {
             Spacer()
 
             .navigationTitle("Select Date")
+#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+#endif
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         isPresented = false
                     }
                 }
+                #else
+                ToolbarItem(placement: .automatic) {
+                    Button("Done") {
+                        isPresented = false
+                    }
+                }
+                #endif
             }
         }
         .frame(width: 400, height: 500)

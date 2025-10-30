@@ -52,37 +52,62 @@ final class FilmstripGenerator {
         queue.addOperation { [weak self] in
             guard let self = self else { return }
             let asset = AVAsset(url: url)
-            guard asset.isPlayable else {
-                self.finish(key: key, frameCount: frameCount, images: [])
-                return
-            }
 
-            let duration = CMTimeGetSeconds(asset.duration)
-            if duration.isNaN || duration.isInfinite || duration <= 0 {
-                self.finish(key: key, frameCount: frameCount, images: [])
-                return
-            }
+            // Use the modern async API to check playability and duration
+            Task {
+                do {
+                    let isPlayable = try await asset.load(.isPlayable)
+                    guard isPlayable else {
+                        await MainActor.run {
+                            self.finish(key: key, frameCount: frameCount, images: [])
+                        }
+                        return
+                    }
 
-            let generator = AVAssetImageGenerator(asset: asset)
-            generator.appliesPreferredTrackTransform = true
-            // Set a reasonable maximum size for thumbnails
-            let scale: CGFloat = NSScreen.main?.backingScaleFactor ?? 2.0
-            generator.maximumSize = CGSize(width: targetHeight * 16/9 * scale, height: targetHeight * scale)
+                    let duration = try await asset.load(.duration)
+                    if duration.isNaN || duration.isInfinite || duration <= 0 {
+                        await MainActor.run {
+                            self.finish(key: key, frameCount: frameCount, images: [])
+                        }
+                        return
+                    }
 
-            // Evenly spaced times across duration (avoid 0 exactly)
-            let step = duration / Double(frameCount)
-            let times: [NSValue] = (0..<frameCount).map { i in
-                let t = max(0.001, Double(i) * step + step * 0.5)
-                return NSValue(time: CMTime(seconds: t, preferredTimescale: 600))
-            }
-            var indexMap: [Int64: Int] = [:]
-            for (i, v) in times.enumerated() {
-                indexMap[v.timeValue.value] = i
+                    // Continue with image generation
+                    await MainActor.run {
+                        self.generateFrames(asset: asset, key: key, frameCount: frameCount, targetHeight: targetHeight)
+                    }
+                } catch {
+                    await MainActor.run {
+                        self.finish(key: key, frameCount: frameCount, images: [])
+                    }
+                }
+        }
+    }
+  }
+
+    private func generateFrames(asset: AVAsset, key: String, frameCount: Int, targetHeight: Double) {
+        Task {
+            do {
+                let duration = try await asset.load(.duration)
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                let scale: CGFloat = NSScreen.main?.backingScaleFactor ?? 2.0
+                generator.maximumSize = CGSize(width: targetHeight * 16/9 * scale, height: targetHeight * scale)
+
+                // Evenly spaced times across duration (avoid 0 exactly)
+                let step = duration / Double(frameCount)
+                let times: [NSValue] = (0..<frameCount).map { i in
+                    let t = max(0.001, Double(i) * step + step * 0.5)
+                    return NSValue(time: CMTime(seconds: t, preferredTimescale: 600))
+                }
+                var indexMap: [Int64: Int] = [:]
+                for (i, v) in times.enumerated() {
+                    indexMap[v.timeValue.value] = i
+                }
             }
 
             var images: [NSImage] = Array(repeating: NSImage(), count: frameCount)
             var produced = 0
-            let group = DispatchGroup()
 
             // Use generateCGImagesAsynchronously for better throughput
             generator.generateCGImagesAsynchronously(forTimes: times) { requestedTime, cg, actualTime, result, error in

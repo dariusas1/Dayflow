@@ -30,11 +30,8 @@ class TimeBlockOptimizer: ObservableObject {
     private var historicalPerformanceData: [SchedulingFeedback] = []
     private var constraintSolver: ConstraintSolver
 
-    // Enhanced ML components
-    private var neuralNetwork: SchedulingNeuralNetwork
+    // Simplified ML components
     private var productivityAnalyzer: ProductivityAnalyzer
-    private var patternRecognizer: PatternRecognizer
-    private var anomalyDetector: AnomalyDetector
 
     // MARK: - Optimization Configuration
     struct OptimizationConfig {
@@ -53,10 +50,7 @@ class TimeBlockOptimizer: ObservableObject {
     // MARK: - Initialization
     private init() {
         constraintSolver = ConstraintSolver()
-        neuralNetwork = SchedulingNeuralNetwork()
         productivityAnalyzer = ProductivityAnalyzer()
-        patternRecognizer = PatternRecognizer()
-        anomalyDetector = AnomalyDetector()
 
         loadEnergyPatterns()
         setupSessionObservation()
@@ -89,21 +83,15 @@ class TimeBlockOptimizer: ObservableObject {
             // Step 5: Apply adaptive learning from historical performance
             timeBlocks = applyAdaptiveLearning(blocks: timeBlocks, tasks: tasks)
 
-            // Step 6: Apply neural network optimization
-            timeBlocks = await applyNeuralOptimization(blocks: timeBlocks, tasks: tasks)
-
-            // Step 7: Apply productivity analysis insights
+            // Step 6: Apply productivity analysis insights
             timeBlocks = applyProductivityInsights(blocks: timeBlocks, tasks: tasks)
 
-            // Step 8: Detect and handle anomalies
-            timeBlocks = await detectAndHandleAnomalies(blocks: timeBlocks, tasks: tasks)
-
-            // Step 9: Validate and score the optimization
+            // Step 7: Validate and score the optimization
             let score = calculateOptimizationScore(blocks: timeBlocks, tasks: tasks)
             optimizationScore = score
             lastOptimizationDate = Date()
 
-            logger.info("Enhanced optimization completed with score: \(score)")
+            logger.info("Optimization completed with score: \(score)")
             return timeBlocks
 
         } catch {
@@ -187,7 +175,7 @@ class TimeBlockOptimizer: ObservableObject {
         // Adjust based on energy patterns
         let hour = Calendar.current.component(.hour, from: time)
         if let energyPattern = energyPatterns.first(where: { $0.hourOfDay == hour }) {
-            let energyMultiplier = energyPattern.averageEnergyLevel.numericValue
+            let energyMultiplier = Double(energyPattern.averageEnergyLevel.intValue)
             probability *= energyMultiplier
         }
 
@@ -363,10 +351,11 @@ class TimeBlockOptimizer: ObservableObject {
             }
 
             // Move to next available slot
-            if let nextBlockStart = existingBlocks
-                .filter { $0.startTime >= candidateTime }
+            let filteredBlocks = existingBlocks
+                .filter { block in block.startTime >= candidateTime }
                 .sorted { $0.startTime < $1.startTime }
-                .first?.startTime {
+
+            if let nextBlockStart = filteredBlocks.first?.startTime {
                 candidateTime = nextBlockStart.addingTimeInterval(60) // Add 1 minute buffer
             } else {
                 candidateTime = candidateTime.addingTimeInterval(3600) // Jump 1 hour
@@ -393,7 +382,7 @@ class TimeBlockOptimizer: ObservableObject {
         // Energy pattern score
         let hour = Calendar.current.component(.hour, from: time)
         if let energyPattern = energyPatterns.first(where: { $0.hourOfDay == hour }) {
-            let energyScore = energyPattern.averageEnergyLevel.numericValue * energyPattern.confidence
+            let energyScore = Double(energyPattern.averageEnergyLevel.intValue) * energyPattern.confidence
             score += energyScore * config.energyWeight
 
             // Bonus if preferred energy level matches
@@ -467,8 +456,8 @@ class TimeBlockOptimizer: ObservableObject {
             if preferredEnergy == pattern.averageEnergyLevel {
                 match = 1.0
             } else {
-                let energyDiff = abs(preferredEnergy.numericValue - pattern.averageEnergyLevel.numericValue)
-                match = max(0.0, 1.0 - energyDiff)
+                let energyDiff = abs(Double(preferredEnergy.intValue) - Double(pattern.averageEnergyLevel.intValue))
+                match = max(0.0, 1.0 - (energyDiff / 4.0))
             }
         }
 
@@ -782,8 +771,6 @@ class TimeBlockOptimizer: ObservableObject {
 
     private func setupMLComponents() {
         // Initialize ML components with historical data
-        neuralNetwork.train(with: historicalPerformanceData)
-        patternRecognizer.learn(from: energyPatterns)
         productivityAnalyzer.initialize(with: historicalPerformanceData)
     }
 }
@@ -882,253 +869,7 @@ class ConstraintSolver {
     }
 }
 
-// MARK: - Enhanced ML Classes
-
-struct NeuralPrediction {
-    let optimalStartTime: Date?
-    let predictedDuration: TimeInterval
-    let confidence: Double
-    let reasoning: String
-}
-
-class SchedulingNeuralNetwork {
-    private var weights: [Double] = []
-    private var bias: Double = 0.0
-    private var learningRate: Double = 0.01
-    private var isTrained: Bool = false
-
-    func train(with data: [SchedulingFeedback]) {
-        guard data.count > 10 else { return }
-
-        // Simplified neural network training
-        // In production, would use more sophisticated ML frameworks
-        var error: Double = 1.0
-        let maxIterations = 100
-        let targetError: Double = 0.01
-
-        weights = Array(repeating: Double.random(in: -0.5...0.5), count: 10)
-        bias = Double.random(in: -0.5...0.5)
-
-        for iteration in 0..<maxIterations {
-            error = 0.0
-
-            for feedback in data {
-                let features = extractFeatures(from: feedback)
-                let prediction = predict(features: features)
-                let target = feedback.accuracyScore
-
-                error += pow(target - prediction, 2)
-
-                // Gradient descent
-                let gradient = (prediction - target) * 2.0
-                for i in 0..<weights.count {
-                    weights[i] -= learningRate * gradient * features[i]
-                }
-                bias -= learningRate * gradient
-            }
-
-            error /= Double(data.count)
-
-            if error < targetError {
-                break
-            }
-        }
-
-        isTrained = true
-    }
-
-    func predictOptimalSchedule(
-        task: PlannerTask,
-        currentTime: Date,
-        currentDuration: TimeInterval,
-        energyPatterns: [EnergyPattern],
-        historicalData: [SchedulingFeedback]
-    ) async -> NeuralPrediction {
-
-        guard isTrained else {
-            return NeuralPrediction(
-                optimalStartTime: nil,
-                predictedDuration: currentDuration,
-                confidence: 0.1,
-                reasoning: "Model not trained"
-            )
-        }
-
-        let features = extractTaskFeatures(
-            task: task,
-            currentTime: currentTime,
-            currentDuration: currentDuration,
-            energyPatterns: energyPatterns,
-            historicalData: historicalData
-        )
-
-        let score = predict(features: features)
-        let confidence = min(max(score, 0.0), 1.0)
-
-        // Generate predictions based on score
-        let optimalStartTime = confidence > 0.7 ? calculateOptimalStartTime(
-            for: task,
-            currentTime: currentTime,
-            score: score
-        ) : nil
-
-        let predictedDuration = calculatePredictedDuration(
-            current: currentDuration,
-            taskComplexity: calculateTaskComplexity(task),
-            confidence: confidence
-        )
-
-        return NeuralPrediction(
-            optimalStartTime: optimalStartTime,
-            predictedDuration: predictedDuration,
-            confidence: confidence,
-            reasoning: generateReasoning(score: score, task: task)
-        )
-    }
-
-    private func extractFeatures(from feedback: SchedulingFeedback) -> [Double] {
-        var features: [Double] = []
-
-        // Time-based features
-        let hour = Calendar.current.component(.hour, from: feedback.plannedStartTime)
-        features.append(Double(hour) / 24.0) // Normalized hour
-
-        // Rating-based features
-        features.append(Double(feedback.userRating) / 5.0) // Normalized rating
-
-        // Duration-based features
-        features.append(min(feedback.actualDuration / 7200.0, 1.0)) // Normalized duration (max 2 hours)
-        features.append(min(feedback.plannedDuration / 7200.0, 1.0))
-
-        // Accuracy features
-        features.append(feedback.accuracyScore)
-
-        // Energy level features
-        features.append(feedback.userEnergyLevel.numericValue / 4.0)
-
-        // Fill remaining features with zeros
-        while features.count < 10 {
-            features.append(0.0)
-        }
-
-        return features
-    }
-
-    private func extractTaskFeatures(
-        task: PlannerTask,
-        currentTime: Date,
-        currentDuration: TimeInterval,
-        energyPatterns: [EnergyPattern],
-        historicalData: [SchedulingFeedback]
-    ) -> [Double] {
-
-        var features: [Double] = []
-
-        // Time-based features
-        let hour = Calendar.current.component(.hour, from: currentTime)
-        features.append(Double(hour) / 24.0)
-
-        // Priority features
-        features.append(Double(task.priority.numericValue) / 4.0)
-
-        // Duration features
-        features.append(min(currentDuration / 7200.0, 1.0))
-
-        // Energy pattern features
-        let energyLevel = energyPatterns.first { $0.hourOfDay == hour }?.averageEnergyLevel.numericValue ?? 0.5
-        features.append(energyLevel / 4.0)
-
-        // Focus session features
-        features.append(task.isFocusSessionProtected ? 1.0 : 0.0)
-
-        // Historical accuracy features
-        let similarTasksAccuracy = calculateSimilarTasksAccuracy(for: task, at: hour, data: historicalData)
-        features.append(similarTasksAccuracy)
-
-        // Deadline urgency features
-        if let deadline = task.deadline {
-            let urgency = max(0.0, 1.0 - deadline.timeIntervalSince(currentTime) / (7 * 24 * 3600))
-            features.append(urgency)
-        } else {
-            features.append(0.0)
-        }
-
-        // Fill remaining features
-        while features.count < 10 {
-            features.append(0.0)
-        }
-
-        return features
-    }
-
-    private func predict(features: [Double]) -> Double {
-        guard features.count == weights.count else { return 0.5 }
-
-        var prediction = bias
-        for i in 0..<features.count {
-            prediction += features[i] * weights[i]
-        }
-
-        return 1.0 / (1.0 + exp(-prediction)) // Sigmoid activation
-    }
-
-    private func calculateOptimalStartTime(for task: PlannerTask, currentTime: Date, score: Double) -> Date? {
-        let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: currentTime)
-
-        // Find best time slot within working hours based on score
-        let optimalHour = Int(8.0 + (12.0 * (1.0 - score))) // Higher score = earlier time
-        let candidateTime = startOfDay.addingTimeInterval(TimeInterval(optimalHour * 3600))
-
-        return candidateTime < startOfDay.addingTimeInterval(20 * 3600) ? candidateTime : nil
-    }
-
-    private func calculatePredictedDuration(current: TimeInterval, taskComplexity: Double, confidence: Double) -> TimeInterval {
-        // Adjust duration based on complexity and confidence
-        let complexityMultiplier = 0.8 + (taskComplexity * 0.4) // 0.8 to 1.2
-        let confidenceAdjustment = 1.0 + ((1.0 - confidence) * 0.2) // Up to 20% adjustment for low confidence
-
-        return current * complexityMultiplier * confidenceAdjustment
-    }
-
-    private func calculateTaskComplexity(_ task: PlannerTask) -> Double {
-        var complexity = 0.5 // Base complexity
-
-        // Adjust based on priority
-        complexity += Double(task.priority.numericValue) * 0.1
-
-        // Adjust based on focus protection
-        if task.isFocusSessionProtected {
-            complexity += 0.2
-        }
-
-        // Adjust based on description length (proxy for complexity)
-        complexity += Double(task.description.count) / 500.0 * 0.2
-
-        return min(max(complexity, 0.0), 1.0)
-    }
-
-    private func calculateSimilarTasksAccuracy(for task: PlannerTask, at hour: Int, data: [SchedulingFeedback]) -> Double {
-        let similarTasks = data.filter { feedback in
-            let feedbackHour = Calendar.current.component(.hour, from: feedback.plannedStartTime)
-            return feedbackHour == hour && feedback.userRating > 3
-        }
-
-        guard !similarTasks.isEmpty else { return 0.5 }
-
-        return similarTasks.map { $0.accuracyScore }.reduce(0, +) / Double(similarTasks.count)
-    }
-
-    private func generateReasoning(score: Double, task: PlannerTask) -> String {
-        if score > 0.8 {
-            return "High confidence prediction based on similar successful patterns"
-        } else if score > 0.5 {
-            return "Moderate confidence prediction with some uncertainty"
-        } else {
-            return "Low confidence prediction - limited historical data"
-        }
-    }
-}
+// MARK: - Productivity Analysis Classes
 
 class ProductivityAnalyzer {
     private var productivityPatterns: [Int: Double] = [:] // Hour -> Productivity Score
@@ -1263,7 +1004,9 @@ class PatternRecognizer {
         // Extract morning peak pattern (8-11 AM)
         let morningEnergy = energyPatterns.filter { $0.hourOfDay >= 8 && $0.hourOfDay <= 11 }
         if morningEnergy.count >= 3 {
-            let avgEnergy = morningEnergy.map { $0.averageEnergyLevel.numericValue }.reduce(0, +) / Double(morningEnergy.count)
+            let avgEnergy = morningEnergy
+                .map { Double($0.averageEnergyLevel.intValue) / 4.0 }
+                .reduce(0, +) / Double(morningEnergy.count)
             if avgEnergy > 0.6 {
                 extractedPatterns.append(SchedulePattern(
                     type: .morningPeak,
@@ -1276,7 +1019,9 @@ class PatternRecognizer {
         // Extract afternoon slump pattern (2-4 PM)
         let afternoonEnergy = energyPatterns.filter { $0.hourOfDay >= 14 && $0.hourOfDay <= 16 }
         if afternoonEnergy.count >= 2 {
-            let avgEnergy = afternoonEnergy.map { $0.averageEnergyLevel.numericValue }.reduce(0, +) / Double(afternoonEnergy.count)
+            let avgEnergy = afternoonEnergy
+                .map { Double($0.averageEnergyLevel.intValue) / 4.0 }
+                .reduce(0, +) / Double(afternoonEnergy.count)
             if avgEnergy < 0.4 {
                 extractedPatterns.append(SchedulePattern(
                     type: .afternoonSlump,
@@ -1374,11 +1119,11 @@ class AnomalyDetector {
         let availableEnergy = pattern.averageEnergyLevel
 
         // If task requires high energy but available energy is low
-        if requiredEnergy.numericValue >= 3 && availableEnergy.numericValue <= 1 {
+        if requiredEnergy.intValue >= 3 && availableEnergy.intValue <= 1 {
             // Find better time slot
             for betterHour in 8...19 {
                 if let betterPattern = patterns.first(where: { $0.hourOfDay == betterHour }),
-                   betterPattern.averageEnergyLevel.numericValue >= 3 {
+                   betterPattern.averageEnergyLevel.intValue >= 3 {
                     let calendar = Calendar.current
                     let startOfDay = calendar.startOfDay(for: block.startTime)
                     let betterTime = startOfDay.addingTimeInterval(TimeInterval(betterHour * 3600))
@@ -1451,19 +1196,10 @@ extension PlannerPriority {
         case .critical: return .critical
         }
     }
-
-    var numericValue: Int {
-        switch self {
-        case .low: return 1
-        case .medium: return 2
-        case .high: return 3
-        case .critical: return 4
-        }
-    }
 }
 
 extension PlannerEnergyLevel {
-    var numericValue: Int {
+    var intValue: Int {
         switch self {
         case .low: return 1
         case .medium: return 2

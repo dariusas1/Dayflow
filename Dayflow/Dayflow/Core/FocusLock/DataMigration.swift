@@ -112,11 +112,15 @@ class DataMigrationManager: ObservableObject {
         await updateProgress(0.7, message: "Migrating user preferences...")
         results.migratedPreferences = try await migrateUserPreferences()
 
-        // Step 5: Migrate Analytics Data
-        await updateProgress(0.85, message: "Migrating analytics data...")
+        // Step 5: Migrate Focus Sessions
+        await updateProgress(0.85, message: "Migrating focus sessions...")
+        results.migratedSessions = try await migrateFocusSessions()
+
+        // Step 6: Migrate Analytics Data
+        await updateProgress(0.9, message: "Migrating analytics data...")
         results.migratedAnalytics = try await migrateAnalyticsData()
 
-        // Step 6: Create Backup
+        // Step 7: Create Backup
         await updateProgress(0.95, message: "Creating backup...")
         try await createMigrationBackup()
 
@@ -204,6 +208,27 @@ class DataMigrationManager: ObservableObject {
         return 1 // One preferences object migrated
     }
 
+    private func migrateFocusSessions() async throws -> Int {
+        // Load any existing session data from legacy formats
+        let legacySessions = try loadLegacyFocusSessions()
+        var migratedCount = 0
+
+        // Migrate performance tracking data for existing sessions
+        for session in legacySessions {
+            // Convert to new FocusSession format with performance metrics
+            let focusSession = try await convertLegacySession(session)
+
+            // Save to new data store with performance tracking
+            try await saveFocusSession(focusSession)
+            migratedCount += 1
+        }
+
+        // Initialize session performance tracking for migrated sessions
+        try await initializeSessionPerformanceTracking()
+
+        return migratedCount
+    }
+
     private func migrateAnalyticsData() async throws -> Int {
         // Load existing analytics data
         let analyticsData = try loadAnalyticsData()
@@ -237,6 +262,46 @@ class DataMigrationManager: ObservableObject {
     private func loadAnalyticsData() throws -> [LegacyAnalyticsData] {
         // Load existing analytics data
         return []
+    }
+
+    private func loadLegacyFocusSessions() throws -> [LegacyFocusSession] {
+        // Load existing focus sessions from legacy storage
+        // For now, return empty array as placeholder
+        return []
+    }
+
+    private func convertLegacySession(_ legacySession: LegacyFocusSession) async throws -> FocusSession {
+        // Convert legacy session to new format with performance metrics
+        // Since FocusSession has let properties, we need to create a new session with the correct initializer
+        let focusSession = FocusSession(
+            id: legacySession.id,
+            taskName: legacySession.taskName,
+            startTime: legacySession.startTime,
+            endTime: legacySession.endTime,
+            state: legacySession.state,
+            allowedApps: legacySession.allowedApps,
+            emergencyBreaks: legacySession.emergencyBreaks.compactMap { legacyBreak in
+                EmergencyBreak(
+                    id: legacyBreak.id,
+                    reason: legacyBreak.reason,
+                    startTime: legacyBreak.startTime,
+                    endTime: legacyBreak.endTime,
+                    duration: legacyBreak.duration
+                )
+            },
+            interruptions: []
+        )
+
+        // Note: performanceMetrics is not a property of FocusSession based on the constructor
+        // We'll need to handle this separately if needed
+
+        return focusSession
+    }
+
+    private func initializeSessionPerformanceTracking() async throws {
+        // Initialize performance tracking system for migrated sessions
+        // This would set up the monitoring infrastructure
+        print("🔧 Initializing session performance tracking for migrated sessions")
     }
 
     // MARK: - Data Saving Helpers
@@ -328,13 +393,14 @@ struct MigrationResults: Codable {
     var migratedActivities: Int = 0
     var migratedCategories: Int = 0
     var createdFocusSessions: Int = 0
+    var migratedSessions: Int = 0
     var migratedPreferences: Int = 0
     var migratedAnalytics: Int = 0
     var warnings: [String] = []
     var errors: [String] = []
 
     var totalMigrated: Int {
-        return migratedActivities + migratedCategories + createdFocusSessions + migratedPreferences + migratedAnalytics
+        return migratedActivities + migratedCategories + createdFocusSessions + migratedSessions + migratedPreferences + migratedAnalytics
     }
 }
 
@@ -368,6 +434,25 @@ struct LegacyAnalyticsData {
     let event: String
     let timestamp: Date
     let properties: [String: Any]
+}
+
+struct LegacyFocusSession {
+    let id: UUID
+    let taskName: String
+    let startTime: Date
+    let endTime: Date?
+    let allowedApps: [String]
+    let state: FocusSessionState
+    let emergencyBreaks: [LegacyEmergencyBreak]
+    let performanceMetrics: [String: Any]
+}
+
+struct LegacyEmergencyBreak {
+    let id: UUID
+    let reason: BreakReason
+    let startTime: Date
+    let endTime: Date?
+    let duration: TimeInterval
 }
 
 // MARK: - Migrated Preferences
@@ -439,12 +524,17 @@ struct FocusSessionDetector {
         // Extract allowed apps from activities
         let allowedApps = extractAllowedApps(from: activities)
 
-        var session = FocusSession(taskName: taskName, allowedApps: allowedApps)
-        session.startTime = startTime
-        session.endTime = endTime
-        session.state = .ended
-
-        return session
+        // Create session with proper constructor since let properties can't be modified
+        return FocusSession(
+            id: UUID(),
+            taskName: taskName,
+            startTime: startTime,
+            endTime: endTime,
+            state: .ended,
+            allowedApps: allowedApps,
+            emergencyBreaks: [],
+            interruptions: []
+        )
     }
 
     private static func inferTaskName(from activities: [LegacyTimelineActivity]) -> String {

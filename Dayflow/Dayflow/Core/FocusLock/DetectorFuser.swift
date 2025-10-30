@@ -106,7 +106,8 @@ class DetectorFuser {
         fusionTimer?.invalidate()
 
         // Create new timer with current interval
-        fusionTimer = Timer.scheduledTimer(withTimeInterval: self.fusionInterval, repeats: true) { [weak self] _ in
+        let interval = fusionInterval
+        fusionTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { [weak self] in
                 await self?.performFusion()
             }
@@ -219,16 +220,17 @@ class DetectorFuser {
 
         // Weight the results
         let weightedResults = results.map { result in
-            let weight = calculateWeight(for: result)
+            let weight = self.calculateWeight(for: result)
             return WeightedResult(result: result, weight: weight)
         }
 
         // Sort by weight
-        var mutableResults = weightedResults
-        mutableResults.sort { $0.weight > $1.weight }
+        let sortedResults = weightedResults.sorted { $0.weight > $1.weight }
 
         // Get the highest weighted result
-        let topResult = mutableResults.first!.result
+        guard let topResult = sortedResults.first?.result else {
+            return nil
+        }
 
         // Create fused result
         let fusedResult = FusedDetectionResult(
@@ -313,7 +315,7 @@ class DetectorFuser {
 
         // Check if we have enough history
         let recentRecords = detectionHistory.filter {
-            $0.timestamp.timeIntervalSinceNow >= -stabilizationWindow
+            $0.timestamp.timeIntervalSinceNow >= -self.stabilizationWindow
         }
 
         guard recentRecords.count >= 3 else { return nil }

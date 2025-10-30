@@ -79,11 +79,6 @@ private extension Array where Element == ProductivityInsight {
     }
 }
 
-private extension ProductivityRecommendation.ImpactLevel {
-    var displayName: String {
-        rawValue.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-}
 
 struct InsightsView: View {
     let insights: [ProductivityInsight]
@@ -934,7 +929,6 @@ struct GoalProgressRow: View {
         }
     }
 }
-}
 
 // MARK: - Supporting Views
 
@@ -1430,14 +1424,13 @@ private extension TrendData {
     let widget = DashboardWidget(
         type: .insights,
         title: "Insights",
+        position: DashboardWidget.WidgetPosition(column: 0, row: 0, width: 4, height: 2),
         configuration: DashboardWidget.WidgetConfiguration(
             timeRange: .lastWeek,
             refreshInterval: 300,
             customSettings: [:]
         ),
-        position: DashboardWidget.WidgetPosition(x: 0, y: 0, width: 4, height: 2),
-        isVisible: true,
-        refreshInterval: 300
+        isVisible: true
     )
 
     let configuration = DashboardConfiguration(
@@ -1451,10 +1444,11 @@ private extension TrendData {
         preferences: .default
     )
 
-    return InsightsView(
+    InsightsView(
         insights: [focusInsight, energyInsight],
         recommendations: [dashboardRecommendation],
         trends: [trend],
         configuration: configuration
     )
 }
+#endif

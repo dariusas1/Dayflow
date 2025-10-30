@@ -560,6 +560,7 @@ class PerformanceValidator {
         testResults.append(result)
     }
 
+    }
     // MARK: - Stress Tests
 
     private func runStressTests() async {

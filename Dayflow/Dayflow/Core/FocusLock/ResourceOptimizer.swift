@@ -23,6 +23,9 @@ class ResourceOptimizer: ObservableObject {
     @Published var optimizationHistory: [OptimizationRecord] = []
     @Published var cacheStatistics: CacheStatistics = CacheStatistics()
     @Published var adaptiveSettings: AdaptiveSettings = AdaptiveSettings()
+    @Published var activeOptimizations: [OptimizationStrategy] = []
+    @Published var currentOptimizationEfficiency: Double = 0.0
+    @Published var optimizationRecommendations: [String] = []
 
     // MARK: - Private Properties
     private var optimizationTimer: Timer?
@@ -86,7 +89,7 @@ class ResourceOptimizer: ObservableObject {
         logger.info("Stopped resource optimization")
     }
 
-    func requestOptimization(for component: FocusLockComponent, priority: OptimizationPriority = .normal) async {
+    func requestOptimization(for component: FocusLockComponent, priority: OptimizationPriority = .medium) async {
         let strategy = await createOptimizationStrategy(for: component, priority: priority)
         await executeOptimizationStrategy(strategy)
     }
@@ -279,7 +282,7 @@ class ResourceOptimizer: ObservableObject {
     }
 
     private func createCPUOptimizationStrategy(severity: Double) -> OptimizationStrategy {
-        let actions: [OptimizationAction] = severity > 0.9 ? [
+        let actions: [ROOptimizationAction] = severity > 0.9 ? [
             .reduceProcessingIntensity(allComponents: 0.3),
             .pauseBackgroundTasks(except: [.critical]),
             .lowerThreadPriority(allComponents: .low)
@@ -301,7 +304,7 @@ class ResourceOptimizer: ObservableObject {
     }
 
     private func createMemoryOptimizationStrategy(severity: Double) -> OptimizationStrategy {
-        let actions: [OptimizationAction] = severity > 0.9 ? [
+        let actions: [ROOptimizationAction] = severity > 0.9 ? [
             .clearCache(target: .all, percentage: 0.5),
             .reduceMemoryFootprint(allComponents: 0.3),
             .enableMemoryCompression
@@ -340,7 +343,7 @@ class ResourceOptimizer: ObservableObject {
     }
 
     private func createPowerOptimizationStrategy(batteryLevel: Double) -> OptimizationStrategy {
-        let actions: [OptimizationAction] = batteryLevel < 0.1 ? [
+        let actions: [ROOptimizationAction] = batteryLevel < 0.1 ? [
             .enableLowPowerMode,
             .pauseBackgroundTasks(except: [.critical]),
             .reduceDisplayRefreshRate,
@@ -365,7 +368,7 @@ class ResourceOptimizer: ObservableObject {
 
     private func createThermalOptimizationStrategy(state: ThermalState) -> OptimizationStrategy {
         let severity = state == .critical ? 1.0 : 0.7
-        let actions: [OptimizationAction] = state == .critical ? [
+        let actions: [ROOptimizationAction] = state == .critical ? [
             .reduceProcessingIntensity(allComponents: 0.5),
             .pauseBackgroundTasks(except: [.critical]),
             .enableThermalThrottling,
@@ -412,7 +415,7 @@ class ResourceOptimizer: ObservableObject {
                 id: UUID(),
                 name: "Efficiency Mode Optimization",
                 component: .activityTap,
-                priority: .normal,
+                priority: .medium,
                 actions: [
                     .optimizeForPower,
                     .reduceBackgroundActivity,
@@ -428,7 +431,7 @@ class ResourceOptimizer: ObservableObject {
                 id: UUID(),
                 name: "Balanced Mode Optimization",
                 component: .activityTap,
-                priority: .normal,
+                priority: .medium,
                 actions: [
                     .enableAdaptiveOptimization,
                     .optimizeForUserExperience
@@ -453,7 +456,7 @@ class ResourceOptimizer: ObservableObject {
         logger.info("Executing optimization strategy: \(strategy.name)")
 
         for action in strategy.actions {
-            let result = await executeOptimizationAction(action)
+            let result = await executeROOptimizationAction(action)
             results.append(result)
         }
 
@@ -474,7 +477,7 @@ class ResourceOptimizer: ObservableObject {
         logger.info("Optimization strategy completed: \(strategy.name) - Success: \(record.success)")
     }
 
-    private func executeOptimizationAction(_ action: OptimizationAction) async -> ActionResult {
+    private func executeROOptimizationAction(_ action: ROOptimizationAction) async -> ActionResult {
         let startTime = Date()
 
         do {
@@ -997,86 +1000,8 @@ struct PerformanceAnalysis {
     let requiresOptimization: Bool
 }
 
-struct OptimizationStrategy: Identifiable, Codable {
-    let id: UUID
-    let name: String
-    let component: FocusLockComponent
-    let priority: OptimizationPriority
-    let actions: [OptimizationAction]
-    let estimatedImpact: OptimizationImpact
-    let duration: TimeInterval
-    let timestamp: Date
-}
-
-struct OptimizationRecord: Codable {
-    let strategy: OptimizationStrategy
-    let startTime: Date
-    let duration: TimeInterval
-    let results: [ActionResult]
-    let success: Bool
-
-    var endTime: Date {
-        startTime.addingTimeInterval(duration)
-    }
-}
-
-struct ActionResult: Codable {
-    let action: OptimizationAction
-    let success: Bool
-    let duration: TimeInterval
-    let error: String?
-}
-
-enum OptimizationPriority: Int, CaseIterable, Codable {
-    case critical = 1
-    case high = 2
-    case normal = 3
-    case low = 4
-}
-
-enum OptimizationImpact: String, CaseIterable, Codable {
-    case low = "low"
-    case medium = "medium"
-    case high = "high"
-}
-
-enum OptimizationAction: Codable {
-    case clearCache(target: CacheTarget, percentage: Double)
-    case reduceProcessingIntensity(component: FocusLockComponent, intensity: Double)
-    case reduceMemoryFootprint(component: FocusLockComponent, reduction: Double)
-    case pauseBackgroundTasks(except: [TaskPriority])
-    case enableLowPowerMode
-    case reduceBatchSize(component: FocusLockComponent, reduction: Double)
-    case optimizeIndexing(component: FocusLockComponent)
-    case reduceProcessingFrequency(component: FocusLockComponent, interval: TimeInterval)
-    case lowerQuality(component: FocusLockComponent)
-    case deferProcessing(component: FocusLockComponent, delay: TimeInterval)
-    case reducePollingFrequency(component: FocusLockComponent, interval: TimeInterval)
-    case enableLazyLoading(component: FocusLockComponent)
-    case useSimplifiedModel(component: FocusLockComponent)
-    case reduceContextLength(component: FocusLockComponent, maxLength: Int)
-    case enableResponseCaching(component: FocusLockComponent)
-    case reduceSamplingRate(component: FocusLockComponent, rate: Double)
-    case enableEventFiltering(component: FocusLockComponent)
-    case lowerThreadPriority(component: FocusLockComponent, priority: ThreadPriority)
-    case optimizeTaskScheduling
-    case enableMemoryCompression
-    case clearTempFiles
-    case compressOldCache(age: TimeInterval)
-    case optimizeDatabase(component: FocusLockComponent)
-    case increaseCacheSize(percentage: Double)
-    case prioritizeForegroundTasks
-    case optimizeForSpeed
-    case optimizeForPower
-    case reduceBackgroundActivity
-    case enableSmartCaching
-    case enableAdaptiveOptimization
-    case optimizeForUserExperience
-    case reduceDisplayRefreshRate
-    case disableNonEssentialFeatures
-    case enableThermalThrottling
-    case disableHighIntensityFeatures
-}
+// NOTE: OptimizationStrategy, ActionResult, and related types are defined in FocusLockModels.swift
+// to avoid duplicate definitions and type conflicts
 
 enum CacheTarget: String, CaseIterable, Codable {
     case all = "all"
@@ -1183,18 +1108,6 @@ struct PowerSettings: Codable {
     }
 }
 
-struct OptimizationRecommendation: Codable {
-    let title: String
-    let description: String
-    let impact: OptimizationImpact
-    let effort: ImplementationEffort
-}
-
-enum ImplementationEffort: String, CaseIterable, Codable {
-    case low = "low"
-    case medium = "medium"
-    case high = "high"
-}
 
 struct PerformanceProfile {
     let name: String

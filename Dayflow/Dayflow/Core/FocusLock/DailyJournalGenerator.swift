@@ -24,7 +24,7 @@ class DailyJournalGenerator: ObservableObject {
 
     // MARK: - Dependencies
     private let jarvisChat = JarvisChat.shared
-    private let memoryStore = MemoryStore.shared
+    private let memoryStore = HybridMemoryStore.shared
     private let sessionManager = SessionManager.shared
     private let settingsManager = SettingsManager.shared
     private let logger = Logger(subsystem: "FocusLock", category: "DailyJournalGenerator")
@@ -158,15 +158,12 @@ class DailyJournalGenerator: ObservableObject {
 
             // Step 4: Create final journal
             let journal = DailyJournal(
-                id: UUID(),
                 date: date,
                 content: content,
                 template: template,
                 highlights: highlights,
-                sentimentAnalysis: sentiment,
-                userPreferences: preferences,
-                createdAt: Date(),
-                updatedAt: Date()
+                sentiment: sentiment,
+                userPreferences: preferences
             )
 
             await MainActor.run {
@@ -260,15 +257,12 @@ class DailyJournalGenerator: ObservableObject {
         }
 
         let journal = DailyJournal(
-            id: UUID(),
             date: date,
             content: content,
             template: template,
             highlights: highlights,
-            sentimentAnalysis: sentiment,
-            userPreferences: preferences,
-            createdAt: Date(),
-            updatedAt: Date()
+            sentiment: sentiment,
+            userPreferences: preferences
         )
 
         return journal
@@ -288,7 +282,7 @@ class DailyJournalGenerator: ObservableObject {
         let memories = try await getRelevantMemories(for: date)
 
         // Get user preferences and patterns
-        let userPatterns = userLearningData.engagementPatterns
+        let userPatterns = userLearningData.engagementPatterns.map { $0.template.rawValue }
 
         return JournalContextData(
             date: date,
@@ -298,7 +292,7 @@ class DailyJournalGenerator: ObservableObject {
             userPatterns: userPatterns,
             weather: await getWeatherForDay(date), // Optional enhancement
             dayOfWeek: calendar.component(.weekday, from: date),
-            isWeekend: calendar.isWeekend(date)
+            isWeekend: calendar.component(.weekday, from: date) >= 6 // Saturday=7, Sunday=1
         )
     }
 
@@ -314,11 +308,10 @@ class DailyJournalGenerator: ObservableObject {
             if let summary = sessionManager.lastSessionSummary {
                 let sessionHighlight = JournalHighlight(
                     id: UUID(),
-                    category: .achievement,
                     title: "Focus Session: \(session.taskName)",
-                    description: "Completed focus session with duration \(summary.durationFormatted)",
+                    content: "Completed focus session with duration \(summary.durationFormatted)",
+                    category: .achievement,
                     significance: calculateSignificance(session: session, preferences: preferences),
-                    relatedActivities: [],
                     timestamp: session.startTime
                 )
                 highlights.append(sessionHighlight)
@@ -333,11 +326,10 @@ class DailyJournalGenerator: ObservableObject {
                 let category = determineCategory(for: activity)
                 let highlight = JournalHighlight(
                     id: UUID(),
-                    category: category,
                     title: activity.title,
-                    description: activity.description,
+                    content: activity.description,
+                    category: category,
                     significance: significance,
-                    relatedActivities: [activity.id],
                     timestamp: activity.timestamp
                 )
                 highlights.append(highlight)
@@ -348,11 +340,10 @@ class DailyJournalGenerator: ObservableObject {
         for memory in contextData.memories.prefix(3) {
             let highlight = JournalHighlight(
                 id: UUID(),
-                category: .insight,
                 title: "Memory: \(memory.title)",
-                description: memory.content,
+                content: memory.content,
+                category: .insight,
                 significance: 0.7,
-                relatedActivities: [],
                 timestamp: memory.timestamp
             )
             highlights.append(highlight)
@@ -360,7 +351,7 @@ class DailyJournalGenerator: ObservableObject {
 
         // Sort by significance and limit to top highlights
         highlights.sort { $0.significance > $1.significance }
-        return Array(highlights.prefix(preferences.maxHighlights))
+        return Array(highlights.prefix(5))
     }
 
     /// Generate journal content using AI
@@ -379,10 +370,7 @@ class DailyJournalGenerator: ObservableObject {
         )
 
         // Use JarvisChat for AI generation
-        let response = try await jarvisChat.sendMessage(
-            prompt,
-            systemMessage: "You are an empathetic AI journal assistant that creates personalized, meaningful journal entries. Focus on insights, growth, and authentic reflection."
-        )
+        let response = try await jarvisChat.sendMessage(prompt)
 
         return response.content
     }
@@ -400,7 +388,7 @@ class DailyJournalGenerator: ObservableObject {
 
         User Preferences:
         - Focus Areas: \(preferences.focusAreas.map(\.rawValue).joined(separator: ", "))
-        - Length: \(preferences.length.rawValue)
+        - Length: \(preferences.lengthPreference.rawValue)
         - Tone: \(preferences.tone.rawValue)
         - Include Questions: \(preferences.includeQuestions ? "Yes" : "No")
 
@@ -408,13 +396,13 @@ class DailyJournalGenerator: ObservableObject {
         """
 
         for highlight in highlights {
-            prompt += "\n- \(highlight.title): \(highlight.description)"
+            prompt += "\n- \(highlight.title): \(highlight.content)"
         }
 
         prompt += "\n\nSession Summary:\n"
         if let summary = sessionManager.lastSessionSummary {
             prompt += "- Total focus time: \(summary.durationFormatted)\n"
-            prompt += "- Sessions completed: \(summary.sessionCount)\n"
+            prompt += "- Session completed: \(summary.isCompleted ? "Yes" : "No")\n"
         }
 
         prompt += "\n\nTemplate Guidance:\n\(templatePrompts[template] ?? "")"
@@ -442,19 +430,18 @@ class DailyJournalGenerator: ObservableObject {
 
         let overallSentiment: SentimentScore
         switch sentimentScore {
-        case 0.3...: overallSentiment = .positive
-        case -0.3..<0.3: overallSentiment = .neutral
-        default: overallSentiment = .negative
+        case 0.3...: overallSentiment = SentimentScore(emotion: "positive", score: sentimentScore)
+        case -0.3..<0.3: overallSentiment = SentimentScore(emotion: "neutral", score: sentimentScore)
+        default: overallSentiment = SentimentScore(emotion: "negative", score: sentimentScore)
         }
 
         let emotions = analyzeEmotions(in: content)
 
         return SentimentAnalysis(
             overallSentiment: overallSentiment,
-            sentimentScore: sentimentScore,
-            emotionScores: emotions,
+            emotionalBreakdown: emotions,
             confidence: 0.75,
-            keywords: extractKeywords(content: content)
+            keyEmotions: extractKeywords(content: content)
         )
     }
 
@@ -473,8 +460,19 @@ class DailyJournalGenerator: ObservableObject {
 
     private func getRelevantMemories(for date: Date) async throws -> [MemoryRecord] {
         // Use MemoryStore to get relevant memories for the day
-        let query = "activities experiences memories \(date.formatted(date: .abbreviated))"
-        return try await memoryStore.search(query, limit: 5)
+        let query = "activities experiences memories \(date.formatted(date: .abbreviated)) time:\(date.formatted(date: .abbreviated))"
+        let searchResults = try await memoryStore.search(query, limit: 5)
+
+        // Convert MemorySearchResult to MemoryRecord
+        return searchResults.map { result in
+            MemoryRecord(
+                id: result.id,
+                title: "Memory from \(result.item.timestamp.formatted(date: .abbreviated))",
+                content: result.item.content,
+                timestamp: result.item.timestamp,
+                relevance: result.score
+            )
+        }
     }
 
     private func getWeatherForDay(_ date: Date) async -> String? {
@@ -499,7 +497,7 @@ class DailyJournalGenerator: ObservableObject {
         var significance: Double = 0.5 // Base significance
 
         // Boost based on focus areas
-        if preferences.focusAreas.contains(.wellbeing) && activity.category == .health {
+        if preferences.focusAreas.contains(.health) && activity.category == .health {
             significance += 0.3
         }
         if preferences.focusAreas.contains(.productivity) && activity.category == .work {
@@ -509,13 +507,13 @@ class DailyJournalGenerator: ObservableObject {
         return min(significance, 1.0)
     }
 
-    private func determineCategory(for activity: ActivityRecord) -> HighlightCategory {
+    private func determineCategory(for activity: ActivityRecord) -> JournalHighlight.HighlightCategory {
         // Determine highlight category based on activity type
         switch activity.category {
         case .work:
             return .achievement
         case .health:
-            return .moment
+            return .gratitude
         case .learning:
             return .learning
         case .social:
@@ -528,12 +526,12 @@ class DailyJournalGenerator: ObservableObject {
     private func analyzeEmotions(in content: String) -> [EmotionScore] {
         // Simple emotion analysis (can be enhanced)
         let emotionWords: [EmotionType: [String]] = [
-            .joy: ["happy", "joyful", "excited", "pleased", "grateful"],
+            .happy: ["happy", "joyful", "excited", "pleased", "grateful"],
             .calm: ["calm", "peaceful", "relaxed", "serene", "tranquil"],
-            .focused: ["focused", "concentrated", "attentive", "engaged", "productive"],
+            .excited: ["excited", "enthusiastic", "energetic", "thrilled"],
             .grateful: ["grateful", "thankful", "appreciative", "blessed"],
-            .challenged: ["challenged", "difficult", "hard", "struggled"],
-            .accomplished: ["accomplished", "achieved", "completed", "successful", "proud"]
+            .proud: ["accomplished", "achieved", "completed", "successful", "proud"],
+            .frustrated: ["challenged", "difficult", "hard", "struggled", "frustrated"]
         ]
 
         var emotionScores: [EmotionScore] = []
@@ -545,9 +543,9 @@ class DailyJournalGenerator: ObservableObject {
 
             if score > 0 {
                 emotionScores.append(EmotionScore(
-                    emotion: emotion,
-                    intensity: min(score * 10, 1.0),
-                    confidence: 0.7
+                    emotion: emotion.rawValue,
+                    score: min(score * 10, 1.0),
+                    intensity: min(score * 10, 1.0)
                 ))
             }
         }
@@ -597,22 +595,36 @@ class DailyJournalGenerator: ObservableObject {
     }
 
     private func updateUserLearningData(with journal: DailyJournal?, engagement: JournalEngagement) {
-        userLearningData.totalJournalsGenerated += 1
-
         if let journal = journal {
-            userLearningData.engagementPatterns[journal.template.rawValue] =
-                (userLearningData.engagementPatterns[journal.template.rawValue] ?? 0) + 1
+            // Find existing engagement pattern for this template or create new one
+            if let existingIndex = userLearningData.engagementPatterns.firstIndex(where: { $0.template == journal.template }) {
+                // Update existing pattern - increment usage count
+                userLearningData.engagementPatterns[existingIndex] = EngagementPattern(
+                    template: journal.template,
+                    avgEngagementScore: userLearningData.engagementPatterns[existingIndex].avgEngagementScore,
+                    usageCount: userLearningData.engagementPatterns[existingIndex].usageCount + 1,
+                    lastUsed: Date()
+                )
+            } else {
+                // Create new engagement pattern
+                let newPattern = EngagementPattern(
+                    template: journal.template,
+                    avgEngagementScore: 0.5, // Default engagement score
+                    usageCount: 1,
+                    lastUsed: Date()
+                )
+                userLearningData.engagementPatterns.append(newPattern)
+            }
 
-            // Update last engagement
-            userLearningData.lastEngagement = JournalEngagementData(
-                date: Date(),
-                engagementType: engagement,
-                template: journal.template,
+            // Record this interaction
+            let interaction = JournalInteraction(
+                journalId: journal.id,
+                engagementScore: engagement == .high ? 1.0 : (engagement == .medium ? 0.7 : 0.3),
+                actions: [],
                 feedback: nil
             )
+            userLearningData.recordInteraction(interaction)
         }
-
-        userLearningData.lastGeneratedDate = Date()
     }
 
     // MARK: - Enhanced Generation Methods
@@ -633,10 +645,10 @@ class DailyJournalGenerator: ObservableObject {
             sessions: await getSessionsForDay(date),
             activities: await getActivitiesForDay(date),
             memories: try await getRelevantMemories(for: date),
-            userPatterns: userLearningData.engagementPatterns,
+            userPatterns: userLearningData.engagementPatterns.map { $0.template.rawValue },
             weather: nil,
             dayOfWeek: Calendar.current.component(.weekday, from: date),
-            isWeekend: Calendar.current.isWeekend(date)
+            isWeekend: Calendar.current.component(.weekday, from: date) >= 6
         )
 
         return try await generateJournalContent(

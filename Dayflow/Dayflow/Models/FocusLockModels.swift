@@ -8,6 +8,201 @@
 import Foundation
 import SwiftUI
 
+// MARK: - Coding Utilities
+
+enum AnyCodableValue: Equatable, Codable {
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case string(String)
+    case array([AnyCodableValue])
+    case dictionary([String: AnyCodableValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let bool = try? container.decode(Bool.self) {
+            self = .bool(bool)
+        } else if let int = try? container.decode(Int.self) {
+            self = .int(int)
+        } else if let double = try? container.decode(Double.self) {
+            self = .double(double)
+        } else if let string = try? container.decode(String.self) {
+            self = .string(string)
+        } else if let array = try? container.decode([AnyCodable].self) {
+            self = .array(array.map { $0.value })
+        } else if let dictionary = try? container.decode([String: AnyCodable].self) {
+            self = .dictionary(dictionary.mapValues { $0.value })
+        } else {
+            self = .null
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .bool(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let values):
+            try container.encode(values.map { AnyCodable(value: $0) })
+        case .dictionary(let dictionary):
+            try container.encode(dictionary.mapValues { AnyCodable(value: $0) })
+        case .null:
+            try container.encodeNil()
+        }
+    }
+}
+
+struct AnyCodable: Codable {
+    let value: AnyCodableValue
+
+    init(_ value: Any) {
+        self.value = AnyCodableValue(any: value)
+    }
+
+    init(value: AnyCodableValue) {
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        self.value = try AnyCodableValue(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try value.encode(to: encoder)
+    }
+}
+
+extension AnyCodableValue {
+    init(any value: Any) {
+        let mirror = Mirror(reflecting: value)
+        if mirror.displayStyle == .optional {
+            if let child = mirror.children.first {
+                self.init(any: child.value)
+            } else {
+                self = .null
+            }
+            return
+        }
+
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() {
+                self = .bool(number.boolValue)
+                return
+            }
+
+            if number.doubleValue.rounded() == number.doubleValue {
+                self = .int(number.intValue)
+            } else {
+                self = .double(number.doubleValue)
+            }
+            return
+        }
+
+        switch value {
+        case let codable as AnyCodable:
+            self = codable.value
+        case let codableValue as AnyCodableValue:
+            self = codableValue
+        case let bool as Bool:
+            self = .bool(bool)
+        case let int as Int:
+            self = .int(int)
+        case let int32 as Int32:
+            self = .int(Int(int32))
+        case let int64 as Int64:
+            self = .int(Int(int64))
+        case let double as Double:
+            self = .double(double)
+        case let float as Float:
+            self = .double(Double(float))
+        case let string as String:
+            self = .string(string)
+        case let uuid as UUID:
+            self = .string(uuid.uuidString)
+        case let array as [AnyCodable]:
+            self = .array(array.map { $0.value })
+        case let array as [Any]:
+            self = .array(array.map { AnyCodableValue(any: $0) })
+        case let dictionary as [String: AnyCodable]:
+            self = .dictionary(dictionary.mapValues { $0.value })
+        case let dictionary as [String: Any]:
+            self = .dictionary(dictionary.mapValues { AnyCodableValue(any: $0) })
+        case is NSNull:
+            self = .null
+        default:
+            self = .null
+        }
+    }
+
+    var stringValue: String? {
+        if case let .string(value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var intValue: Int? {
+        switch self {
+        case .int(let value):
+            return value
+        case .double(let value) where value.rounded() == value:
+            return Int(value)
+        default:
+            return nil
+        }
+    }
+
+    var doubleValue: Double? {
+        switch self {
+        case .double(let value):
+            return value
+        case .int(let value):
+            return Double(value)
+        default:
+            return nil
+        }
+    }
+
+    var boolValue: Bool? {
+        if case let .bool(value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var arrayValue: [AnyCodableValue]? {
+        if case let .array(values) = self {
+            return values
+        }
+        return nil
+    }
+
+    var dictionaryValue: [String: AnyCodableValue]? {
+        if case let .dictionary(values) = self {
+            return values
+        }
+        return nil
+    }
+}
+
+extension AnyCodable {
+    var stringValue: String? { value.stringValue }
+    var intValue: Int? { value.intValue }
+    var doubleValue: Double? { value.doubleValue }
+    var boolValue: Bool? { value.boolValue }
+    var arrayValue: [AnyCodableValue]? { value.arrayValue }
+    var dictionaryValue: [String: AnyCodableValue]? { value.dictionaryValue }
+}
+
 // MARK: - Session State
 enum FocusSessionState: String, CaseIterable, Codable {
     case idle = "idle"
@@ -481,6 +676,7 @@ struct TimeBlock: Codable, Identifiable {
     var isProtected: Bool // Cannot be moved during rescheduling
     var energyLevel: PlannerEnergyLevel
     var breakBuffer: TimeInterval // Buffer time before/after this block
+    var productivityMultiplier: Double = 1.0 // Productivity adjustment factor
 
     var duration: TimeInterval {
         return endTime.timeIntervalSince(startTime)
@@ -505,7 +701,8 @@ struct TimeBlock: Codable, Identifiable {
         title: String = "",
         isProtected: Bool = false,
         energyLevel: PlannerEnergyLevel = .medium,
-        breakBuffer: TimeInterval = 300 // 5 minutes default
+        breakBuffer: TimeInterval = 300, // 5 minutes default
+        productivityMultiplier: Double = 1.0
     ) {
         self.id = UUID()
         self.startTime = startTime
@@ -516,6 +713,7 @@ struct TimeBlock: Codable, Identifiable {
         self.isProtected = isProtected
         self.energyLevel = energyLevel
         self.breakBuffer = breakBuffer
+        self.productivityMultiplier = productivityMultiplier
     }
 }
 
@@ -807,8 +1005,8 @@ struct SchedulingFeedback: Codable {
     let taskID: UUID
     let plannedStartTime: Date
     let plannedEndTime: Date
-    let actualStartTime: Date?
-    let actualEndTime: Date?
+    var actualStartTime: Date?
+    var actualEndTime: Date?
     let userRating: Int // 1-5 rating of scheduling quality
     let feedback: String
     let timestamp: Date
@@ -883,7 +1081,7 @@ struct CalendarEvent: Codable, Identifiable {
 
 // MARK: - Dashboard Productivity Models
 
-struct ProductivityMetric: Identifiable, Codable {
+struct ProductivityMetric: Identifiable, Codable, Equatable {
     let id = UUID()
     let name: String
     let value: Double
@@ -891,6 +1089,10 @@ struct ProductivityMetric: Identifiable, Codable {
     let category: MetricCategory
     let timestamp: Date
     let metadata: [String: AnyCodable]
+
+    static func == (lhs: ProductivityMetric, rhs: ProductivityMetric) -> Bool {
+        return lhs.id == rhs.id && lhs.name == rhs.name && lhs.value == rhs.value && lhs.timestamp == rhs.timestamp
+    }
 
     enum MetricCategory: String, Codable, CaseIterable {
         case focusTime = "focus_time"
@@ -1095,6 +1297,7 @@ struct DashboardWidget: Identifiable, Codable, Equatable {
         }
     }
     var isVisible: Bool
+    var configuration: WidgetConfiguration = WidgetConfiguration()
 
     init(
         id: String = UUID().uuidString,
@@ -1103,7 +1306,8 @@ struct DashboardWidget: Identifiable, Codable, Equatable {
         subtitle: String? = nil,
         position: WidgetPosition = WidgetPosition(),
         size: WidgetSize = .medium,
-        isVisible: Bool = true
+        isVisible: Bool = true,
+        configuration: WidgetConfiguration = WidgetConfiguration()
     ) {
         self.id = id
         self.type = type
@@ -1115,6 +1319,7 @@ struct DashboardWidget: Identifiable, Codable, Equatable {
         self.position = adjustedPosition
         self.size = size
         self.isVisible = isVisible
+        self.configuration = configuration
     }
 
     var systemImage: String { type.icon }
@@ -1196,6 +1401,34 @@ struct DashboardWidget: Identifiable, Codable, Equatable {
             set { row = newValue }
         }
     }
+
+    struct WidgetConfiguration: Codable, Equatable {
+        let timeRange: TimeRange
+        let refreshInterval: Int
+        let customSettings: [String: String]
+
+        enum TimeRange: String, Codable, CaseIterable {
+            case lastHour = "last_hour"
+            case lastDay = "last_day"
+            case lastWeek = "last_week"
+            case lastMonth = "last_month"
+
+            var displayName: String {
+                switch self {
+                case .lastHour: return "Last Hour"
+                case .lastDay: return "Last Day"
+                case .lastWeek: return "Last Week"
+                case .lastMonth: return "Last Month"
+                }
+            }
+        }
+
+        init(timeRange: TimeRange = .lastDay, refreshInterval: Int = 300, customSettings: [String: String] = [:]) {
+            self.timeRange = timeRange
+            self.refreshInterval = refreshInterval
+            self.customSettings = customSettings
+        }
+    }
 }
 
 // MARK: - Recommendation Engine Models
@@ -1205,7 +1438,7 @@ struct Recommendation: Identifiable, Codable {
     let title: String
     let description: String
     let category: RecommendationCategory
-    let priority: Priority
+    let priority: PlannerPriority
     let actionable: Bool
     let estimatedImpact: Impact
     let suggestedActions: [SuggestedAction]
@@ -1646,7 +1879,7 @@ struct MemoryUsage: Codable {
         self.deallocations = deallocations
     }
 
-    convenience init(current: Double) {
+    init(current: Double) {
         self.init(current: current, peak: current, average: current, allocations: 0, deallocations: 0)
     }
 }
@@ -1867,6 +2100,10 @@ struct PowerEfficiencyMetrics: Codable {
         return efficiencyScore >= 0.7 && powerConsumption < 10.0
     }
 
+    var energyEfficiency: Double {
+        return efficiencyScore * 100 // Convert to percentage
+    }
+
     init(powerConsumption: Double, energyPerOperation: Double, efficiencyScore: Double, recommendations: [PowerRecommendation] = []) {
         self.timestamp = Date()
         self.powerConsumption = powerConsumption
@@ -1912,11 +2149,11 @@ struct BackgroundTaskMetrics: Codable {
     let component: FocusLockComponent
     let priority: TaskPriority
     let startTime: Date
-    let endTime: Date?
-    let duration: TimeInterval?
+    var endTime: Date?
+    var duration: TimeInterval?
     let resourceUsage: ResourceUsage
-    let success: Bool
-    let error: String?
+    var success: Bool
+    var error: String?
 
     var isCompleted: Bool {
         return endTime != nil && duration != nil
@@ -1979,6 +2216,7 @@ struct BackgroundTaskInfo: Codable, Identifiable {
     let startTime: Date
     let endTime: Date?
     let isActive: Bool
+    let priority: TaskPriority
     let resourceUsage: ResourceUsage?
 
     var displayName: String {
@@ -1989,12 +2227,13 @@ struct BackgroundTaskInfo: Codable, Identifiable {
         return isActive ? "Currently running" : "Completed"
     }
 
-    init(name: String, identifier: String, isActive: Bool = true, resourceUsage: ResourceUsage? = nil) {
+    init(name: String, identifier: String, priority: TaskPriority = .medium, isActive: Bool = true, resourceUsage: ResourceUsage? = nil) {
         self.name = name
         self.identifier = identifier
         self.startTime = Date()
         self.endTime = nil
         self.isActive = isActive
+        self.priority = priority
         self.resourceUsage = resourceUsage
     }
 }
@@ -2021,6 +2260,11 @@ struct ComponentBatteryUsage: Codable, Identifiable {
         case 0.6..<0.8: return .orange
         default: return .red
         }
+    }
+
+    // Backward compatibility property for views that expect powerConsumption
+    var powerConsumption: Double {
+        return usageLevel
     }
 
     init(component: FocusLockComponent, usageLevel: Double, duration: TimeInterval = 60.0) {
@@ -2131,6 +2375,15 @@ enum TaskPriority: Int, CaseIterable, Codable {
         case .high: return "High"
         case .medium: return "Medium"
         case .low: return "Low"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .critical: return "red"
+        case .high: return "orange"
+        case .medium: return "yellow"
+        case .low: return "green"
         }
     }
 }
@@ -2829,6 +3082,7 @@ struct ProductivityInsight: Codable, Identifiable {
     let actionableItems: [ActionableItem]
     let validUntil: Date?
     let createdAt: Date
+    let priority: PlannerPriority
 
     enum InsightType: String, CaseIterable, Codable {
         case peakPerformance = "peak_performance"
@@ -2841,7 +3095,7 @@ struct ProductivityInsight: Codable, Identifiable {
         case focusQuality = "focus_quality"
     }
 
-    init(type: InsightType, title: String, description: String, metrics: [ProductivityMetric] = [], recommendations: [ProductivityRecommendation] = [], confidenceLevel: Double = 0.8, actionableItems: [ActionableItem] = [], validUntil: Date? = nil) {
+    init(type: InsightType, title: String, description: String, metrics: [ProductivityMetric] = [], recommendations: [ProductivityRecommendation] = [], confidenceLevel: Double = 0.8, actionableItems: [ActionableItem] = [], validUntil: Date? = nil, priority: PlannerPriority = .medium) {
         self.id = UUID()
         self.type = type
         self.title = title
@@ -2852,6 +3106,16 @@ struct ProductivityInsight: Codable, Identifiable {
         self.actionableItems = actionableItems
         self.validUntil = validUntil
         self.createdAt = Date()
+        self.priority = priority
+    }
+
+    // Computed properties for UI compatibility
+    var icon: String {
+        return type.systemImage
+    }
+
+    var color: Color {
+        return type.color
     }
 }
 
@@ -3092,7 +3356,14 @@ enum JournalTemplate: String, CaseIterable, Codable {
 }
 
 // MARK: - Journal Engagement
-struct JournalEngagement: Codable {
+enum JournalEngagement: String, CaseIterable, Codable {
+    case completed = "completed"
+    case abandoned = "abandoned"
+    case partial = "partial"
+    case skipped = "skipped"
+}
+
+struct JournalEngagementMetrics: Codable {
     let sessionDuration: TimeInterval
     let entryCount: Int
     let averageEntryLength: Int
@@ -3670,8 +3941,10 @@ struct ComponentMetrics: Codable, Identifiable {
     let responseTime: TimeInterval
     let errorRate: Double
     let timestamp: Date
+    let health: HealthStatus
+    let activeTasks: Int
 
-    init(id: UUID = UUID(), componentName: String, cpuUsage: Double, memoryUsage: Double, responseTime: TimeInterval, errorRate: Double, timestamp: Date = Date()) {
+    init(id: UUID = UUID(), componentName: String, cpuUsage: Double, memoryUsage: Double, responseTime: TimeInterval, errorRate: Double, timestamp: Date = Date(), health: HealthStatus = .unknown, activeTasks: Int = 0) {
         self.id = id
         self.componentName = componentName
         self.cpuUsage = cpuUsage
@@ -3679,6 +3952,8 @@ struct ComponentMetrics: Codable, Identifiable {
         self.responseTime = responseTime
         self.errorRate = errorRate
         self.timestamp = timestamp
+        self.health = health
+        self.activeTasks = activeTasks
     }
 }
 
@@ -3689,7 +3964,10 @@ struct ComponentHealth: Codable, Identifiable {
     let status: HealthStatus
     let lastCheck: Date
     let issues: [String]
-    let metrics: ComponentMetrics
+
+    var displayName: String {
+        return componentName
+    }
 
     enum HealthStatus: String, Codable, CaseIterable {
         case healthy = "healthy"
@@ -3784,6 +4062,10 @@ enum EmotionType: String, CaseIterable, Codable {
     case grateful = "grateful"
     case confused = "confused"
     case hopeful = "hopeful"
+    case joy = "joy"
+    case focused = "focused"
+    case challenged = "challenged"
+    case accomplished = "accomplished"
 
     var displayName: String {
         switch self {
@@ -3797,6 +4079,10 @@ enum EmotionType: String, CaseIterable, Codable {
         case .grateful: return "Grateful"
         case .confused: return "Confused"
         case .hopeful: return "Hopeful"
+        case .joy: return "Joy"
+        case .focused: return "Focused"
+        case .challenged: return "Challenged"
+        case .accomplished: return "Accomplished"
         }
     }
 
@@ -3812,6 +4098,10 @@ enum EmotionType: String, CaseIterable, Codable {
         case .grateful: return "🙏"
         case .confused: return "😕"
         case .hopeful: return "🌟"
+        case .joy: return "😄"
+        case .focused: return "🎯"
+        case .challenged: return "💪"
+        case .accomplished: return "✨"
         }
     }
 }
@@ -3848,44 +4138,395 @@ enum CalendarSource: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Performance Debug Types
+
+struct PerformanceDebugTaskInfo: Codable, Identifiable {
+    let id = UUID()
+    let name: String
+    let startTime: Date
+    let duration: TimeInterval
+    let cpuUsage: Double
+    let memoryUsage: Int64
+    let status: TaskStatus
+
+    var formattedDuration: String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute, .second]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: duration) ?? "0s"
+    }
+
+    var formattedMemoryUsage: String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .memory
+        return formatter.string(fromByteCount: memoryUsage) ?? "0 MB"
+    }
+}
+
+enum TaskStatus: String, Codable, CaseIterable {
+    case running = "running"
+    case completed = "completed"
+    case failed = "failed"
+    case cancelled = "cancelled"
+
+    var displayName: String {
+        switch self {
+        case .running: return "Running"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
+        }
+    }
+}
+
+struct PerformanceComponentBatteryUsage: Codable, Identifiable {
+    let id = UUID()
+    let componentName: String
+    let currentUsage: Double
+    let averageUsage: Double
+    let peakUsage: Double
+    let lastUpdated: Date
+
+    var usagePercentage: Double {
+        return min(currentUsage * 100, 100)
+    }
+
+    var statusColor: String {
+        switch usagePercentage {
+        case 0..<30: return "green"
+        case 30..<70: return "yellow"
+        default: return "red"
+        }
+    }
+}
+
+struct PerformancePowerOptimizationRecommendation: Codable, Identifiable {
+    let id = UUID()
+    let title: String
+    let description: String
+    let priority: PlannerPriority
+    let potentialSavings: Double
+    let implementationComplexity: Complexity
+    let isApplicable: Bool
+
+    enum Priority: String, Codable, CaseIterable {
+        case low = "low"
+        case medium = "medium"
+        case high = "high"
+        case critical = "critical"
+
+        var displayName: String {
+            switch self {
+            case .low: return "Low"
+            case .medium: return "Medium"
+            case .high: return "High"
+            case .critical: return "Critical"
+            }
+        }
+
+        var color: String {
+            switch self {
+            case .low: return "blue"
+            case .medium: return "orange"
+            case .high: return "red"
+            case .critical: return "purple"
+            }
+        }
+    }
+
+    enum Complexity: String, Codable, CaseIterable {
+        case simple = "simple"
+        case moderate = "moderate"
+        case complex = "complex"
+        case expert = "expert"
+
+        var displayName: String {
+            switch self {
+            case .simple: return "Simple"
+            case .moderate: return "Moderate"
+            case .complex: return "Complex"
+            case .expert: return "Expert"
+            }
+        }
+    }
+}
+
 // MARK: - Resource Optimization Types
 
-enum OptimizationPriority: Int, CaseIterable, Codable {
-    case critical = 1
-    case high = 2
-    case normal = 3
-    case low = 4
+enum OptimizationAction: String, Codable, CaseIterable {
+    case reduceCPUUsage = "reduce_cpu_usage"
+    case optimizeMemory = "optimize_memory"
+    case minimizeDiskIO = "minimize_disk_io"
+    case optimizeNetwork = "optimize_network"
+    case adjustTimeouts = "adjust_timeouts"
+    case enableCaching = "enable_caching"
+    case disableFeatures = "disable_features"
+    case restartServices = "restart_services"
+
+    var displayName: String {
+        switch self {
+        case .reduceCPUUsage: return "Reduce CPU Usage"
+        case .optimizeMemory: return "Optimize Memory"
+        case .minimizeDiskIO: return "Minimize Disk I/O"
+        case .optimizeNetwork: return "Optimize Network"
+        case .adjustTimeouts: return "Adjust Timeouts"
+        case .enableCaching: return "Enable Caching"
+        case .disableFeatures: return "Disable Features"
+        case .restartServices: return "Restart Services"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .reduceCPUUsage: return "Optimize CPU-intensive operations"
+        case .optimizeMemory: return "Free up memory by clearing caches and unused objects"
+        case .minimizeDiskIO: return "Reduce disk read/write operations"
+        case .optimizeNetwork: return "Optimize network requests and data transfer"
+        case .adjustTimeouts: return "Adjust timeout values for better responsiveness"
+        case .enableCaching: return "Enable intelligent caching mechanisms"
+        case .disableFeatures: return "Temporarily disable non-essential features"
+        case .restartServices: return "Restart background services to clear state"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .reduceCPUUsage: return "cpu"
+        case .optimizeMemory: return "memorychip"
+        case .minimizeDiskIO: return "internaldrive"
+        case .optimizeNetwork: return "network"
+        case .adjustTimeouts: return "clock"
+        case .enableCaching: return "externaldrive"
+        case .disableFeatures: return "minus.circle"
+        case .restartServices: return "arrow.clockwise"
+        }
+    }
+
+    var impact: Impact {
+        switch self {
+        case .reduceCPUUsage: return .medium
+        case .optimizeMemory: return .high
+        case .minimizeDiskIO: return .low
+        case .optimizeNetwork: return .medium
+        case .adjustTimeouts: return .low
+        case .enableCaching: return .medium
+        case .disableFeatures: return .high
+        case .restartServices: return .medium
+        }
+    }
+
+    enum Impact: String, Codable {
+        case low = "low"
+        case medium = "medium"
+        case high = "high"
+
+        var displayName: String {
+            switch self {
+            case .low: return "Low"
+            case .medium: return "Medium"
+            case .high: return "High"
+            }
+        }
+
+        var color: String {
+            switch self {
+            case .low: return "blue"
+            case .medium: return "orange"
+            case .high: return "red"
+            }
+        }
+    }
+}
+
+struct OptimizationStrategy: Codable, Identifiable {
+    let id: UUID
+    let name: String
+    let component: FocusLockComponent
+    let priority: OptimizationPriority
+    let actions: [ROOptimizationAction]
+    let estimatedImpact: OptimizationImpact
+    let duration: TimeInterval
+    let timestamp: Date
+    let efficiencyGain: Double
+
+    var description: String {
+        return "\(name) - Estimated efficiency gain: \(Int(efficiencyGain * 100))%"
+    }
+}
+
+struct ActionResult: Codable, Identifiable {
+    let id = UUID()
+    let action: ROOptimizationAction
+    let success: Bool
+    let duration: TimeInterval
+    let error: String?
+}
+
+// MARK: - Performance Monitoring Types
+
+// Missing types for PerformanceMonitor.swift
+class BackgroundTaskManager: ObservableObject {
+    static let shared = BackgroundTaskManager()
+    @Published var activeTasks: [BackgroundTask] = []
+    @Published var queuedTasks: [BackgroundTaskInfo] = []
+
+    private init() {}
+}
+
+enum PowerState: String, CaseIterable, Codable {
+    case ac = "ac"
+    case battery = "battery"
+    case ups = "ups"
+
+    var displayName: String {
+        switch self {
+        case .ac: return "AC Power"
+        case .battery: return "Battery"
+        case .ups: return "UPS"
+        }
+    }
+}
+
+// MARK: - Resource Optimization Types
+
+struct OptimizationRecord: Codable, Identifiable {
+    let id = UUID()
+    let strategy: OptimizationStrategy
+    let startTime: Date
+    let duration: TimeInterval
+    let results: [ActionResult]
+    let success: Bool
+}
+
+enum OptimizationPriority: String, CaseIterable, Codable {
+    case low = "low"
+    case medium = "medium"
+    case high = "high"
+    case critical = "critical"
+
+    var numericalValue: Int {
+        switch self {
+        case .low: return 1
+        case .medium: return 2
+        case .high: return 3
+        case .critical: return 4
+        }
+    }
+}
+
+enum ROOptimizationAction: Codable {
+    // Cache operations
+    case clearCache(target: CacheTarget, percentage: Double)
+    case increaseCacheSize(percentage: Double)
+
+    // Processing operations
+    case reduceProcessingIntensity(allComponents: Double)
+    case reduceProcessingIntensity(component: FocusLockComponent, intensity: Double)
+    case reduceProcessingFrequency(component: FocusLockComponent, interval: TimeInterval)
+    case reduceBatchSize(component: FocusLockComponent, reduction: Double)
+    case reducePollingFrequency(component: FocusLockComponent, interval: TimeInterval)
+    case reduceSamplingRate(component: FocusLockComponent, rate: Double)
+    case reduceMemoryFootprint(allComponents: Double)
+    case reduceMemoryFootprint(component: FocusLockComponent, reduction: Double)
+
+    // Quality and performance
+    case lowerQuality(component: FocusLockComponent)
+    case lowerThreadPriority(allComponents: ThreadPriority)
+    case lowerThreadPriority(component: FocusLockComponent, priority: ThreadPriority)
+    case useSimplifiedModel(component: FocusLockComponent)
+
+    // Task management
+    case pauseBackgroundTasks(except: [TaskPriority])
+    case optimizeTaskScheduling
+    case prioritizeForegroundTasks
+    case deferProcessing(component: FocusLockComponent, delay: TimeInterval)
+
+    // Memory and storage
+    case optimizeMemory
+    case compressData
+    case enableMemoryCompression
+    case clearTempFiles
+    case compressOldCache(age: TimeInterval)
+    case optimizeDatabase(component: FocusLockComponent)
+
+    // Power and thermal
+    case enableLowPowerMode
+    case reduceDisplayRefreshRate
+    case enableThermalThrottling
+    case disableNonEssentialFeatures
+    case disableHighIntensityFeatures
+
+    // Smart features
+    case enableLazyLoading(component: FocusLockComponent)
+    case enableResponseCaching(component: FocusLockComponent)
+    case enableEventFiltering(component: FocusLockComponent)
+    case enableSmartCaching
+    case enableAdaptiveOptimization
+
+    // Specialized optimizations
+    case optimizeIndexing(component: FocusLockComponent)
+    case reduceContextLength(component: FocusLockComponent, maxLength: Int)
+    case optimizeForSpeed
+    case optimizeForPower
+    case reduceBackgroundActivity
+    case optimizeForUserExperience
+    case optimizeBackgroundTasks
+    case throttleCPU
+    case reduceFrequency
 }
 
 enum OptimizationImpact: String, CaseIterable, Codable {
+    case minimal = "minimal"
+    case moderate = "moderate"
+    case significant = "significant"
+    case dramatic = "dramatic"
+
+    var numericalValue: Double {
+        switch self {
+        case .minimal: return 0.1
+        case .moderate: return 0.3
+        case .significant: return 0.6
+        case .dramatic: return 0.9
+        }
+    }
+}
+
+struct OptimizationRecommendation: Codable {
+    let title: String
+    let description: String
+    let impact: OptimizationImpact
+    let effort: ImplementationEffort
+}
+
+enum ImplementationEffort: String, CaseIterable, Codable {
     case low = "low"
     case medium = "medium"
     case high = "high"
 }
 
-enum CacheTarget: String, CaseIterable, Codable {
-    case memory = "memory"
-    case disk = "disk"
-    case index = "index"
-    case embedding = "embedding"
-    case metadata = "metadata"
-}
 
-enum OptimizationAction: Codable {
-    case clearCache(target: CacheTarget, percentage: Double)
-    case reduceProcessingIntensity(component: FocusLockComponent, intensity: Double)
-    case reduceMemoryFootprint(component: FocusLockComponent, reduction: Double)
-    case pauseBackgroundTasks(except: [TaskPriority])
-    case enableLowPowerMode
-    case reduceBatchSize(component: FocusLockComponent, reduction: Double)
-    case optimizeIndexing(component: FocusLockComponent)
-    case reduceProcessingFrequency(component: FocusLockComponent, interval: TimeInterval)
-    case lowerQuality(component: FocusLockComponent)
-    case deferProcessing(component: FocusLockComponent, delay: TimeInterval)
-    case reducePollingFrequency(component: FocusLockComponent, interval: TimeInterval)
-    case enableLazyLoading(component: FocusLockComponent)
-    case useSimplifiedModel(component: FocusLockComponent)
-    case reduceContextLength(component: FocusLockComponent, maxLength: Int)
-    case enableResponseCaching(component: FocusLockComponent)
-    case reduceSamplingRate(component: FocusLockComponent, rate: Double)
+
+// MARK: - Action Types
+
+enum ActionType: String, Codable, CaseIterable {
+    case work = "work"
+    case personal = "personal"
+    case communication = "communication"
+    case health = "health"
+    case finance = "finance"
+    case learning = "learning"
+    case other = "other"
+
+    var displayName: String {
+        switch self {
+        case .work: return "Work"
+        case .personal: return "Personal"
+        case .communication: return "Communication"
+        case .health: return "Health"
+        case .finance: return "Finance"
+        case .learning: return "Learning"
+        case .other: return "Other"
+        }
+    }
 }

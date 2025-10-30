@@ -90,204 +90,11 @@ struct MemoryStoreStatistics {
     let lastIndexTime: Date
 }
 
-// MARK: - AnyCodable Helper
-
-enum AnyCodableValue: Equatable, Codable {
-    case bool(Bool)
-    case int(Int)
-    case double(Double)
-    case string(String)
-    case array([AnyCodableValue])
-    case dictionary([String: AnyCodableValue])
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let bool = try? container.decode(Bool.self) {
-            self = .bool(bool)
-        } else if let int = try? container.decode(Int.self) {
-            self = .int(int)
-        } else if let double = try? container.decode(Double.self) {
-            self = .double(double)
-        } else if let string = try? container.decode(String.self) {
-            self = .string(string)
-        } else if let array = try? container.decode([AnyCodable].self) {
-            self = .array(array.map { $0.value })
-        } else if let dictionary = try? container.decode([String: AnyCodable].self) {
-            self = .dictionary(dictionary.mapValues { $0.value })
-        } else {
-            self = .null
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .bool(let value):
-            try container.encode(value)
-        case .int(let value):
-            try container.encode(value)
-        case .double(let value):
-            try container.encode(value)
-        case .string(let value):
-            try container.encode(value)
-        case .array(let values):
-            try container.encode(values.map { AnyCodable(value: $0) })
-        case .dictionary(let dictionary):
-            try container.encode(dictionary.mapValues { AnyCodable(value: $0) })
-        case .null:
-            try container.encodeNil()
-        }
-    }
-}
-
-struct AnyCodable: Codable {
-    let value: AnyCodableValue
-
-    init(_ value: Any) {
-        self.value = AnyCodableValue(any: value)
-    }
-
-    init(value: AnyCodableValue) {
-        self.value = value
-    }
-
-    init(from decoder: Decoder) throws {
-        self.value = try AnyCodableValue(from: decoder)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        try value.encode(to: encoder)
-    }
-}
-
-extension AnyCodableValue {
-    init(any value: Any) {
-        let mirror = Mirror(reflecting: value)
-        if mirror.displayStyle == .optional {
-            if let child = mirror.children.first {
-                self.init(any: child.value)
-            } else {
-                self = .null
-            }
-            return
-        }
-
-        if let number = value as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
-                self = .bool(number.boolValue)
-                return
-            }
-
-            if number.doubleValue.rounded() == number.doubleValue {
-                self = .int(number.intValue)
-            } else {
-                self = .double(number.doubleValue)
-            }
-            return
-        }
-
-        switch value {
-        case let codable as AnyCodable:
-            self = codable.value
-        case let codableValue as AnyCodableValue:
-            self = codableValue
-        case let bool as Bool:
-            self = .bool(bool)
-        case let int as Int:
-            self = .int(int)
-        case let int32 as Int32:
-            self = .int(Int(int32))
-        case let int64 as Int64:
-            self = .int(Int(int64))
-        case let double as Double:
-            self = .double(double)
-        case let float as Float:
-            self = .double(Double(float))
-        case let string as String:
-            self = .string(string)
-        case let uuid as UUID:
-            self = .string(uuid.uuidString)
-        case let array as [AnyCodable]:
-            self = .array(array.map { $0.value })
-        case let array as [Any]:
-            self = .array(array.map { AnyCodableValue(any: $0) })
-        case let dictionary as [String: AnyCodable]:
-            self = .dictionary(dictionary.mapValues { $0.value })
-        case let dictionary as [String: Any]:
-            self = .dictionary(dictionary.mapValues { AnyCodableValue(any: $0) })
-        case is NSNull:
-            self = .null
-        default:
-            self = .null
-        }
-    }
-
-    var stringValue: String? {
-        if case let .string(value) = self {
-            return value
-        }
-        return nil
-    }
-
-    var intValue: Int? {
-        switch self {
-        case .int(let value):
-            return value
-        case .double(let value) where value.rounded() == value:
-            return Int(value)
-        default:
-            return nil
-        }
-    }
-
-    var doubleValue: Double? {
-        switch self {
-        case .double(let value):
-            return value
-        case .int(let value):
-            return Double(value)
-        default:
-            return nil
-        }
-    }
-
-    var boolValue: Bool? {
-        if case let .bool(value) = self {
-            return value
-        }
-        return nil
-    }
-
-    var arrayValue: [AnyCodableValue]? {
-        if case let .array(values) = self {
-            return values
-        }
-        return nil
-    }
-
-    var dictionaryValue: [String: AnyCodableValue]? {
-        if case let .dictionary(values) = self {
-            return values
-        }
-        return nil
-    }
-}
-
-extension AnyCodable {
-    var stringValue: String? { value.stringValue }
-    var intValue: Int? { value.intValue }
-    var doubleValue: Double? { value.doubleValue }
-    var boolValue: Bool? { value.boolValue }
-    var arrayValue: [AnyCodableValue]? { value.arrayValue }
-    var dictionaryValue: [String: AnyCodableValue]? { value.dictionaryValue }
-}
+// NOTE: AnyCodable is defined in FocusLockModels.swift to avoid duplicate definitions
 
 // MARK: - BM25 Index
 
-class BM25Index {
+actor BM25Index {
     private var documents: [UUID: [String]] = [:]
     private var documentLengths: [UUID: Int] = [:]
     private var termDocumentFrequencies: [String: Int] = [:]
@@ -382,7 +189,7 @@ class BM25Index {
 
 // MARK: - Vector Embeddings
 
-class VectorEmbeddingGenerator {
+actor VectorEmbeddingGenerator {
     private var embeddingModel: NLEmbedding?
     private let logger = Logger(subsystem: "FocusLock", category: "VectorEmbeddingGenerator")
 
@@ -393,14 +200,20 @@ class VectorEmbeddingGenerator {
     private func loadEmbeddingModel() {
         // Use Apple's multilingual sentence embedding model
         NLEmbedding.sentenceEmbedding(for: .english) { [weak self] result in
-            switch result {
-            case .success(let embedding):
-                self?.embeddingModel = embedding
-                self?.logger.info("Successfully loaded sentence embedding model")
-            case .failure(let error):
-                self?.logger.error("Failed to load embedding model: \(error.localizedDescription)")
+            Task { @MainActor in
+                switch result {
+                case .success(let embedding):
+                    await self?.setEmbeddingModel(embedding)
+                    self?.logger.info("Successfully loaded sentence embedding model")
+                case .failure(let error):
+                    self?.logger.error("Failed to load embedding model: \(error.localizedDescription)")
+                }
             }
         }
+    }
+
+    private func setEmbeddingModel(_ model: NLEmbedding) {
+        self.embeddingModel = model
     }
 
     func generateEmbedding(for text: String) async throws -> [Float] {
@@ -459,8 +272,14 @@ struct SimilarityCalculator {
 
 // MARK: - Main MemoryStore Implementation
 
-class HybridMemoryStore: MemoryStore {
-    static let shared = HybridMemoryStore()
+actor HybridMemoryStore: MemoryStore {
+    static let shared: HybridMemoryStore = {
+        do {
+            return try HybridMemoryStore()
+        } catch {
+            fatalError("Failed to initialize HybridMemoryStore: \(error)")
+        }
+    }()
 
     private let databaseQueue: DatabaseQueue
     private let bm25Index = BM25Index()
@@ -471,7 +290,7 @@ class HybridMemoryStore: MemoryStore {
     private var embeddingGenerationTimes: [TimeInterval] = []
     private var searchTimes: [TimeInterval] = []
 
-    private init() throws {
+    init() throws {
         // Initialize database
         let dbPath = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -484,7 +303,11 @@ class HybridMemoryStore: MemoryStore {
         databaseQueue = try DatabaseQueue(path: dbPath.path)
 
         try setupDatabase()
-        loadExistingItems()
+
+        // Load existing items asynchronously
+        Task {
+            await loadExistingItems()
+        }
     }
 
     private func setupDatabase() throws {
@@ -514,21 +337,19 @@ class HybridMemoryStore: MemoryStore {
         }
     }
 
-    private func loadExistingItems() {
-        Task {
-            do {
-                let items = try getAllStoredItems()
-                logger.info("Loaded \(items.count) existing items into memory index")
+    private func loadExistingItems() async {
+        do {
+            let items = try getAllStoredItems()
+            logger.info("Loaded \(items.count) existing items into memory index")
 
-                // Rebuild BM25 index
-                for item in items {
-                    let terms = tokenizeForBM25(item.content)
-                    bm25Index.addDocument(id: item.id, terms: terms)
-                }
-
-            } catch {
-                logger.error("Failed to load existing items: \(error.localizedDescription)")
+            // Rebuild BM25 index
+            for item in items {
+                let terms = tokenizeForBM25(item.content)
+                await bm25Index.addDocument(id: item.id, terms: terms)
             }
+
+        } catch {
+            logger.error("Failed to load existing items: \(error.localizedDescription)")
         }
     }
 
@@ -557,7 +378,7 @@ class HybridMemoryStore: MemoryStore {
 
         // Update BM25 index
         let terms = tokenizeForBM25(finalItem.content)
-        bm25Index.addDocument(id: finalItem.id, terms: terms)
+        await bm25Index.addDocument(id: finalItem.id, terms: terms)
 
         let duration = CFAbsoluteTimeGetCurrent() - startTime
         logger.info("Indexed item in \(String(format: "%.3f", duration))s")
@@ -566,7 +387,7 @@ class HybridMemoryStore: MemoryStore {
     func search(_ query: String, limit: Int = 10) async throws -> [MemorySearchResult] {
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        let results = bm25Index.search(query: query, limit: limit)
+        let results = await bm25Index.search(query: query, limit: limit)
 
         let searchResults = try await results.compactMap { [weak self] (id, score) -> MemorySearchResult? in
             guard let self = self,
@@ -701,7 +522,7 @@ class HybridMemoryStore: MemoryStore {
             try db.execute(sql: "DELETE FROM memory_items WHERE id = ?", arguments: [id.uuidString])
         }
 
-        bm25Index.removeDocument(id: id)
+        await bm25Index.removeDocument(id: id)
         logger.info("Deleted item \(id.uuidString)")
     }
 
@@ -710,7 +531,11 @@ class HybridMemoryStore: MemoryStore {
             try db.execute(sql: "DELETE FROM memory_items")
         }
 
-        bm25Index = BM25Index()
+        // Create new BM25 index and clear the existing one
+        let newIndex = BM25Index()
+        let oldIndex = bm25Index
+        bm25Index = newIndex
+        // Note: The old index will be deallocated automatically
         logger.info("Cleared all items from memory store")
     }
 

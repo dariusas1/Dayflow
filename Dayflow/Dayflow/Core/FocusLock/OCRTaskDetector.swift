@@ -196,18 +196,22 @@ class OCRTaskDetector: TaskDetector {
                     let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
                     // Get the main display
-                    let display = CGMainDisplayID()
-
                     let config = SCStreamConfiguration()
-                    if let cgFrame = content.cgFrame {
-                        config.width = Int(cgFrame.width)
-                        config.height = Int(cgFrame.height)
-                        config.sourceRect = cgFrame
-                    }
+                    // Use the main screen frame instead of content.cgFrame
+                    let mainScreen = NSScreen.main ?? NSScreen.screens.first
+                    let screenFrame = mainScreen?.frame ?? CGRect.zero
+                    config.width = Int(screenFrame.width)
+                    config.height = Int(screenFrame.height)
+                    config.sourceRect = screenFrame
                     config.scalesToFit = true
 
-                    // Start capture
-                    let filter = SCContentFilter(display: display, excludingWindows: false, onScreenWindowsOnly: true)
+                    // Start capture - updated API for modern ScreenCaptureKit
+                    guard let displayID = mainScreen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    let filter = SCContentFilter(display: displayID, excludingWindows: [], onScreenWindowsOnly: true)
                     let stream = try await SCStream(filter: filter, configuration: config, delegate: nil)
 
                     // Capture first frame
@@ -218,8 +222,12 @@ class OCRTaskDetector: TaskDetector {
 
                     // Get the frame
                     let sampleBuffer = try await stream.nextFrame()
-                    let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
-                    let pixelBuffer = CVPixelBufferLockBaseAddress(imageBuffer!)
+                    guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                        stream.stopCapture()
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    CVPixelBufferLockBaseAddress(imageBuffer, [])
 
                     // Create CGImage
                     let width = CVPixelBufferGetWidth(imageBuffer)
@@ -228,8 +236,15 @@ class OCRTaskDetector: TaskDetector {
                     let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
                     let colorSpace = CGColorSpaceCreateDeviceRGB()
 
+                    guard let pixelData = CVPixelBufferGetBaseAddress(imageBuffer) else {
+                        CVPixelBufferUnlockBaseAddress(imageBuffer, [])
+                        stream.stopCapture()
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
                     guard let context = CGContext(
-                        data: pixelBuffer,
+                        data: pixelData,
                         width: width,
                         height: height,
                         bitsPerComponent: bitsPerComponent,
@@ -243,7 +258,7 @@ class OCRTaskDetector: TaskDetector {
                         return
                     }
 
-                    let cgImage = context!.makeImage()
+                    let cgImage = context.makeImage()
 
                     CVPixelBufferUnlockBaseAddress(imageBuffer, [])
                     stream.stopCapture()

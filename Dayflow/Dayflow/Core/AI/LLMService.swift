@@ -766,23 +766,4 @@ final class LLMService: LLMServicing {
         }
     }
 
-    func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String {
-        guard provider != nil else {
-            throw NSError(
-                domain: "LLMService",
-                code: 7,
-                userInfo: [NSLocalizedDescriptionKey: "No language model provider configured. Please update your settings."]
-            )
-        }
-
-        let sanitizedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sanitizedPrompt.isEmpty else {
-            return "I'm ready whenever you are."
-        }
-
-        let maxCharacterCount = max(32, min(maxTokens * 4, 2000))
-        let summary = sanitizedPrompt.prefix(maxCharacterCount)
-
-        return "Jarvis is still warming up, but here's what I gathered:\n\(summary)"
-    }
-}
+  }

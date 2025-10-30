@@ -164,7 +164,7 @@ class PlannerEngine: ObservableObject {
     /// Add a new task to the planning system
     func addTask(_ task: PlannerTask) {
         tasks.append(task)
-        Task {
+        Task { @MainActor in
             do {
                 try await persistentStore.saveTask(task)
                 logger.info("Task added: \(task.title)")
@@ -184,7 +184,7 @@ class PlannerEngine: ObservableObject {
         guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
 
         tasks[index] = task
-        Task {
+        Task { @MainActor in
             do {
                 try await persistentStore.saveTask(task)
                 logger.info("Task updated: \(task.title)")
@@ -222,7 +222,7 @@ class PlannerEngine: ObservableObject {
             timeBlockOptimizer.addSchedulingFeedback(feedbackRecord)
         }
 
-        Task {
+        Task { @MainActor in
             do {
                 try await persistentStore.saveTask(completedTask)
                 logger.info("Task completed: \(task.title) with rating: \(rating)")
@@ -401,7 +401,7 @@ class PlannerEngine: ObservableObject {
     }
 
     private func loadPersistedData() {
-        Task {
+        Task { @MainActor in
             do {
                 tasks = try await persistentStore.loadAllTasks()
                 upcomingPlans = try await persistentStore.loadUpcomingPlans()
@@ -418,7 +418,7 @@ class PlannerEngine: ObservableObject {
     }
 
     private func initializeTodayPlan() {
-        Task {
+        Task { @MainActor in
             do {
                 if currentPlan == nil {
                     currentPlan = try await generateDailyPlan()
@@ -482,7 +482,8 @@ class PlannerEngine: ObservableObject {
                     title: event.title,
                     isProtected: true,
                     energyLevel: .medium,
-                    breakBuffer: 300
+                    breakBuffer: 300,
+                    productivityMultiplier: 1.0
                 )
             }
         } catch CalendarError.accessDenied {
@@ -537,7 +538,8 @@ class PlannerEngine: ObservableObject {
                 title: task.title,
                 isProtected: task.isFocusSessionProtected,
                 energyLevel: task.preferredEnergyLevel ?? .medium,
-                breakBuffer: task.isFocusSessionProtected ? 900 : 300
+                breakBuffer: task.isFocusSessionProtected ? 900 : 300,
+                productivityMultiplier: calculateProductivityMultiplier(for: task)
             )
 
             blocks.append(block)
@@ -562,13 +564,14 @@ class PlannerEngine: ObservableObject {
             }
 
             // Move to next available slot
-            if let nextBlockStart = existingBlocks
-                .filter { $0.startTime >= candidateTime }
+            let filteredBlocks = existingBlocks
+                .filter { block in block.startTime >= candidateTime }
                 .sorted { $0.startTime < $1.startTime }
-                .first?.startTime {
+
+            if let nextBlockStart = filteredBlocks.first?.startTime {
                 candidateTime = nextBlockStart.addingTimeInterval(60)
             } else {
-                candidateTime = candidateTime.addingTimeInterval(3600)
+                candidateTime = candidateTime.addingTimeInterval(3600) // Jump 1 hour
             }
         }
     }
@@ -702,6 +705,46 @@ class PlannerEngine: ObservableObject {
         if upcomingPlans.count > 7 {
             upcomingPlans = Array(upcomingPlans.prefix(7))
         }
+    }
+
+    private func calculateProductivityMultiplier(for task: PlannerTask) -> Double {
+        var multiplier = 1.0
+
+        // Priority-based adjustment
+        switch task.priority {
+        case .critical:
+            multiplier *= 1.2
+        case .high:
+            multiplier *= 1.1
+        case .medium:
+            multiplier *= 1.0
+        case .low:
+            multiplier *= 0.9
+        }
+
+        // Energy level alignment
+        if let preferredEnergy = task.preferredEnergyLevel {
+            switch preferredEnergy {
+            case .high:
+                multiplier *= 1.1
+            case .medium:
+                multiplier *= 1.0
+            case .low:
+                multiplier *= 0.8
+            }
+        }
+
+        // Focus session bonus
+        if task.isFocusSessionProtected {
+            multiplier *= 1.15
+        }
+
+        // Goal alignment bonus
+        if let alignmentScore = task.goalAlignmentScore {
+            multiplier *= (0.8 + (alignmentScore * 0.4)) // Range: 0.8 to 1.2
+        }
+
+        return multiplier
     }
 
     private func updateOptimizationMetrics(plan: DailyPlan) {
@@ -1805,7 +1848,7 @@ class CalendarManager {
         logger.info("Successfully exported \(plan.timeBlocks.count) events to calendar")
     }
 
-    func loadEvents(for date: Date) async throws -> [CalendarEvent] {
+    func loadEvents(for date: Date) async throws -> [CalendarEventSummary] {
         let accessGranted = await ensureAuthorization()
         guard accessGranted else {
             throw CalendarError.accessDenied
@@ -1819,7 +1862,7 @@ class CalendarManager {
         let events = eventStore.events(matching: predicate)
 
         return events.map { event in
-            CalendarEvent(
+            CalendarEventSummary(
                 id: event.eventIdentifier,
                 title: event.title,
                 startTime: event.startDate,
@@ -2017,7 +2060,8 @@ class OvertimeReschedulingStrategy: ReschedulingStrategy {
                 title: originalBlock.title,
                 isProtected: originalBlock.isProtected,
                 energyLevel: originalBlock.energyLevel,
-                breakBuffer: originalBlock.breakBuffer
+                breakBuffer: originalBlock.breakBuffer,
+                productivityMultiplier: originalBlock.productivityMultiplier
             )
 
             updatedPlan.timeBlocks[blockIndex] = extendedBlock
@@ -2042,7 +2086,8 @@ class OvertimeReschedulingStrategy: ReschedulingStrategy {
                 title: block.title,
                 isProtected: block.isProtected,
                 energyLevel: block.energyLevel,
-                breakBuffer: block.breakBuffer
+                breakBuffer: block.breakBuffer,
+                productivityMultiplier: block.productivityMultiplier
             )
         }
 
@@ -2116,7 +2161,7 @@ struct PerformanceInsight {
     }
 }
 
-struct SchedulingPerformance {
+struct SchedulingPerformance: Codable {
     let startTime: Date
     let completionRate: Double
     let energyLevel: Double
@@ -2142,7 +2187,7 @@ struct PlannerTaskSource {
     }
 }
 
-struct CalendarEvent {
+struct CalendarEventSummary {
     let id: String
     let title: String
     let startTime: Date
@@ -2714,7 +2759,7 @@ class PlannerDataStore {
         let privacyFilePath = dataDirectory.appendingPathComponent(privacySettingsFile)
         if !fileManager.fileExists(atPath: privacyFilePath.path) {
             let defaultSettings = PlannerPrivacySettings()
-            Task {
+            Task { @MainActor in
                 do {
                     try await savePrivacySettings(defaultSettings)
                 } catch {

@@ -30,12 +30,107 @@ class PerformanceMonitor: ObservableObject {
     @Published var batteryStatus: BatteryMetrics?
     @Published var backgroundTaskSchedule: BackgroundTaskSchedule = .default
 
+    // MARK: - Computed Properties for View Binding
+    var activeAlerts: [PerformanceAlert] {
+        return performanceAlerts.filter { $0.isRecent }
+    }
+
+    var recentAlerts: [PerformanceAlert] {
+        let oneHourAgo = Date().addingTimeInterval(-3600)
+        return performanceAlerts.filter { $0.timestamp >= oneHourAgo }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var todayAlertCount: Int {
+        let today = Calendar.current.startOfDay(for: Date())
+        return performanceAlerts.filter { $0.timestamp >= today }.count
+    }
+
+    var weekAlertCount: Int {
+        let weekAgo = Date().addingTimeInterval(-7 * 24 * 3600)
+        return performanceAlerts.filter { $0.timestamp >= weekAgo }.count
+    }
+
+    var resolvedAlertCount: Int {
+        // Placeholder - would need alert resolution tracking
+        return 0
+    }
+
+    var cpuUsage: Double {
+        return currentMetrics?.systemMetrics.cpuUsage ?? 0.0
+    }
+
+    var memoryUsage: Double {
+        guard let memory = currentMetrics?.systemMetrics.memoryUsage else { return 0.0 }
+        return memory.used / memory.total
+    }
+
+    var thermalState: ThermalState {
+        return currentMetrics?.thermalMetrics?.state ?? .normal
+    }
+
+    var backgroundTaskManager: BackgroundTaskManager {
+        return BackgroundTaskManager.shared
+    }
+
+    var backgroundTaskMetrics: BackgroundTaskMetrics {
+        return BackgroundTaskMetrics(
+            completedTasksToday: componentMetrics.values.flatMap { $0.metrics }.count,
+            successRate: 0.95, // Placeholder
+            averageCpuImpact: 0.05, // Placeholder
+            averageMemoryImpact: 0.02, // Placeholder
+            batteryDrainRate: 0.01 // Placeholder
+        )
+    }
+
+    var batteryMetrics: BatteryInfo {
+        return BatteryInfo(
+            batteryLevel: Int((batteryStatus?.level ?? 0.0) * 100),
+            powerState: batteryStatus?.state == .plugged ? .ac : .battery,
+            thermalState: thermalState.rawValue
+        )
+    }
+
+    var powerEfficiencyMetrics: PowerEfficiencyMetrics {
+        return PowerEfficiencyMetrics(
+            energyEfficiency: 1000.0, // Placeholder
+            batteryDrainRate: 2.5, // Placeholder
+            powerAdaptationScore: 0.85, // Placeholder
+            lowPowerModeSavings: 25.0 // Placeholder
+        )
+    }
+
+    var componentBatteryUsage: [String: ComponentBatteryUsage] {
+        // Placeholder implementation
+        return Dictionary(uniqueKeysWithValues: FocusLockComponent.allCases.map { component in
+            (component.rawValue, ComponentBatteryUsage(powerConsumption: Double.random(in: 0.01...0.15)))
+        })
+    }
+
+    var powerOptimizationRecommendations: [PowerOptimizationRecommendation] {
+        // Placeholder recommendations
+        return [
+            PowerOptimizationRecommendation(
+                id: UUID(),
+                title: "Enable Low Power Mode",
+                description: "Reduce background processing and lower refresh rates to save battery",
+                expectedSavings: 0.15
+            ),
+            PowerOptimizationRecommendation(
+                id: UUID(),
+                title: "Optimize OCR Processing",
+                description: "Reduce OCR frequency during battery operation",
+                expectedSavings: 0.08
+            )
+        ]
+    }
+
     // MARK: - Private Properties
     private var monitoringTimer: Timer?
     private var optimizationTimer: Timer?
     private var backgroundTaskTimer: Timer?
     private var metricsHistory: [PerformanceMetrics] = []
-    private var componentMetrics: [String: ComponentPerformanceTracker] = [:]
+    @Published var componentMetrics: [String: ComponentPerformanceTracker] = [:]
     private var isMonitoring = false
     private var cancellables = Set<AnyCancellable>()
 
@@ -175,7 +270,7 @@ class PerformanceMonitor: ObservableObject {
     private func performOptimizationIfNeeded() {
         guard let metrics = currentMetrics else { return }
 
-        var optimizationsNeeded: [OptimizationAction] = []
+        var optimizationsNeeded: [PMOptimizationAction] = []
 
         // CPU optimization
         if metrics.systemMetrics.cpuUsage > activeCPUBudget {
@@ -202,7 +297,7 @@ class PerformanceMonitor: ObservableObject {
         }
     }
 
-    private func executeOptimizations(_ optimizations: [OptimizationAction]) {
+    private func executeOptimizations(_ optimizations: [PMOptimizationAction]) {
         isOptimizationActive = true
 
         Task {
@@ -401,22 +496,42 @@ class PerformanceMonitor: ObservableObject {
     }
 
     private func updateBatteryStatus() {
-        let info = IOPSCopyPowerSourcesInfo().takeRetainedValue()
-        let sources = IOPSCopyPowerSourcesList(info).takeRetainedValue() as Array
+        // Use IOKit framework for battery information
+        let service = IOServiceMatching(kIOPSMainPowerSourceService)
+        let powerSourceInfo = IOPSCopyPowerSourcesInfo()
+
+        guard let info = powerSourceInfo.takeRetainedValue() else {
+            logger.error("Failed to get power source info")
+            return
+        }
+
+        guard let sources = IOPSCopyPowerSourcesList(info).takeRetainedValue() as? [CFTypeRef] else {
+            logger.error("Failed to get power sources list")
+            return
+        }
 
         for source in sources {
-            let sourceDict = IOPSGetPowerSourceDescription(info, source).takeRetainedValue() as [String: Any]
+            if let sourceDict = IOPSGetPowerSourceDescription(info, source).takeRetainedValue() as? [String: Any] {
+                if let currentCapacity = sourceDict[kIOPSCurrentCapacityKey] as? Int,
+                   let maxCapacity = sourceDict[kIOPSMaxCapacityKey] as? Int,
+                   let isCharging = sourceDict[kIOPSIsChargingKey] as? Bool,
+                   let isPowered = sourceDict[kIOPSPowerSourceStateKey] as? String {
 
-            if let currentCapacity = sourceDict[kIOPSCurrentCapacityKey] as? Int,
-               let maxCapacity = sourceDict[kIOPSMaxCapacityKey] as? Int,
-               let isCharging = sourceDict[kIOPSIsChargingKey] as? Bool,
-               let isPowered = sourceDict[kIOPSPowerSourceStateKey] as? String {
+                    guard maxCapacity > 0 else { continue }
 
-                let level = Double(currentCapacity) / Double(maxCapacity)
-                let state: BatteryState = isPowered == kIOPSACPowerValue ? .plugged : (isCharging ? .charging : .unplugged)
+                    let level = Double(currentCapacity) / Double(maxCapacity)
+                    let state: BatteryState = isPowered == kIOPSACPowerValue ? .plugged : (isCharging ? .charging : .unplugged)
 
-                batteryStatus = BatteryMetrics(level: level, state: state, timeRemaining: nil)
-                return
+                    batteryStatus = BatteryMetrics(
+                        level: level,
+                        state: state,
+                        timeRemaining: nil,
+                        temperature: nil,
+                        voltage: nil,
+                        cycleCount: nil
+                    )
+                    return
+                }
             }
         }
     }
@@ -756,6 +871,17 @@ struct ComponentPerformanceTracker {
     var latestMetric: ComponentPerformanceMetric? {
         metrics.last
     }
+
+    // Convert to ComponentMetrics for UI compatibility
+    var toComponentMetrics: ComponentMetrics {
+        return ComponentMetrics(
+            componentName: component.rawValue,
+            cpuUsage: latestMetric?.cpuUsage ?? 0.0,
+            memoryUsage: latestMetric?.memoryUsage.current ?? 0.0,
+            responseTime: latestMetric?.responseTime ?? 0.0,
+            errorRate: latestMetric?.errorRate ?? 0.0
+        )
+    }
 }
 
 struct ComponentResourceBudget: Codable {
@@ -813,6 +939,17 @@ struct PerformanceAlert: Identifiable, Codable {
     let timestamp: Date
     let recommendations: [String]
 
+    var title: String {
+        switch type {
+        case .highCPUUsage: return "High CPU Usage"
+        case .highMemoryUsage: return "High Memory Usage"
+        case .lowBattery: return "Low Battery"
+        case .thermalThrottle: return "Thermal Throttling"
+        case .componentFailure: return "Component Failure"
+        case .performanceRegression: return "Performance Regression"
+        }
+    }
+
     var isRecent: Bool {
         Date().timeIntervalSince(timestamp) < 300 // 5 minutes
     }
@@ -832,16 +969,23 @@ enum AlertSeverity: String, CaseIterable, Codable {
     case warning = "warning"
     case critical = "critical"
 
-    var color: String {
+    var color: Color {
         switch self {
-        case .info: return "blue"
-        case .warning: return "orange"
-        case .critical: return "red"
+        case .info: return .blue
+        case .warning: return .orange
+        case .critical: return .red
+        }
+    }
+    var icon: String {
+        switch self {
+        case .info: return "info.circle"
+        case .warning: return "exclamationmark.triangle"
+        case .critical: return "xmark.octagon"
         }
     }
 }
 
-enum OptimizationAction {
+enum PMOptimizationAction {
     case reduceCPUFrequency
     case clearMemoryCache
     case enterLowPowerMode
@@ -869,6 +1013,18 @@ struct BackgroundTask: Identifiable, Codable {
     let resourceBudget: ComponentResourceBudget
     let scheduleTime: Date
 }
+
+// MARK: - Supporting Types for Performance Debug View
+
+struct BatteryInfo {
+    let batteryLevel: Int
+    let powerState: PowerState
+    let thermalState: Int
+}
+
+// MARK: - Computed Properties for External Access
+
+// Note: Many supporting types are defined in FocusLockModels.swift to avoid duplication
 
 // MARK: - Notification Extensions
 

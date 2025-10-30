@@ -11,8 +11,10 @@ import CoreML
 import NaturalLanguage
 import GRDB
 import os.log
+import SwiftUI
 
-class SuggestedTodosEngine {
+@MainActor
+class SuggestedTodosEngine: ObservableObject {
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
 
     // Dependencies
@@ -921,16 +923,7 @@ class SuggestedTodosEngine {
         }
     }
 
-    private func saveConfiguration() async throws {
-        let configURL = try FileManager.default
-            .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("FocusLock")
-            .appendingPathComponent("SuggestionEngineConfig.json")
-
-        let data = try JSONEncoder().encode(config)
-        try data.write(to: configURL, options: .atomic)
-    }
-
+  
     private func parseDate(from dateString: String) -> Date? {
         let formatters = [
             DateFormatter().then { $0.dateFormat = "MM/dd/yyyy" },

@@ -42,9 +42,8 @@ struct PerformanceDebugView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .navigationTitle("Performance Dashboard")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button(action: { exportPerformanceData() }) {
                             Label("Export Data", systemImage: "square.and.arrow.up")
@@ -89,15 +88,15 @@ struct PerformanceDebugView: View {
         VStack(spacing: 8) {
             // System status indicators
             HStack {
-                systemStatusIndicator("CPU", value: performanceMonitor.currentMetrics.cpuUsage,
-                                   budget: performanceMonitor.performanceBudget.cpuThreshold,
+                systemStatusIndicator("CPU", value: performanceMonitor.currentMetrics?.systemMetrics.cpuUsage ?? 0.0,
+                                   budget: 80.0, // Default CPU budget
                                    color: .blue)
-                systemStatusIndicator("Memory", value: performanceMonitor.currentMetrics.memoryUsage,
-                                   budget: performanceMonitor.performanceBudget.memoryThreshold,
+                systemStatusIndicator("Memory", value: performanceMonitor.currentMetrics?.systemMetrics.memoryUsage.used ?? 0.0,
+                                   budget: 70.0, // Default memory budget
                                    color: .green)
-                systemStatusIndicator("Thermal", value: performanceMonitor.currentMetrics.thermalState,
+                systemStatusIndicator("Thermal", value: Double(performanceMonitor.currentMetrics?.thermalMetrics?.state.rawValue ?? 0),
                                    budget: 3.0, color: .orange)
-                systemStatusIndicator("Power", value: Double(performanceMonitor.batteryMetrics.batteryLevel),
+                systemStatusIndicator("Power", value: Double(performanceMonitor.batteryMetrics?.batteryLevel ?? 0.0),
                                    budget: 100.0, color: .purple)
 
                 Spacer()
@@ -245,14 +244,13 @@ struct PerformanceDebugView: View {
 
     private func exportPerformanceData() {
         // Export performance data to file
-        let data = performanceMonitor.exportPerformanceReport()
-        // Implementation would save to file or share
         print("Exporting performance data...")
+        // TODO: Implement export functionality once PerformanceMonitor methods are available
     }
 
     private func resetAllMetrics() {
-        performanceMonitor.resetAllMetrics()
-        resourceOptimizer.resetOptimizations()
+        print("Resetting all metrics...")
+        // TODO: Implement reset functionality once PerformanceMonitor methods are available
     }
 
     private func toggleAutoRefresh() {
@@ -359,22 +357,22 @@ struct OverviewDashboardView: View {
 
             HStack(spacing: 16) {
                 metricCard("CPU Usage",
-                          value: performanceMonitor.currentMetrics.cpuUsage,
+                          value: performanceMonitor.currentMetrics?.systemMetrics.cpuUsage ?? 0.0,
                           format: .percentage,
                           trend: getTrend(for: .cpu))
 
                 metricCard("Memory Usage",
-                          value: performanceMonitor.currentMetrics.memoryUsage,
+                          value: performanceMonitor.currentMetrics?.systemMetrics.memoryUsage.used ?? 0.0,
                           format: .percentage,
                           trend: getTrend(for: .memory))
 
                 metricCard("Thermal State",
-                          value: Double(performanceMonitor.currentMetrics.thermalState),
+                          value: Double(performanceMonitor.currentMetrics?.thermalMetrics?.state.rawValue ?? 0),
                           format: .thermal,
                           trend: getTrend(for: .thermal))
 
                 metricCard("Battery Level",
-                          value: Double(performanceMonitor.batteryMetrics.batteryLevel),
+                          value: Double(performanceMonitor.currentMetrics?.batteryMetrics?.batteryLevel ?? 0.0),
                           format: .percentage,
                           trend: getTrend(for: .battery))
             }
@@ -416,10 +414,10 @@ struct OverviewDashboardView: View {
                 .fontWeight(.semibold)
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 12) {
-                ForEach(Array(performanceMonitor.componentMetrics.keys), id: \.self) { component in
+                ForEach(Array(performanceMonitor.componentMetrics.values), id: \.component) { tracker in
                     ComponentStatusCard(
-                        component: component,
-                        metrics: performanceMonitor.componentMetrics[component]!
+                        component: tracker.component,
+                        metrics: tracker.toComponentMetrics
                     )
                 }
             }
@@ -598,7 +596,7 @@ struct ComponentStatusCard: View {
     }
 
     private func healthColor(_ health: ComponentHealth) -> Color {
-        switch health {
+        switch health.status {
         case .healthy: return .green
         case .warning: return .yellow
         case .critical: return .red
@@ -690,12 +688,12 @@ struct ComponentPerformanceView: View {
     var body: some View {
         NavigationView {
             List {
-                ForEach(Array(performanceMonitor.componentMetrics.keys), id: \.self) { component in
+                ForEach(Array(performanceMonitor.componentMetrics.values), id: \.component) { tracker in
                     NavigationLink(destination: ComponentDetailView(
-                        component: component,
-                        metrics: performanceMonitor.componentMetrics[component]!
+                        component: tracker.component,
+                        metrics: tracker.toComponentMetrics
                     )) {
-                        ComponentRow(component: component, metrics: performanceMonitor.componentMetrics[component]!)
+                        ComponentRow(component: tracker.component, metrics: tracker.toComponentMetrics)
                     }
                 }
             }
@@ -737,7 +735,7 @@ struct ComponentRow: View {
     }
 
     private func healthColor(_ health: ComponentHealth) -> Color {
-        switch health {
+        switch health.status {
         case .healthy: return .green
         case .warning: return .yellow
         case .critical: return .red
@@ -776,7 +774,6 @@ struct ComponentDetailView: View {
             .padding()
         }
         .navigationTitle(component.displayName)
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var headerSection: some View {
@@ -804,10 +801,10 @@ struct ComponentDetailView: View {
                 .fontWeight(.semibold)
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 16) {
-                MetricCard(title: "CPU Usage", value: metrics.cpuUsage, format: .percentage)
-                MetricCard(title: "Memory Usage", value: metrics.memoryUsage, format: .percentage)
-                MetricCard(title: "Response Time", value: metrics.averageResponseTime, format: .milliseconds)
-                MetricCard(title: "Throughput", value: metrics.throughput, format: .operationsPerSecond)
+                metricCard("CPU Usage", value: metrics.cpuUsage, format: .percentage, trend: .stable)
+                metricCard("Memory Usage", value: metrics.memoryUsage, format: .percentage, trend: .stable)
+                metricCard("Response Time", value: metrics.averageResponseTime, format: .milliseconds, trend: .stable)
+                metricCard("Throughput", value: metrics.throughput, format: .operationsPerSecond, trend: .stable)
             }
         }
     }
@@ -854,46 +851,11 @@ struct ComponentDetailView: View {
     }
 
     private func healthColor(_ health: ComponentHealth) -> Color {
-        switch health {
+        switch health.status {
         case .healthy: return .green
         case .warning: return .yellow
         case .critical: return .red
         case .unknown: return .gray
-        }
-    }
-}
-
-// MARK: - Metric Card
-
-struct MetricCard: View {
-    let title: String
-    let value: Double
-    let format: MetricFormat
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text(formatValue(value, format: format))
-                .font(.title2)
-                .fontWeight(.bold)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func formatValue(_ value: Double, format: MetricFormat) -> String {
-        switch format {
-        case .percentage:
-            return "\(Int(value * 100))%"
-        case .milliseconds:
-            return "\(Int(value * 1000))ms"
-        case .operationsPerSecond:
-            return "\(Int(value))/s"
         }
     }
 }
@@ -1314,60 +1276,6 @@ struct OptimizationCard: View {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         return formatter.string(from: date)
-    }
-}
-
-// MARK: - Recommendation Card
-
-struct RecommendationCard: View {
-    let recommendation: OptimizationRecommendation
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(recommendation.title)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-
-                    Spacer()
-
-                    Text(recommendation.priority.displayName)
-                        .font(.caption)
-                        .foregroundColor(recommendation.priority.color)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(recommendation.priority.color.opacity(0.1))
-                        .clipShape(Capsule())
-                }
-
-                Text(recommendation.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(3)
-
-                HStack {
-                    Text("Impact: \(recommendation.expectedImpact)")
-                        .font(.caption2)
-                        .foregroundColor(.blue)
-
-                    Spacer()
-
-                    Button("Apply") {
-                        // Apply recommendation
-                    }
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.accentColor)
-                    .clipShape(Capsule())
-                }
-            }
-        }
-        .padding()
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
@@ -1804,7 +1712,7 @@ struct EfficiencyMetricCard: View {
 
 struct BatteryUsageRow: View {
     let component: FocusLockComponent
-    let usage: ComponentBatteryUsage
+    let usage: FocusLockModels.ComponentBatteryUsage
 
     var body: some View {
         HStack {
@@ -1834,7 +1742,7 @@ struct BatteryUsageRow: View {
 // MARK: - Power Optimization Card
 
 struct PowerOptimizationCard: View {
-    let recommendation: PowerOptimizationRecommendation
+    let recommendation: FocusLockModels.PowerOptimizationRecommendation
 
     var body: some View {
         HStack {

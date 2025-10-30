@@ -27,7 +27,7 @@ class EmergencyBreakManager: ObservableObject {
 
     // Timer
     private var countdownTimer: Timer?
-    private var warningTimer: Timer?
+    private var warningTimers: [Timer] = []
 
     // Emergency break tracking
     var currentBreak: EmergencyBreak?
@@ -112,12 +112,14 @@ class EmergencyBreakManager: ObservableObject {
 
     private func startCountdown() {
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self = self else { return }
+            Task { @MainActor in
+                guard let self else { return }
 
-            if self.timeRemaining > 0 {
-                self.timeRemaining -= 1.0
-            } else {
-                self.breakExpired()
+                if self.timeRemaining > 0 {
+                    self.timeRemaining -= 1.0
+                } else {
+                    self.breakExpired()
+                }
             }
         }
     }
@@ -125,21 +127,26 @@ class EmergencyBreakManager: ObservableObject {
     private func startWarningNotifications() {
         let warningIntervals = [10.0, 5.0, 3.0, 1.0]
 
+        warningTimers.forEach { $0.invalidate() }
+        warningTimers.removeAll()
+
         for interval in warningIntervals {
             guard interval < totalDuration else { continue }
 
             let delay = totalDuration - interval
-            warningTimer?.invalidate()
-            warningTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-                guard let self = self else { return }
+            let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self else { return }
 
-                if self.isActive {
-                    self.sendNotification(
-                        title: "Emergency Break Warning",
-                        body: "Returning to focus in \(Int(interval)) seconds"
-                    )
+                    if self.isActive {
+                        self.sendNotification(
+                            title: "Emergency Break Warning",
+                            body: "Returning to focus in \(Int(interval)) seconds"
+                        )
+                    }
                 }
             }
+            warningTimers.append(timer)
         }
     }
 
@@ -151,15 +158,18 @@ class EmergencyBreakManager: ObservableObject {
     private func stopAllTimers() {
         countdownTimer?.invalidate()
         countdownTimer = nil
-        warningTimer?.invalidate()
-        warningTimer = nil
+        warningTimers.forEach { $0.invalidate() }
+        warningTimers.removeAll()
     }
 
     private func setupObservation() {
         // Observe settings changes
         settingsManager.$settings
+            .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.handleSettingsChange()
+                Task { @MainActor in
+                    self?.handleSettingsChange()
+                }
             }
             .store(in: &cancellables)
     }
@@ -196,10 +206,9 @@ class EmergencyBreakManager: ObservableObject {
             trigger: nil
         )
 
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                self.logger.error("Failed to send notification: \(error)")
-            }
+        UNUserNotificationCenter.current().add(request) { [weak self] error in
+            guard let self, let error else { return }
+            self.logger.error("Failed to send notification: \(error)")
         }
     }
 

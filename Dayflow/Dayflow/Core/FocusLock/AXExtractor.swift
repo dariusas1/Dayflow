@@ -107,7 +107,8 @@ class AXExtractor {
                 windowInfo: windowInfo,
                 content: content,
                 structuredData: structuredData,
-                taskDetection: taskDetection
+                taskDetection: taskDetection,
+                error: nil
             )
 
         } catch {
@@ -125,11 +126,12 @@ class AXExtractor {
     func extractApplicationState(bundleIdentifier: String) async -> AXApplicationState? {
         guard whitelistedApps.contains(bundleIdentifier) else { return nil }
 
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)?.first else {
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+        guard let app = runningApps.first else {
             return nil
         }
 
-        guard let axApp = AXUIElementCreateApplication(app.processIdentifier) else { return nil }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
 
         var focusedWindow: AnyObject?
         let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
@@ -177,11 +179,12 @@ class AXExtractor {
     }
 
     private func getAXElement(for windowInfo: WindowInfo) -> AXUIElement? {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: windowInfo.bundleIdentifier)?.first else {
+        let runningApps = NSRunningApplication.runningApplications(withBundleIdentifier: windowInfo.bundleIdentifier)
+        guard let app = runningApps.first else {
             return nil
         }
 
-        guard let axApp = AXUIElementCreateApplication(app.processIdentifier) else { return nil }
+        let axApp = AXUIElementCreateApplication(app.processIdentifier)
 
         // Get all windows for the application
         var windowsValue: AnyObject?
@@ -318,8 +321,8 @@ class AXExtractor {
         return structuredData
     }
 
-    private func extractUIElements(from axElement: AXUIElement) async throws -> [AXUIElement] {
-        var elements: [AXUIElement] = []
+    private func extractUIElements(from axElement: AXUIElement) async throws -> [CapturedAXElement] {
+        var elements: [CapturedAXElement] = []
 
         var childrenValue: AnyObject?
         let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
@@ -338,7 +341,7 @@ class AXExtractor {
             var valueValue: AnyObject?
             AXUIElementCopyAttributeValue(child, kAXValueAttribute as CFString, &valueValue)
 
-            let element = AXUIElement(
+            let element = CapturedAXElement(
                 role: role,
                 title: titleValue as? String,
                 value: valueValue as? String,
@@ -387,10 +390,10 @@ class AXExtractor {
             for rowElement in rowElements {
                 var rowContent: [String] = []
 
-                var cellsValue: AnyObject?
-                AXUIElementCopyAttributeValue(rowElement, kAXCellsAttribute as CFString, &cellsValue)
+                var columnsValue: AnyObject?
+                AXUIElementCopyAttributeValue(rowElement, kAXColumnsAttribute as CFString, &columnsValue)
 
-                if let cells = cellsValue as? [AXUIElement] {
+                if let cells = columnsValue as? [AXUIElement] {
                     for cell in cells {
                         var cellValue: AnyObject?
                         AXUIElementCopyAttributeValue(cell, kAXValueAttribute as CFString, &cellValue)
@@ -776,7 +779,7 @@ struct AXExtractionResult {
 
 struct AXStructuredData {
     let windowInfo: WindowInfo
-    var uiElements: [AXUIElement] = []
+    var uiElements: [CapturedAXElement] = []
     var tables: [AXTable] = []
     var lists: [AXList] = []
     var forms: [AXForm] = []
@@ -787,7 +790,7 @@ struct AXStructuredData {
     }
 }
 
-struct AXUIElement {
+struct CapturedAXElement {
     let role: String
     let title: String?
     let value: String?

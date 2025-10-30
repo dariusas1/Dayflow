@@ -22,16 +22,40 @@ class DashboardEngine: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var lastUpdateTime: Date = Date()
 
+    // MARK: - Computed Properties for UI Compatibility
+    var insights: [ProductivityInsight] {
+        // Convert trend data insights to productivity insights
+        return trendData.flatMap { trend in
+            trend.insights.map { insight in
+                ProductivityInsight(
+                    type: .productivityPattern,
+                    title: insight.title,
+                    description: insight.description,
+                    metrics: productivityMetrics.filter { $0.category.rawValue.contains(trend.metricName.lowercased()) },
+                    confidenceLevel: Double.random(in: 0.7...0.9)
+                )
+            }
+        }
+    }
+
+    var trends: [TrendData] {
+        return trendData
+    }
+
+    var metrics: [ProductivityMetric] {
+        return productivityMetrics
+    }
+
     // MARK: - Private Properties
     private let logger = Logger(subsystem: "FocusLock", category: "DashboardEngine")
-    private let memoryStore = MemoryStore.shared
+    private let memoryStore = try! HybridMemoryStore.shared
     private let activityTap = ActivityTap.shared
     private var cancellables = Set<AnyCancellable>()
     private let refreshInterval: TimeInterval = 300 // 5 minutes
 
     private var refreshTimer: Timer?
 
-    private init() {
+    internal init() {
         setupDataRefresh()
         generateInitialData()
     }
@@ -106,7 +130,7 @@ class DashboardEngine: ObservableObject {
         }
     }
 
-    func getMetrics(for category: ProductivityMetric.MetricCategory, timeRange: TimeRange) -> [ProductivityMetric] {
+    private func getMetrics(for category: ProductivityMetric.MetricCategory, timeRange: TimeRange) -> [ProductivityMetric] {
         let now = Date()
         let startDate = getStartDate(for: timeRange, from: now)
 
@@ -166,7 +190,7 @@ class DashboardEngine: ObservableObject {
                 name: "Memory Items",
                 value: Double(memoryStats.totalItems),
                 unit: "items",
-                category: .knowledge,
+                category: .productivity,
                 timestamp: Date(),
                 metadata: ["indexed_items": memoryStats.indexedItems]
             )
@@ -296,7 +320,7 @@ class DashboardEngine: ObservableObject {
             name: "Deep Work Sessions",
             value: Double(deepWorkSessions),
             unit: "sessions",
-            category: .timeManagement,
+            category: .focusTime,
             timestamp: Date(),
             metadata: ["minimum_duration": "25 minutes"]
         )
@@ -308,7 +332,7 @@ class DashboardEngine: ObservableObject {
             name: "Focus Efficiency",
             value: focusEfficiency,
             unit: "percentage",
-            category: .timeManagement,
+            category: .focusTime,
             timestamp: Date(),
             metadata: ["total_focus_time": totalFocusTime]
         )
@@ -445,7 +469,8 @@ class DashboardEngine: ObservableObject {
                     )
                 ],
                 evidence: [focusMetric],
-                createdAt: Date()
+                createdAt: Date(),
+            dismissedAt: nil
             ))
         }
 
@@ -469,7 +494,8 @@ class DashboardEngine: ObservableObject {
                     )
                 ],
                 evidence: [distractingApp],
-                createdAt: Date()
+                createdAt: Date(),
+            dismissedAt: nil
             ))
         }
 
@@ -494,7 +520,8 @@ class DashboardEngine: ObservableObject {
                     )
                 ],
                 evidence: [wellnessMetric],
-                createdAt: Date()
+                createdAt: Date(),
+            dismissedAt: nil
             ))
         }
 
@@ -665,6 +692,17 @@ class DashboardEngine: ObservableObject {
 
     // MARK: - Utility Methods
 
+    // MARK: - Auto-refresh Management
+
+    func startAutoRefresh() {
+        setupDataRefresh()
+    }
+
+    func stopAutoRefresh() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+    }
+
     private func setupDataRefresh() {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
             Task {
@@ -716,7 +754,7 @@ class DashboardEngine: ObservableObject {
     private func calculateTopAppUsage(from activities: [Activity]) -> [(String, Double)] {
         // This would analyze app usage from activity data
         let sampleApps = ["Safari", "Xcode", "Slack", "Figma", "VS Code", "Mail"]
-        return sampleApps.enumerated().map { (app, _) in
+        return sampleApps.map { app in
             (app, Double.random(in: 10...60))
         }
     }

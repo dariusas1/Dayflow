@@ -648,29 +648,7 @@ struct JournalView: View {
 
 // MARK: - Extensions
 
-extension JournalTemplate {
-    var displayName: String {
-        switch self {
-        case .reflective: return "Reflective"
-        case .achievement: return "Achievement"
-        case .gratitude: return "Gratitude"
-        case .growth: return "Growth"
-        case .comprehensive: return "Comprehensive"
-        case .custom: return "Custom"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .reflective: return "brain.head.profile"
-        case .achievement: return "trophy"
-        case .gratitude: return "heart"
-        case .growth: return "chart.line.uptrend.xyaxis"
-        case .comprehensive: return "doc.text"
-        case .custom: return "slider.horizontal.3"
-        }
-    }
-}
+// Note: JournalTemplate properties (displayName, systemImage, etc.) are defined in FocusLockModels.swift
 
 extension HighlightCategory {
     var systemImage: String {
@@ -684,16 +662,7 @@ extension HighlightCategory {
         }
     }
 
-    var color: Color {
-        switch self {
-        case .achievement: return .yellow
-        case .challenge: return .orange
-        case .learning: return .blue
-        case .moment: return .green
-        case .insight: return .purple
-        case .gratitude: return .pink
-        }
-    }
+    // Note: color property is defined in FocusLockModels.swift
 }
 
 extension SentimentScore {
@@ -714,18 +683,7 @@ extension SentimentScore {
     }
 }
 
-extension EmotionType {
-    var displayName: String {
-        switch self {
-        case .joy: return "Joy"
-        case .calm: return "Calm"
-        case .focused: return "Focused"
-        case .grateful: return "Grateful"
-        case .challenged: return "Challenged"
-        case .accomplished: return "Accomplished"
-        }
-    }
-}
+// Note: EmotionType properties are defined in FocusLockModels.swift
 
 extension JournalHighlight {
     var significanceColor: Color {

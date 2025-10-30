@@ -246,7 +246,7 @@ class OCRExtractor {
         }
 
         // Extract all sentences
-        analysis.sentences = paragraphs.flatMap { $0.sentences }
+        analysis.sentences = paragraphs.flatMap { extractSentences(from: $0) }
 
         // Extract all words
         analysis.words = text.components(separatedBy: .whitespacesAndNewlines)
@@ -413,7 +413,7 @@ class OCRExtractor {
 
             if trimmedLine.contains("\t") || trimmedLine.contains("|") {
                 // Potential table row
-                let cells = trimmedLine.components(separatedBy: .charactersInSet: CharacterSet(charactersIn: "\t|"))
+                let cells = trimmedLine.components(separatedBy: CharacterSet(charactersIn: "\t|"))
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
 
@@ -603,7 +603,7 @@ class OCRExtractor {
 
                 let level = determineHeadingLevel(content: content)
                 let heading = DocumentHeading(
-                    title: content.trimmingCharacters(":"),
+                    title: content.dropLast().trimmingCharacters(in: .whitespacesAndNewlines),
                     level: level,
                     paragraphIndex: index
                 )

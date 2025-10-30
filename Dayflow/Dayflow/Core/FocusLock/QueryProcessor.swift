@@ -22,7 +22,7 @@ class QueryProcessor: ObservableObject {
     private let appKeywords: Set<String>
     private let questionWords: Set<String>
 
-    private init() {
+    public init() {
         // Initialize time patterns
         timePatterns = [
             "today": DateComponents(day: 0),
@@ -565,12 +565,14 @@ class QueryProcessor: ObservableObject {
 
             // Filter by target apps
             if !context.targetApps.isEmpty {
-                guard context.targetApps.contains { app in
+                let containsApp = context.targetApps.contains { app in
                     if let appName = metric.metadata["app_name"]?.value as? String {
                         return appName.lowercased().contains(app.lowercased())
                     }
                     return metric.name.lowercased().contains(app.lowercased())
-                } else { return false }
+                }
+
+                guard containsApp else { return false }
             }
 
             // Apply filters

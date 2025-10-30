@@ -93,14 +93,14 @@ class AccessibilityTaskDetector: TaskDetector {
     }
 
     private func checkAccessibilityPermissions() -> Bool {
-        let options: CFDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): kCFBooleanTrue] as CFDictionary
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
+        let options: NSDictionary = [promptKey: true]
         return AXIsProcessTrustedWithOptions(options)
     }
 
     private func getActiveWindowInfo() -> WindowInfo? {
         // Get the focused window
-        let focusedWindow = NSApp.keyWindow
-        guard let window = focusedWindow else { return nil }
+        guard NSApp.keyWindow != nil else { return nil }
 
         // Use accessibility to get window title
         let frontmostApp = NSWorkspace.shared.frontmostApplication
@@ -108,24 +108,26 @@ class AccessibilityTaskDetector: TaskDetector {
         var focusedWindowRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(windowRef, kAXFocusedWindowAttribute as CFString, &focusedWindowRef)
 
-        guard result == .success, let windowElement = focusedWindowRef else {
+        guard result == .success, let focusedWindowRef else {
             return nil
         }
 
+        let windowElement = unsafeBitCast(focusedWindowRef, to: AXUIElement.self)
+
         // Get window title
         var title: CFTypeRef?
-        AXUIElementCopyAttributeValue(windowElement as! AXUIElement, kAXTitleAttribute as CFString, &title)
+        AXUIElementCopyAttributeValue(windowElement, kAXTitleAttribute as CFString, &title)
         let windowTitle = title as? String
 
         // Get window content
         var value: CFTypeRef?
-        AXUIElementCopyAttributeValue(windowElement as! AXUIElement, kAXValueAttribute as CFString, &value)
+        AXUIElementCopyAttributeValue(windowElement, kAXValueAttribute as CFString, &value)
         let windowContent = value as? String
 
         return WindowInfo(
             title: windowTitle ?? "",
             content: windowContent ?? "",
-            element: windowElement as! AXUIElement
+            element: windowElement
         )
     }
 
