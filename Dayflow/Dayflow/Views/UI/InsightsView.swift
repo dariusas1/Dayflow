@@ -1425,12 +1425,13 @@ private extension TrendData {
         type: .insights,
         title: "Insights",
         position: DashboardWidget.WidgetPosition(column: 0, row: 0, width: 4, height: 2),
+        size: .medium,
+        isVisible: true,
         configuration: DashboardWidget.WidgetConfiguration(
             timeRange: .lastWeek,
             refreshInterval: 300,
             customSettings: [:]
-        ),
-        isVisible: true
+        )
     )
 
     let configuration = DashboardConfiguration(

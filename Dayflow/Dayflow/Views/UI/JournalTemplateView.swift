@@ -478,39 +478,8 @@ extension JournalTemplate {
     }
 }
 
-extension JournalLength {
-    var displayName: String {
-        switch self {
-        case .brief: return "Brief"
-        case .medium: return "Medium"
-        case .detailed: return "Detailed"
-        }
-    }
-}
 
-extension JournalTone {
-    var displayName: String {
-        switch self {
-        case .casual: return "Casual"
-        case .formal: return "Formal"
-        case .inspirational: return "Inspirational"
-        case .analytical: return "Analytical"
-        }
-    }
-}
 
-extension FocusArea {
-    var displayName: String {
-        switch self {
-        case .productivity: return "Productivity"
-        case .wellbeing: return "Wellbeing"
-        case .relationships: return "Relationships"
-        case .learning: return "Learning"
-        case .health: return "Health"
-        case .creativity: return "Creativity"
-        }
-    }
-}
 
 // MARK: - Preview
 

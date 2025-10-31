@@ -250,7 +250,7 @@ class PlannerEngine: ObservableObject {
         task.priority = newPriority
         tasks[taskIndex] = task
 
-        logger.info("Task priority changed: \(task.title) from \(oldPriority) to \(newPriority)")
+        logger.info("Task priority changed: \(task.title) from \(oldPriority.rawValue) to \(newPriority.rawValue)")
 
         // Check if this requires rescheduling
         if requiresRescheduling(task: task, priorityChange: oldPriority != newPriority) {
@@ -304,7 +304,7 @@ class PlannerEngine: ObservableObject {
             logger.info("Plan exported to calendar: \(plan.dateFormatted)")
         } catch CalendarError.accessDenied {
             hasCalendarAccess = false
-            throw error
+            throw CalendarError.accessDenied
         }
     }
 
@@ -323,7 +323,7 @@ class PlannerEngine: ObservableObject {
             addTask(task)
         }
 
-        logger.info("Imported \(importedTasks.count) tasks from \(source)")
+        logger.info("Imported \(importedTasks.count) tasks from \(String(describing: source.type))")
         return importedTasks
     }
 
@@ -331,7 +331,11 @@ class PlannerEngine: ObservableObject {
 
     /// Set long-term goals
     func setGoals(_ goals: [PlannerGoal]) async {
-        try await persistentStore.saveGoals(goals)
+        do {
+            try await persistentStore.saveGoals(goals)
+        } catch {
+            logger.error("Failed to save goals: \(error.localizedDescription)")
+        }
 
         // Re-plan today to align with new goals
         do {
@@ -410,7 +414,7 @@ class PlannerEngine: ObservableObject {
                     currentPlan = todayPlan
                 }
 
-                logger.info("Loaded \(tasks.count) tasks and \(upcomingPlans.count) upcoming plans")
+                logger.info("Loaded \(self.tasks.count) tasks and \(self.upcomingPlans.count) upcoming plans")
             } catch {
                 logger.error("Failed to load persisted data: \(error.localizedDescription)")
             }
@@ -725,6 +729,8 @@ class PlannerEngine: ObservableObject {
         // Energy level alignment
         if let preferredEnergy = task.preferredEnergyLevel {
             switch preferredEnergy {
+            case .peak:
+                multiplier *= 1.2
             case .high:
                 multiplier *= 1.1
             case .medium:

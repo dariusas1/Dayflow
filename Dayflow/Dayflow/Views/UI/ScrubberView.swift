@@ -95,7 +95,7 @@ final class FilmstripGenerator {
                 generator.maximumSize = CGSize(width: targetHeight * 16/9 * scale, height: targetHeight * scale)
 
                 // Evenly spaced times across duration (avoid 0 exactly)
-                let step = duration / Double(frameCount)
+                let step = CMTimeGetSeconds(duration) / Double(frameCount)
                 let times: [NSValue] = (0..<frameCount).map { i in
                     let t = max(0.001, Double(i) * step + step * 0.5)
                     return NSValue(time: CMTime(seconds: t, preferredTimescale: 600))
@@ -104,26 +104,54 @@ final class FilmstripGenerator {
                 for (i, v) in times.enumerated() {
                     indexMap[v.timeValue.value] = i
                 }
-            }
 
-            var images: [NSImage] = Array(repeating: NSImage(), count: frameCount)
-            var produced = 0
+                var images: [NSImage] = Array(repeating: NSImage(), count: frameCount)
+                var produced = 0
 
-            // Use generateCGImagesAsynchronously for better throughput
-            generator.generateCGImagesAsynchronously(forTimes: times) { requestedTime, cg, actualTime, result, error in
-                if let cg = cg, result == .succeeded {
-                    let index = indexMap[requestedTime.value] ?? Int((CMTimeGetSeconds(actualTime) / duration * Double(frameCount)).clamped(to: 0.0, Double(frameCount - 1)))
-                    let image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-                    if index >= 0 && index < images.count {
-                        images[index] = image
+                // Use generateCGImagesAsynchronously for better throughput
+                generator.generateCGImagesAsynchronously(forTimes: times) { requestedTime, cg, actualTime, result, error in
+                    let updateState: (NSImage?) -> Void = { image in
+                        var finalImages: [NSImage]?
+                        var shouldFinish = false
+
+                        self.syncQueue.sync {
+                            let durationSeconds = max(CMTimeGetSeconds(duration), 0.001)
+                            let resolvedIndex = indexMap[requestedTime.value]
+                                ?? Int((CMTimeGetSeconds(actualTime) / durationSeconds * Double(frameCount)).clamped(to: 0.0, Double(frameCount - 1)))
+
+                            if let image, resolvedIndex >= 0, resolvedIndex < images.count {
+                                images[resolvedIndex] = image
+                            }
+
+                            produced += 1
+
+                            if produced == frameCount {
+                                self.cache[key] = images
+                                finalImages = images
+                                shouldFinish = true
+                            }
+                        }
+
+                        if shouldFinish, let finalImages {
+                            DispatchQueue.main.async {
+                                self.finish(key: key, frameCount: frameCount, images: finalImages)
+                            }
+                        }
+                    }
+
+                    if let cg = cg, result == .succeeded {
+                        DispatchQueue.main.async {
+                            let size = NSSize(width: cg.width, height: cg.height)
+                            let image = NSImage(cgImage: cg, size: size)
+                            updateState(image)
+                        }
+                    } else {
+                        updateState(nil)
                     }
                 }
-                produced += 1
-                if produced == frameCount {
-                    self.syncQueue.sync {
-                        self.cache[key] = images
-                    }
-                    self.finish(key: key, frameCount: frameCount, images: images)
+            } catch {
+                await MainActor.run {
+                    self.finish(key: key, frameCount: frameCount, images: [])
                 }
             }
         }

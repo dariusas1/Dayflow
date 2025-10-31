@@ -221,7 +221,7 @@ class FeatureFlagManager: ObservableObject {
     }
 
     // MARK: - Dependency Management
-    private func areDependenciesEnabled(for flag: FeatureFlag) -> Bool {
+    internal func areDependenciesEnabled(for flag: FeatureFlag) -> Bool {
         return flag.dependencies.allSatisfy { dependency in
             isEnabled(dependency)
         }

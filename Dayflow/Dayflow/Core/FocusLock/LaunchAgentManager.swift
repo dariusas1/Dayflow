@@ -138,7 +138,7 @@ class LaunchAgentManager: ObservableObject {
 
         lastCheckDate = Date()
 
-        logger.info("LaunchAgent status - Installed: \(isInstalled), Enabled: \(isEnabled)")
+        logger.info("LaunchAgent status - Installed: \(self.isInstalled), Enabled: \(self.isEnabled)")
     }
 
     func toggleLaunchAgent() -> Bool {

@@ -751,41 +751,6 @@ enum SuggestionFilter: CaseIterable {
 
 // MARK: - Extensions
 
-extension SuggestionPriority {
-    var displayName: String {
-        switch self {
-        case .high: return "HIGH"
-        case .medium: return "MED"
-        case .low: return "LOW"
-        }
-    }
-}
-
-extension SuggestionSourceType {
-    var displayName: String {
-        switch self {
-        case .ocr: return "Screen Content"
-        case .accessibility: return "App Usage"
-        case .fusion: return "Activity Pattern"
-        case .userInput: return "Manual Entry"
-        case .learning: return "Smart Suggestion"
-        }
-    }
-}
-
-extension ActionType {
-    var displayName: String {
-        switch self {
-        case .work: return "Work"
-        case .personal: return "Personal"
-        case .communication: return "Communication"
-        case .health: return "Health"
-        case .finance: return "Finance"
-        case .learning: return "Learning"
-        case .other: return "Other"
-        }
-    }
-}
 
 #Preview {
     SuggestedTodosView()

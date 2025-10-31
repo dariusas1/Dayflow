@@ -187,7 +187,7 @@ class DataMigrationManager: ObservableObject {
     }
 
     private func migrateUserPreferences() async throws -> Int {
-        let migratedPrefs = MigratedPreferences()
+        var migratedPrefs = MigratedPreferences()
 
         // Migrate recording preferences
         migratedPrefs.recordingEnabled = userDefaults.bool(forKey: "isRecordingEnabled")
@@ -283,10 +283,9 @@ class DataMigrationManager: ObservableObject {
             emergencyBreaks: legacySession.emergencyBreaks.compactMap { legacyBreak in
                 EmergencyBreak(
                     id: legacyBreak.id,
-                    reason: legacyBreak.reason,
                     startTime: legacyBreak.startTime,
                     endTime: legacyBreak.endTime,
-                    duration: legacyBreak.duration
+                    reason: legacyBreak.reason
                 )
             },
             interruptions: []
@@ -541,8 +540,7 @@ struct FocusSessionDetector {
         let titles = activities.map { $0.title }
         let mostCommonTitle = titles.reduce(into: [:]) { counts, title in
             counts[title, default: 0] += 1
-            return counts
-        }.max { $0.value < $1.value }?.key ?? "Focus Session"
+        }.max { ($0.value as Int) < ($1.value as Int) }?.key ?? "Focus Session"
 
         return mostCommonTitle
     }
@@ -560,16 +558,15 @@ extension FocusActivity {
     static func fromTimelineActivity(_ activity: LegacyTimelineActivity) -> FocusActivity {
         return FocusActivity(
             id: activity.id,
-            taskName: activity.title,
-            description: activity.summary,
+            title: activity.title,
+            category: FocusCategory.fromLegacyCategoryName(activity.category),
             startTime: activity.startTime,
             endTime: activity.endTime,
-            category: FocusCategory.fromLegacyCategoryName(activity.category),
-            status: .completed,
             metadata: [
-                "original_summary": activity.summary,
-                "detailed_summary": activity.detailedSummary,
-                "has_video": activity.videoSummaryURL != nil
+                "original_summary": AnyCodable(activity.summary),
+                "detailed_summary": AnyCodable(activity.detailedSummary),
+                "has_video": AnyCodable(activity.videoSummaryURL != nil),
+                "status": AnyCodable("completed")
             ]
         )
     }
@@ -580,9 +577,8 @@ extension FocusCategory {
         return FocusCategory(
             id: category.id,
             name: category.name,
-            colorHex: category.colorHex,
-            icon: categoryIcon(for: category.name),
-            isSystem: false
+            color: category.colorHex,
+            icon: categoryIcon(for: category.name)
         )
     }
 
@@ -590,9 +586,8 @@ extension FocusCategory {
         return FocusCategory(
             id: UUID(),
             name: name,
-            colorHex: "#4F80EB",
-            icon: categoryIcon(for: name),
-            isSystem: false
+            color: "#4F80EB",
+            icon: categoryIcon(for: name)
         )
     }
 
@@ -621,11 +616,12 @@ extension FocusAnalytics {
     static func fromLegacyAnalytics(_ data: LegacyAnalyticsData) -> FocusAnalytics {
         return FocusAnalytics(
             id: UUID(),
-            event: data.event,
-            timestamp: data.timestamp,
-            properties: data.properties,
-            sessionId: nil,
-            userId: nil
+            date: data.timestamp,
+            totalFocusTime: data.properties["totalFocusTime"] as? TimeInterval ?? 0,
+            tasksCompleted: data.properties["tasksCompleted"] as? Int ?? 0,
+            distractionCount: data.properties["distractionCount"] as? Int ?? 0,
+            productivityScore: data.properties["productivityScore"] as? Double ?? 0.0,
+            topCategories: data.properties["topCategories"] as? [String] ?? []
         )
     }
 }

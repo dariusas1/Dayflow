@@ -149,7 +149,7 @@ actor BM25Index {
         var scores: [UUID: Double] = [:]
 
         // Calculate average document length
-        let avgDocLength = documentLengths.values.reduce(0, +) / max(documentLengths.count, 1)
+        let avgDocLength = Double(documentLengths.values.reduce(0, +)) / Double(max(documentLengths.count, 1))
 
         for (docId, documentTerms) in documents {
             var score: Double = 0
@@ -162,7 +162,16 @@ actor BM25Index {
                 let idf = calculateIDF(term: term)
 
                 // BM25 formula
-                let tfComponent = (termFrequency * (k1 + 1)) / (termFrequency + k1 * (1 - b + b * (docLength / avgDocLength)))
+                let tf = Double(termFrequency)
+                let k1Plus1 = Double(k1 + 1)
+                let k1Double = Double(k1)
+                let bDouble = Double(b)
+
+                let numerator = tf * k1Plus1
+                let lengthRatio = docLength / avgDocLength
+                let bComponent = 1 - bDouble + (bDouble * lengthRatio)
+                let denominator = tf + (k1Double * bComponent)
+                let tfComponent = numerator / denominator
                 score += idf * tfComponent
             }
 
@@ -194,18 +203,23 @@ actor VectorEmbeddingGenerator {
     private let logger = Logger(subsystem: "FocusLock", category: "VectorEmbeddingGenerator")
 
     init() {
-        loadEmbeddingModel()
+        Task {
+            await loadEmbeddingModel()
+        }
     }
 
     private func loadEmbeddingModel() {
         // Use Apple's multilingual sentence embedding model
-        NLEmbedding.sentenceEmbedding(for: .english) { [weak self] result in
-            Task { @MainActor in
-                switch result {
-                case .success(let embedding):
-                    await self?.setEmbeddingModel(embedding)
-                    self?.logger.info("Successfully loaded sentence embedding model")
-                case .failure(let error):
+        Task {
+            do {
+                let model = try await NLEmbedding.sentenceEmbedding(for: .english)
+                await MainActor.run {
+                    guard let strongSelf = self else { return }
+                    strongSelf.setEmbeddingModel(model)
+                    strongSelf.logger.info("Successfully loaded sentence embedding model")
+                }
+            } catch {
+                await MainActor.run {
                     self?.logger.error("Failed to load embedding model: \(error.localizedDescription)")
                 }
             }
@@ -216,18 +230,20 @@ actor VectorEmbeddingGenerator {
         self.embeddingModel = model
     }
 
-    func generateEmbedding(for text: String) async throws -> [Float] {
+    func generateEmbedding(for text: String) async throws -> [Double] {
         guard let model = embeddingModel else {
             throw EmbeddingError.modelNotLoaded
         }
 
         let startTime = CFAbsoluteTimeGetCurrent()
-        let embedding = try model.vector(for: text)
+        guard let embedding = try model.vector(for: text) else {
+            throw EmbeddingError.modelNotLoaded
+        }
         let duration = CFAbsoluteTimeGetCurrent() - startTime
 
         logger.info("Generated embedding in \(String(format: "%.3f", duration))s")
 
-        return embedding.map { Float($0) }
+        return embedding
     }
 
     func generateBatchEmbeddings(for texts: [String]) async throws -> [[Float]] {
@@ -282,7 +298,7 @@ actor HybridMemoryStore: MemoryStore {
     }()
 
     private let databaseQueue: DatabaseQueue
-    private let bm25Index = BM25Index()
+    private var bm25Index = BM25Index()
     private let embeddingGenerator = VectorEmbeddingGenerator()
     private let logger = Logger(subsystem: "FocusLock", category: "HybridMemoryStore")
 
@@ -339,7 +355,7 @@ actor HybridMemoryStore: MemoryStore {
 
     private func loadExistingItems() async {
         do {
-            let items = try getAllStoredItems()
+            let items = try await getAllStoredItems()
             logger.info("Loaded \(items.count) existing items into memory index")
 
             // Rebuild BM25 index
@@ -518,7 +534,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     func delete(id: UUID) async throws {
-        try databaseQueue.write { db in
+        try await databaseQueue.write { db in
             try db.execute(sql: "DELETE FROM memory_items WHERE id = ?", arguments: [id.uuidString])
         }
 
@@ -527,7 +543,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     func clear() async throws {
-        try databaseQueue.write { db in
+        try await databaseQueue.write { db in
             try db.execute(sql: "DELETE FROM memory_items")
         }
 

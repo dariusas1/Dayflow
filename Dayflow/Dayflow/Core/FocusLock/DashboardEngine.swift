@@ -525,7 +525,9 @@ class DashboardEngine: ObservableObject {
             ))
         }
 
-        return recommendations.sorted { $0.priority.level > $1.priority.level }
+        return recommendations.sorted { (r1: Recommendation, r2: Recommendation) -> Bool in
+            r1.priority.numericValue > r2.priority.numericValue
+        }
     }
 
     // MARK: - Query Processing

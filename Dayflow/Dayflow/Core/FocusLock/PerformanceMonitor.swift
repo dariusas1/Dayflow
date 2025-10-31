@@ -73,8 +73,8 @@ class PerformanceMonitor: ObservableObject {
         return BackgroundTaskManager.shared
     }
 
-    var backgroundTaskMetrics: BackgroundTaskMetrics {
-        return BackgroundTaskMetrics(
+    var backgroundTaskMetrics: BackgroundTaskAggregateMetrics {
+        return BackgroundTaskAggregateMetrics(
             completedTasksToday: componentMetrics.values.flatMap { $0.metrics }.count,
             successRate: 0.95, // Placeholder
             averageCpuImpact: 0.05, // Placeholder
@@ -111,16 +111,20 @@ class PerformanceMonitor: ObservableObject {
         // Placeholder recommendations
         return [
             PowerOptimizationRecommendation(
-                id: UUID(),
+                type: .enableLowPowerMode,
                 title: "Enable Low Power Mode",
                 description: "Reduce background processing and lower refresh rates to save battery",
-                expectedSavings: 0.15
+                priority: .high,
+                potentialSavings: 0.15,
+                impact: "High impact on battery life with reduced performance"
             ),
             PowerOptimizationRecommendation(
-                id: UUID(),
+                type: .lowerProcessingFrequency,
                 title: "Optimize OCR Processing",
                 description: "Reduce OCR frequency during battery operation",
-                expectedSavings: 0.08
+                priority: .medium,
+                potentialSavings: 0.08,
+                impact: "Moderate battery savings with slightly less responsive task detection"
             )
         ]
     }
@@ -879,7 +883,8 @@ struct ComponentPerformanceTracker {
             cpuUsage: latestMetric?.cpuUsage ?? 0.0,
             memoryUsage: latestMetric?.memoryUsage.current ?? 0.0,
             responseTime: latestMetric?.responseTime ?? 0.0,
-            errorRate: latestMetric?.errorRate ?? 0.0
+            errorRate: latestMetric?.errorRate ?? 0.0,
+            health: .unknown
         )
     }
 }

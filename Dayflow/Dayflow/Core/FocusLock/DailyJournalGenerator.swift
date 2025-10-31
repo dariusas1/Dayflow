@@ -11,6 +11,23 @@ import SwiftUI
 import Combine
 import os.log
 
+enum JournalGenerationError: LocalizedError {
+    case failedToGenerateResponse
+    case contextDataUnavailable
+    case templateError
+
+    var errorDescription: String? {
+        switch self {
+        case .failedToGenerateResponse:
+            return "Failed to generate journal response"
+        case .contextDataUnavailable:
+            return "Context data is unavailable"
+        case .templateError:
+            return "Template error occurred"
+        }
+    }
+}
+
 @MainActor
 class DailyJournalGenerator: ObservableObject {
     static let shared = DailyJournalGenerator()
@@ -282,7 +299,11 @@ class DailyJournalGenerator: ObservableObject {
         let memories = try await getRelevantMemories(for: date)
 
         // Get user preferences and patterns
-        let userPatterns = userLearningData.engagementPatterns.map { $0.template.rawValue }
+        let userPatterns = Dictionary(
+            uniqueKeysWithValues: userLearningData.engagementPatterns.map { pattern in
+                (pattern.template.rawValue, pattern.avgEngagementScore)
+            }
+        )
 
         return JournalContextData(
             date: date,
@@ -370,9 +391,15 @@ class DailyJournalGenerator: ObservableObject {
         )
 
         // Use JarvisChat for AI generation
-        let response = try await jarvisChat.sendMessage(prompt)
+        await jarvisChat.sendMessage(prompt)
 
-        return response.content
+        // Get the last message from current conversation
+        guard let lastMessage = jarvisChat.currentConversation?.messages.last,
+              lastMessage.role == .assistant else {
+            throw JournalGenerationError.failedToGenerateResponse
+        }
+
+        return lastMessage.content
     }
 
     /// Create the generation prompt
@@ -389,7 +416,7 @@ class DailyJournalGenerator: ObservableObject {
         User Preferences:
         - Focus Areas: \(preferences.focusAreas.map(\.rawValue).joined(separator: ", "))
         - Length: \(preferences.lengthPreference.rawValue)
-        - Tone: \(preferences.tone.rawValue)
+        - Tone: \(preferences.tonePreference.rawValue)
         - Include Questions: \(preferences.includeQuestions ? "Yes" : "No")
 
         Key Highlights from the Day:
@@ -460,14 +487,14 @@ class DailyJournalGenerator: ObservableObject {
 
     private func getRelevantMemories(for date: Date) async throws -> [MemoryRecord] {
         // Use MemoryStore to get relevant memories for the day
-        let query = "activities experiences memories \(date.formatted(date: .abbreviated)) time:\(date.formatted(date: .abbreviated))"
+        let query = "activities experiences memories \(date.formatted(date: .abbreviated, time: .omitted))"
         let searchResults = try await memoryStore.search(query, limit: 5)
 
         // Convert MemorySearchResult to MemoryRecord
         return searchResults.map { result in
             MemoryRecord(
                 id: result.id,
-                title: "Memory from \(result.item.timestamp.formatted(date: .abbreviated))",
+                title: "Memory from \(result.item.timestamp.formatted(date: .abbreviated, time: .omitted))",
                 content: result.item.content,
                 timestamp: result.item.timestamp,
                 relevance: result.score
@@ -619,7 +646,7 @@ class DailyJournalGenerator: ObservableObject {
             // Record this interaction
             let interaction = JournalInteraction(
                 journalId: journal.id,
-                engagementScore: engagement == .high ? 1.0 : (engagement == .medium ? 0.7 : 0.3),
+                engagementScore: engagement == .completed ? 1.0 : (engagement == .partial ? 0.7 : 0.3),
                 actions: [],
                 feedback: nil
             )
@@ -645,7 +672,11 @@ class DailyJournalGenerator: ObservableObject {
             sessions: await getSessionsForDay(date),
             activities: await getActivitiesForDay(date),
             memories: try await getRelevantMemories(for: date),
-            userPatterns: userLearningData.engagementPatterns.map { $0.template.rawValue },
+            userPatterns: Dictionary(
+                uniqueKeysWithValues: userLearningData.engagementPatterns.map { pattern in
+                    (pattern.template.rawValue, pattern.avgEngagementScore)
+                }
+            ),
             weather: nil,
             dayOfWeek: Calendar.current.component(.weekday, from: date),
             isWeekend: Calendar.current.component(.weekday, from: date) >= 6
@@ -667,7 +698,7 @@ private struct JournalContextData {
     let sessions: [FocusSession]
     let activities: [ActivityRecord]
     let memories: [MemoryRecord]
-    let userPatterns: [String: Int]
+    let userPatterns: [String: Double]
     let weather: String?
     let dayOfWeek: Int
     let isWeekend: Bool

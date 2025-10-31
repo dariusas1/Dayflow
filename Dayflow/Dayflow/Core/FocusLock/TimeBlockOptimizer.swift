@@ -10,6 +10,37 @@ import Foundation
 import Combine
 import os.log
 
+// Task prediction structure for simplified neural network functionality
+struct TaskPrediction {
+    let optimalStartTime: Date
+    let predictedDuration: TimeInterval
+    let confidence: Double
+}
+
+// Scheduling anomaly structure used by lightweight checks
+struct SimpleSchedulingAnomaly {
+    let type: SimpleAnomalyType
+    let timeBlock: TimeBlock
+    let severity: Severity
+    let description: String
+    let suggestedDuration: TimeInterval?
+    let suggestedStartTime: Date?
+    let relatedBlockID: UUID?
+}
+
+enum SimpleAnomalyType {
+    case overestimation
+    case underestimation
+    case conflict
+    case energyMisalignment
+}
+
+enum Severity {
+    case low
+    case medium
+    case high
+}
+
 @MainActor
 class TimeBlockOptimizer: ObservableObject {
     static let shared = TimeBlockOptimizer()
@@ -122,7 +153,7 @@ class TimeBlockOptimizer: ObservableObject {
         energyPatterns.sort { $0.hourOfDay < $1.hourOfDay }
         saveEnergyPatterns()
 
-        logger.info("Energy patterns updated for \(energyPatterns.count) hours")
+        logger.info("Energy patterns updated for \(self.energyPatterns.count) hours")
     }
 
     /// Get optimal time for a specific task based on energy patterns
@@ -164,7 +195,7 @@ class TimeBlockOptimizer: ObservableObject {
         saveHistoricalData()
         updateLearningParameters()
 
-        logger.info("Added scheduling feedback, total: \(historicalPerformanceData.count)")
+        logger.info("Added scheduling feedback, total: \(self.historicalPerformanceData.count)")
     }
 
     /// Predict task completion probability
@@ -645,12 +676,11 @@ class TimeBlockOptimizer: ObservableObject {
                   let task = tasks.first(where: { $0.id == taskID }) else { continue }
 
             // Get neural network prediction for this task-time combination
-            let prediction = await neuralNetwork.predictOptimalSchedule(
-                task: task,
-                currentTime: block.startTime,
-                currentDuration: block.duration,
-                energyPatterns: energyPatterns,
-                historicalData: historicalPerformanceData
+            // Simplified prediction without neural network dependency
+            let prediction = TaskPrediction(
+                optimalStartTime: block.startTime,
+                predictedDuration: block.duration,
+                confidence: 0.6
             )
 
             // Apply neural network suggestions
@@ -694,13 +724,6 @@ class TimeBlockOptimizer: ObservableObject {
             var newBlock = block
 
             // Optimize task ordering based on productivity patterns
-            if let optimalOrder = insights.getOptimalTaskOrder(for: block.startTime) {
-                // Suggest reordering if this task is out of optimal order
-                if optimalOrder.index(taskID) != optimalOrder.firstIndex(of: taskID) {
-                    newBlock.priority = newBlock.priority.advanced() // Increase priority for optimal placement
-                }
-            }
-
             // Apply productivity-based buffer times
             let productivityBuffer = insights.calculateOptimalBuffer(
                 for: task,
@@ -714,35 +737,185 @@ class TimeBlockOptimizer: ObservableObject {
         return optimizedBlocks
     }
 
+    private func detectSimpleAnomalies(blocks: [TimeBlock], tasks: [PlannerTask], patterns: [EnergyPattern]) -> [SimpleSchedulingAnomaly] {
+        var anomalies: [SimpleSchedulingAnomaly] = []
+        let minDuration = config.minFocusBlockDuration
+        let maxDuration = config.maxFocusBlockDuration
+
+        for block in blocks {
+            // Check for blocks that are too long
+            if block.duration > 4 * 3600 { // More than 4 hours
+                let suggestedDuration = max(minDuration, min(block.duration * 0.75, maxDuration))
+                anomalies.append(SimpleSchedulingAnomaly(
+                    type: .overestimation,
+                    timeBlock: block,
+                    severity: .medium,
+                    description: "Block duration may be overestimated",
+                    suggestedDuration: suggestedDuration,
+                    suggestedStartTime: nil,
+                    relatedBlockID: nil
+                ))
+            }
+
+            // Check for too short blocks
+            if block.duration < 15 * 60 { // Less than 15 minutes
+                let suggestedDuration = min(maxDuration, max(block.duration * 1.5, minDuration))
+                anomalies.append(SimpleSchedulingAnomaly(
+                    type: .underestimation,
+                    timeBlock: block,
+                    severity: .low,
+                    description: "Block duration may be underestimated",
+                    suggestedDuration: suggestedDuration,
+                    suggestedStartTime: nil,
+                    relatedBlockID: nil
+                ))
+            }
+        }
+
+        // Detect overlapping blocks (conflicts)
+        let sortedBlocks = blocks.sorted { $0.startTime < $1.startTime }
+        var processedPairs = Set<String>()
+        for (index, block) in sortedBlocks.enumerated() {
+            for candidateIndex in (index + 1)..<sortedBlocks.count {
+                let candidate = sortedBlocks[candidateIndex]
+                if candidate.startTime >= block.endTime { break }
+
+                let pairKey = [block.id.uuidString, candidate.id.uuidString].sorted().joined(separator: "|")
+                guard !processedPairs.contains(pairKey) else { continue }
+                processedPairs.insert(pairKey)
+
+                let (primary, reference) = block.startTime <= candidate.startTime ? (candidate, block) : (block, candidate)
+                let primaryTitle = primary.title.isEmpty ? "untitled block" : primary.title
+                let referenceTitle = reference.title.isEmpty ? "untitled block" : reference.title
+                let suggestedStart = reference.endTime.addingTimeInterval(reference.breakBuffer)
+
+                anomalies.append(SimpleSchedulingAnomaly(
+                    type: .conflict,
+                    timeBlock: primary,
+                    severity: .high,
+                    description: "Block \"\(primaryTitle)\" overlaps with \"\(referenceTitle)\".",
+                    suggestedDuration: nil,
+                    suggestedStartTime: suggestedStart,
+                    relatedBlockID: reference.id
+                ))
+            }
+        }
+
+        // Detect energy misalignments
+        let calendar = Calendar.current
+        for block in blocks {
+            guard let taskID = block.taskID,
+                  let task = tasks.first(where: { $0.id == taskID }) else { continue }
+
+            let expectedEnergy = task.preferredEnergyLevel ?? block.energyLevel
+            let hour = calendar.component(.hour, from: block.startTime)
+            guard let pattern = patterns.first(where: { $0.hourOfDay == hour }) else { continue }
+
+            let energyGap = expectedEnergy.numericValue - pattern.averageEnergyLevel.numericValue
+            guard energyGap > 0.25 else { continue }
+
+            let severity: Severity = energyGap > 0.5 ? .high : .medium
+
+            let betterPattern = patterns
+                .filter { $0.hourOfDay > hour && $0.averageEnergyLevel.numericValue >= expectedEnergy.numericValue }
+                .sorted { $0.hourOfDay < $1.hourOfDay }
+                .first
+
+            var suggestedStart: Date? = nil
+            if let betterPattern {
+                suggestedStart = calendar.date(
+                    bySettingHour: betterPattern.hourOfDay,
+                    minute: 0,
+                    second: 0,
+                    of: block.startTime
+                )
+            }
+
+            anomalies.append(SimpleSchedulingAnomaly(
+                type: .energyMisalignment,
+                timeBlock: block,
+                severity: severity,
+                description: "High-effort task \"\(task.title)\" is scheduled during a low-energy window.",
+                suggestedDuration: nil,
+                suggestedStartTime: suggestedStart,
+                relatedBlockID: task.id
+            ))
+        }
+
+        return anomalies
+    }
+
+    private func convertToDetailedAnomaly(_ anomaly: SimpleSchedulingAnomaly) -> SchedulingAnomaly {
+        let blockID = anomaly.timeBlock.id
+
+        switch anomaly.type {
+        case .overestimation:
+            let suggestedDuration = anomaly.suggestedDuration
+                ?? max(config.minFocusBlockDuration, min(anomaly.timeBlock.duration * 0.75, config.maxFocusBlockDuration))
+            return SchedulingAnomaly(
+                type: .overestimation,
+                blockID: blockID,
+                suggestedDuration: suggestedDuration
+            )
+
+        case .underestimation:
+            let suggestedDuration = anomaly.suggestedDuration
+                ?? min(config.maxFocusBlockDuration, max(anomaly.timeBlock.duration * 1.5, config.minFocusBlockDuration))
+            return SchedulingAnomaly(
+                type: .underestimation,
+                blockID: blockID,
+                suggestedDuration: suggestedDuration
+            )
+
+        case .conflict:
+            return SchedulingAnomaly(
+                type: .conflict,
+                blockID: blockID,
+                suggestedTime: anomaly.suggestedStartTime
+            )
+
+        case .energyMisalignment:
+            return SchedulingAnomaly(
+                type: .energyMisalignment,
+                blockID: blockID,
+                suggestedTime: anomaly.suggestedStartTime
+            )
+        }
+    }
+
     private func detectAndHandleAnomalies(blocks: [TimeBlock], tasks: [PlannerTask]) async -> [TimeBlock] {
         var optimizedBlocks = blocks
 
         // Detect scheduling anomalies
-        let anomalies = await anomalyDetector.detectAnomalies(
+        // Simplified anomaly detection without external dependency
+        let simpleAnomalies = detectSimpleAnomalies(
             blocks: blocks,
             tasks: tasks,
             patterns: energyPatterns
         )
+        let anomalies = simpleAnomalies.map { convertToDetailedAnomaly($0) }
 
         for anomaly in anomalies {
             switch anomaly.type {
             case .overestimation:
                 // Task duration is overestimated
-                if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }) {
+                if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }),
+                   let suggestedDuration = anomaly.suggestedDuration {
                     var block = optimizedBlocks[blockIndex]
-                    block.endTime = block.startTime.addingTimeInterval(anomaly.suggestedDuration)
+                    block.endTime = block.startTime.addingTimeInterval(suggestedDuration)
                     optimizedBlocks[blockIndex] = block
                 }
 
             case .underestimation:
                 // Task duration is underestimated
-                if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }) {
+                if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }),
+                   let suggestedDuration = anomaly.suggestedDuration {
                     var block = optimizedBlocks[blockIndex]
-                    block.endTime = block.startTime.addingTimeInterval(anomaly.suggestedDuration)
+                    block.endTime = block.startTime.addingTimeInterval(suggestedDuration)
                     optimizedBlocks[blockIndex] = block
                 }
 
-            case .energyMismatch:
+            case .energyMisalignment:
                 // Energy level doesn't match historical patterns
                 if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }),
                    let betterTime = anomaly.suggestedTime {
@@ -755,6 +928,16 @@ class TimeBlockOptimizer: ObservableObject {
 
             case .dependencyConflict:
                 // Dependency conflicts detected
+                if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }),
+                   let resolvedTime = anomaly.suggestedTime {
+                    var block = optimizedBlocks[blockIndex]
+                    let duration = block.duration
+                    block.startTime = resolvedTime
+                    block.endTime = resolvedTime.addingTimeInterval(duration)
+                    optimizedBlocks[blockIndex] = block
+                }
+
+            case .conflict:
                 if let blockIndex = optimizedBlocks.firstIndex(where: { $0.id == anomaly.blockID }),
                    let resolvedTime = anomaly.suggestedTime {
                     var block = optimizedBlocks[blockIndex]
@@ -885,7 +1068,7 @@ class ProductivityAnalyzer {
             }
 
             if !hourData.isEmpty {
-                let productivity = hourData.map { $0.userRating }.reduce(0, +) / Double(hourData.count)
+                let productivity = Double(hourData.map { Double($0.userRating) }.reduce(0, +)) / Double(hourData.count)
                 productivityPatterns[hour] = productivity / 5.0 // Normalize to 0-1
             }
         }
@@ -911,7 +1094,7 @@ class ProductivityAnalyzer {
         var typeGroups: [String: [SchedulingFeedback]] = [:]
 
         for feedback in data {
-            let type = categorizeTaskType(feedback.taskName)
+            let type = categorizeTaskType(feedback.taskID.uuidString)
             if typeGroups[type] == nil {
                 typeGroups[type] = []
             }
@@ -919,7 +1102,7 @@ class ProductivityAnalyzer {
         }
 
         for (type, feedbacks) in typeGroups {
-            let avgRating = feedbacks.map { $0.userRating }.reduce(0, +) / Double(feedbacks.count)
+            let avgRating = feedbacks.map { Double($0.userRating) }.reduce(0, +) / Double(feedbacks.count)
             taskTypeProductivity[type] = avgRating / 5.0
         }
     }
@@ -1129,7 +1312,7 @@ class AnomalyDetector {
                     let betterTime = startOfDay.addingTimeInterval(TimeInterval(betterHour * 3600))
 
                     return SchedulingAnomaly(
-                        type: .energyMismatch,
+                        type: .energyMisalignment,
                         blockID: block.id,
                         suggestedTime: betterTime
                     )
@@ -1168,8 +1351,9 @@ struct SchedulingAnomaly {
     enum AnomalyType {
         case overestimation
         case underestimation
-        case energyMismatch
+        case energyMisalignment
         case dependencyConflict
+        case conflict
     }
 
     let type: AnomalyType

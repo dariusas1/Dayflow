@@ -2534,7 +2534,7 @@ enum SuggestionPriority: String, Codable, CaseIterable {
         }
     }
 
-    var displayName: String {
+    var displayTitle: String {
         switch self {
         case .low: return "Low"
         case .medium: return "Medium"
@@ -2562,7 +2562,7 @@ enum SuggestionSourceType: String, Codable, CaseIterable {
     case deadlineProximity = "deadline_proximity"
     case recurringTask = "recurring_task"
 
-    var displayName: String {
+    var sourceTitle: String {
         switch self {
         case .activityFusion: return "Activity Detection"
         case .ocrText: return "Text Analysis"
@@ -3093,6 +3093,32 @@ struct ProductivityInsight: Codable, Identifiable {
         case goalProgress = "goal_progress"
         case burnoutRisk = "burnout_risk"
         case focusQuality = "focus_quality"
+
+        var systemImage: String {
+            switch self {
+            case .peakPerformance: return "chart.line.uptrend.xyaxis"
+            case .productivityPattern: return "chart.bar.fill"
+            case .energyOptimization: return "battery.100"
+            case .taskEfficiency: return "clock.fill"
+            case .schedulingImprovement: return "calendar.badge.plus"
+            case .goalProgress: return "target"
+            case .burnoutRisk: return "exclamationmark.triangle.fill"
+            case .focusQuality: return "brain.head.profile"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .peakPerformance: return .green
+            case .productivityPattern: return .blue
+            case .energyOptimization: return .yellow
+            case .taskEfficiency: return .orange
+            case .schedulingImprovement: return .purple
+            case .goalProgress: return .mint
+            case .burnoutRisk: return .red
+            case .focusQuality: return .indigo
+            }
+        }
     }
 
     init(type: InsightType, title: String, description: String, metrics: [ProductivityMetric] = [], recommendations: [ProductivityRecommendation] = [], confidenceLevel: Double = 0.8, actionableItems: [ActionableItem] = [], validUntil: Date? = nil, priority: PlannerPriority = .medium) {
@@ -3332,7 +3358,7 @@ enum JournalTemplate: String, CaseIterable, Codable {
         }
     }
 
-    var description: String {
+    var templateDescription: String {
         switch self {
         case .reflective: return "Deep reflection on thoughts, feelings, and experiences"
         case .achievement: return "Focus on accomplishments and progress made"
@@ -3932,6 +3958,49 @@ struct FocusAnalytics: Codable, Identifiable {
     }
 }
 
+// Background task aggregate metrics for performance monitoring
+struct BackgroundTaskAggregateMetrics: Codable {
+    let completedTasksToday: Int
+    let successRate: Double
+    let averageCpuImpact: Double
+    let averageMemoryImpact: Double
+    let batteryDrainRate: Double
+
+    init(completedTasksToday: Int, successRate: Double, averageCpuImpact: Double, averageMemoryImpact: Double, batteryDrainRate: Double) {
+        self.completedTasksToday = completedTasksToday
+        self.successRate = successRate
+        self.averageCpuImpact = averageCpuImpact
+        self.averageMemoryImpact = averageMemoryImpact
+        self.batteryDrainRate = batteryDrainRate
+    }
+}
+
+// Health status enum for components
+enum HealthStatus: String, Codable, CaseIterable {
+    case healthy = "healthy"
+    case warning = "warning"
+    case critical = "critical"
+    case unknown = "unknown"
+
+    var displayName: String {
+        switch self {
+        case .healthy: return "Healthy"
+        case .warning: return "Warning"
+        case .critical: return "Critical"
+        case .unknown: return "Unknown"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .healthy: return "green"
+        case .warning: return "yellow"
+        case .critical: return "red"
+        case .unknown: return "gray"
+        }
+    }
+}
+
 // Component metrics for performance monitoring
 struct ComponentMetrics: Codable, Identifiable {
     let id: UUID
@@ -3964,34 +4033,10 @@ struct ComponentHealth: Codable, Identifiable {
     let status: HealthStatus
     let lastCheck: Date
     let issues: [String]
+    let metrics: ComponentMetrics
 
     var displayName: String {
         return componentName
-    }
-
-    enum HealthStatus: String, Codable, CaseIterable {
-        case healthy = "healthy"
-        case warning = "warning"
-        case critical = "critical"
-        case unknown = "unknown"
-
-        var displayName: String {
-            switch self {
-            case .healthy: return "Healthy"
-            case .warning: return "Warning"
-            case .critical: return "Critical"
-            case .unknown: return "Unknown"
-            }
-        }
-
-        var color: String {
-            switch self {
-            case .healthy: return "green"
-            case .warning: return "yellow"
-            case .critical: return "red"
-            case .unknown: return "gray"
-            }
-        }
     }
 
     init(id: UUID = UUID(), componentName: String, status: HealthStatus, lastCheck: Date = Date(), issues: [String] = [], metrics: ComponentMetrics) {
@@ -4433,7 +4478,7 @@ enum ROOptimizationAction: Codable {
     // Quality and performance
     case lowerQuality(component: FocusLockComponent)
     case lowerThreadPriority(allComponents: ThreadPriority)
-    case lowerThreadPriority(component: FocusLockComponent, priority: ThreadPriority)
+    case lowerComponentThreadPriority(component: FocusLockComponent, priority: ThreadPriority)
     case useSimplifiedModel(component: FocusLockComponent)
 
     // Task management

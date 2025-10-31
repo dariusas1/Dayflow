@@ -337,7 +337,7 @@ struct FocusPreferences: Codable {
 }
 
 struct PrivacyPreferences: Codable {
-    let consent: PrivacyConsent
+    var consent: PrivacyConsent
     let allowAnalytics: Bool
     let allowDataSync: Bool
     let shareUsageStatistics: Bool

@@ -442,7 +442,7 @@ class JarvisChat: ObservableObject {
         }
     }
 
-    private func extractToolParameters(for toolName: String, intent: UserIntent, context: ConversationContext) -> [String: Any] {
+    private func extractToolParameters(for toolName: String, intent: UserIntent, context: ConversationContext) -> [String: AnyCodable] {
         switch toolName {
         case "search_memories":
             return ["query": AnyCodable(context.recentMessages.last?.content ?? "")]
