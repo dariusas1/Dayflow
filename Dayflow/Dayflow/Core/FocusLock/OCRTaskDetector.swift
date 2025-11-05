@@ -11,8 +11,13 @@ import Vision
 import AppKit
 import CoreGraphics
 import ScreenCaptureKit
+import CoreVideo
+import CoreImage
+import AVFoundation
 import os.log
 
+@MainActor
+@preconcurrency
 class OCRTaskDetector: TaskDetector {
     private let logger = Logger(subsystem: "FocusLock", category: "OCRTaskDetector")
     private var _isDetecting = false
@@ -190,91 +195,60 @@ class OCRTaskDetector: TaskDetector {
     }
 
     private func captureWindowScreenshot() async -> CGImage? {
-        return await withCheckedContinuation { continuation in
-            Task {
-                do {
-                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-
-                    // Get the main display
-                    let config = SCStreamConfiguration()
-                    // Use the main screen frame instead of content.cgFrame
-                    let mainScreen = NSScreen.main ?? NSScreen.screens.first
-                    let screenFrame = mainScreen?.frame ?? CGRect.zero
-                    config.width = Int(screenFrame.width)
-                    config.height = Int(screenFrame.height)
-                    config.sourceRect = screenFrame
-                    config.scalesToFit = true
-
-                    // Start capture - updated API for modern ScreenCaptureKit
-                    guard let displayID = mainScreen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    let filter = SCContentFilter(display: displayID, excludingWindows: [], onScreenWindowsOnly: true)
-                    let stream = try await SCStream(filter: filter, configuration: config, delegate: nil)
-
-                    // Capture first frame
-                    stream.startCapture()
-
-                    // Wait for frame
-                    try await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-
-                    // Get the frame
-                    let sampleBuffer = try await stream.nextFrame()
-                    guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                        stream.stopCapture()
-                        continuation.resume(returning: nil)
-                        return
-                    }
-                    CVPixelBufferLockBaseAddress(imageBuffer, [])
-
-                    // Create CGImage
-                    let width = CVPixelBufferGetWidth(imageBuffer)
-                    let height = CVPixelBufferGetHeight(imageBuffer)
-                    let bitsPerComponent = 8
-                    let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
-                    let colorSpace = CGColorSpaceCreateDeviceRGB()
-
-                    guard let pixelData = CVPixelBufferGetBaseAddress(imageBuffer) else {
-                        CVPixelBufferUnlockBaseAddress(imageBuffer, [])
-                        stream.stopCapture()
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    guard let context = CGContext(
-                        data: pixelData,
-                        width: width,
-                        height: height,
-                        bitsPerComponent: bitsPerComponent,
-                        bytesPerRow: bytesPerRow,
-                        space: colorSpace,
-                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-                    ) else {
-                        CVPixelBufferUnlockBaseAddress(imageBuffer, [])
-                        stream.stopCapture()
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    let cgImage = context.makeImage()
-
-                    CVPixelBufferUnlockBaseAddress(imageBuffer, [])
-                    stream.stopCapture()
-
-                    continuation.resume(returning: cgImage)
-
-                } catch {
-                    logger.error("Failed to capture window screenshot: \(error)")
-                    continuation.resume(returning: nil)
-                }
+        do {
+            // Use ScreenCaptureKit for screen capture (replacement for deprecated CGWindowListCreateImage)
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = content.displays.first else {
+                logger.error("No displays available for screenshot")
+                return nil
             }
+            
+            // Capture from the main display
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = Int(display.width)
+            config.height = Int(display.height)
+            config.pixelFormat = kCVPixelFormatType_32BGRA
+            config.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+            
+            // Use SCStream to capture a single frame
+            var capturedImage: CGImage?
+            let streamOutput = StreamOutput { sampleBuffer in
+                guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                let ciImage = CIImage(cvImageBuffer: imageBuffer)
+                let context = CIContext()
+                capturedImage = context.createCGImage(ciImage, from: ciImage.extent)
+            }
+            
+            let stream = SCStream(filter: filter, configuration: config, delegate: nil)
+            try stream.addStreamOutput(streamOutput, type: .screen, sampleHandlerQueue: nil)
+            
+            try await stream.startCapture()
+            // Wait briefly for frame capture
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            try await stream.stopCapture()
+            
+            return capturedImage
+        } catch {
+            logger.error("Failed to capture window screenshot: \(error)")
+            return nil
+        }
+    }
+    
+    private class StreamOutput: NSObject, SCStreamOutput {
+        let handler: (CMSampleBuffer) -> Void
+        
+        init(handler: @escaping (CMSampleBuffer) -> Void) {
+            self.handler = handler
+        }
+        
+        func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+            handler(sampleBuffer)
         }
     }
 
     private func performOCR(on image: CGImage) async -> (String, Double)? {
-        return await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(String, Double)?, Never>) in
             processingQueue.async {
                 let request = VNRecognizeTextRequest(completionHandler: { request, error in
                     if let error = error {
@@ -300,7 +274,7 @@ class OCRTaskDetector: TaskDetector {
                         let confidence = topCandidate.confidence
 
                         // Skip very short text or common UI elements
-                        if text.count < 3 || self.isCommonUIText(text) {
+                        if text.count < 3 || OCRTaskDetector.isCommonUIText(text) {
                             continue
                         }
 
@@ -315,7 +289,7 @@ class OCRTaskDetector: TaskDetector {
                     }
 
                     let avgConfidence = totalConfidence / Double(observationCount)
-                    let taskName = self.extractTaskFromOCRText(extractedText)
+                    let taskName = OCRTaskDetector.extractTaskFromOCRText(extractedText)
 
                     continuation.resume(returning: (taskName, avgConfidence))
                 })
@@ -331,9 +305,9 @@ class OCRTaskDetector: TaskDetector {
         }
     }
 
-    private func extractTaskFromOCRText(_ text: String) -> String {
+    nonisolated private static func extractTaskFromOCRText(_ text: String) -> String {
         // Clean up the text
-        var cleaned = text
+        let cleaned = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
 
@@ -355,7 +329,7 @@ class OCRTaskDetector: TaskDetector {
         return meaningfulWords.joined(separator: " ")
     }
 
-    private func isCommonUIText(_ text: String) -> Bool {
+    nonisolated private static func isCommonUIText(_ text: String) -> Bool {
         let commonUIText = [
             "File", "Edit", "View", "Window", "Help", "About", "Close",
             "Cancel", "OK", "Yes", "No", "Save", "Open", "New", "Exit",
@@ -365,7 +339,7 @@ class OCRTaskDetector: TaskDetector {
         return commonUIText.contains { $0.lowercased() == text.lowercased() }
     }
 
-    private func isStopWord(_ text: String) -> Bool {
+    nonisolated private static func isStopWord(_ text: String) -> Bool {
         let stopWords = [
             "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
             "of", "with", "by", "from", "as", "is", "was", "are", "been", "be", "have", "has",
@@ -375,7 +349,7 @@ class OCRTaskDetector: TaskDetector {
         return stopWords.contains(text.lowercased())
     }
 
-    private func isTaskRelatedWord(_ word: String) -> Bool {
+    nonisolated private static func isTaskRelatedWord(_ word: String) -> Bool {
         let taskKeywords = [
             "project", "task", "issue", "bug", "feature", "document", "file",
             "email", "message", "report", "analysis", "presentation", "meeting",

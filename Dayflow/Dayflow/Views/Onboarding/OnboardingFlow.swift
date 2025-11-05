@@ -5,7 +5,7 @@
 
 import Foundation
 import SwiftUI
-import ScreenCaptureKit
+@preconcurrency import ScreenCaptureKit
 
 // Window manager removed - no longer needed!
 

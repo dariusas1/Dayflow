@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import os.log
 
 final class GeminiDirectProvider: LLMProvider {
     private let apiKey: String
@@ -267,7 +268,9 @@ final class GeminiDirectProvider: LLMProvider {
         // First, save video data to a temporary file
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
         try videoData.write(to: tempURL)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
+        defer { 
+            cleanupTempFileWithRetry(url: tempURL)
+        }
         
         let fileURI = try await uploadAndAwait(tempURL, mimeType: mimeType, key: apiKey).1
         
@@ -401,7 +404,8 @@ final class GeminiDirectProvider: LLMProvider {
         var lastError: Error?
         var finalResponse = ""
         var finalObservations: [Observation] = []
-        var finalUsedModel = modelPreference.primary.rawValue
+        let _ = ""
+        _ = modelPreference.primary.rawValue
 
         var modelState = ModelRunState(models: modelPreference.orderedModels)
         let callGroupId = UUID().uuidString
@@ -469,7 +473,6 @@ final class GeminiDirectProvider: LLMProvider {
                 print("✅ Video transcription succeeded on attempt \(attempt + 1)")
                 finalResponse = response
                 finalObservations = observations
-                finalUsedModel = usedModel
                 break
 
             } catch {
@@ -487,7 +490,7 @@ final class GeminiDirectProvider: LLMProvider {
                     print("↘️ Downgrading to \(transition.to.rawValue) after \(nsError.code)")
 
                     Task { @MainActor in
-                        await AnalyticsService.shared.capture("llm_model_fallback", [
+                        AnalyticsService.shared.capture("llm_model_fallback", [
                             "provider": "gemini",
                             "operation": "transcribe",
                             "from_model": transition.from.rawValue,
@@ -820,7 +823,7 @@ final class GeminiDirectProvider: LLMProvider {
                     print("↘️ Downgrading to \(transition.to.rawValue) after \(nsError.code)")
 
                     Task { @MainActor in
-                        await AnalyticsService.shared.capture("llm_model_fallback", [
+                        AnalyticsService.shared.capture("llm_model_fallback", [
                             "provider": "gemini",
                             "operation": "generate_activity_cards",
                             "from_model": transition.from.rawValue,
@@ -1179,7 +1182,7 @@ private func uploadResumable(data: Data, mimeType: String) async throws -> Strin
             // Prepare logging context
             let responseHeaders: [String:String] = httpResponse.allHeaderFields.reduce(into: [:]) { acc, kv in
                 if let k = kv.key as? String, let v = kv.value as? CustomStringConvertible { acc[k] = v.description }
-            } ?? [:]
+            }
             let modelName = model.rawValue
             let ctx = LLMCallContext(
                 batchId: batchId,
@@ -1493,7 +1496,7 @@ private func uploadResumable(data: Data, mimeType: String) async throws -> Strin
             // Prepare logging context
             let responseHeaders: [String:String] = httpResponse.allHeaderFields.reduce(into: [:]) { acc, kv in
                 if let k = kv.key as? String, let v = kv.value as? CustomStringConvertible { acc[k] = v.description }
-            } ?? [:]
+            }
             let modelName = model.rawValue
             let ctx = LLMCallContext(
                 batchId: batchId,
@@ -2206,6 +2209,38 @@ private func uploadResumable(data: Data, mimeType: String) async throws -> Strin
         
         enum CodingKeys: String, CodingKey {
             case displayName = "display_name"
+        }
+    }
+    
+    // MARK: - Temp File Cleanup Helpers
+    
+    private func cleanupTempFileWithRetry(url: URL, maxAttempts: Int = 3) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return // File already gone
+        }
+        
+        let logger = Logger(subsystem: "Dayflow", category: "GeminiProvider")
+        
+        var attempt = 0
+        while attempt < maxAttempts {
+            do {
+                try FileManager.default.removeItem(at: url)
+                if attempt > 0 {
+                    logger.info("Successfully deleted temp file after \(attempt) retries: \(url.lastPathComponent)")
+                }
+                return // Success
+            } catch {
+                attempt += 1
+                
+                if attempt >= maxAttempts {
+                    logger.error("Failed to delete temp file after \(maxAttempts) attempts: \(url.path) - \(error.localizedDescription)")
+                } else {
+                    // Retry with exponential backoff
+                    let delay = pow(2.0, Double(attempt - 1)) // 1s, 2s
+                    logger.warning("Temp file cleanup failed (attempt \(attempt)/\(maxAttempts)), retrying in \(Int(delay))s: \(error.localizedDescription)")
+                    Thread.sleep(forTimeInterval: delay)
+                }
+            }
         }
     }
 }

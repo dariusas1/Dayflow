@@ -13,6 +13,8 @@ import os.log
 class PerformanceValidator {
     static let shared = PerformanceValidator()
 
+    private init() {}
+
     private let logger = Logger(subsystem: "FocusLock", category: "PerformanceValidator")
     private var testResults: [PerformanceTestResult] = []
     private let sessionManager = SessionManager.shared
@@ -50,6 +52,7 @@ class PerformanceValidator {
 
     // MARK: - Test Execution
 
+    @MainActor
     func runComprehensivePerformanceTests() async -> PerformanceTestReport {
         logger.info("Starting comprehensive performance validation")
 
@@ -81,7 +84,7 @@ class PerformanceValidator {
         let testName = "Idle Resource Usage"
         logger.info("Testing: \(testName)")
 
-        let baseline = await measureResourceUsage()
+        _ = await measureResourceUsage()
 
         // Run idle monitoring for 30 seconds
         let startTime = Date()
@@ -130,7 +133,9 @@ class PerformanceValidator {
         var measurements: [ResourceUsage] = []
 
         while Date().timeIntervalSince(startTime) < 60 {
-            let usage = sessionManager.resourceUsage
+            let usage = await MainActor.run {
+                sessionManager.resourceUsage
+            }
             if let usage = usage {
                 measurements.append(usage)
             }
@@ -169,7 +174,9 @@ class PerformanceValidator {
         let testName = "OCR Resource Usage"
         logger.info("Testing: \(testName)")
 
-        let ocrDetector = OCRTaskDetector()
+        let ocrDetector = await MainActor.run {
+            OCRTaskDetector()
+        }
 
         do {
             try await ocrDetector.startDetection()
@@ -183,7 +190,7 @@ class PerformanceValidator {
             var ocrCount = 0
 
             while Date().timeIntervalSince(startTime) < 30 {
-                if let result = await ocrDetector.detectCurrentTask() {
+                if await ocrDetector.detectCurrentTask() != nil {
                     ocrCount += 1
                 }
 
@@ -194,7 +201,9 @@ class PerformanceValidator {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
 
-            ocrDetector.stopDetection()
+            await MainActor.run {
+                ocrDetector.stopDetection()
+            }
 
             let result = PerformanceTestResult(
                 testName: testName,
@@ -226,7 +235,9 @@ class PerformanceValidator {
         logger.info("Testing: \(testName)")
 
         let sessionManager = SessionManager.shared
-        let detectorFuser = DetectorFuser()
+        let detectorFuser = await MainActor.run {
+            DetectorFuser.shared
+        }
 
         var memoryMeasurements: [(time: TimeInterval, memory: Double)] = []
 
@@ -247,7 +258,9 @@ class PerformanceValidator {
                 try? await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
             }
 
-            detectorFuser.stopFusion()
+            await MainActor.run {
+                detectorFuser.stopFusion()
+            }
             await sessionManager.endSession()
 
             // Analyze memory growth
@@ -292,7 +305,9 @@ class PerformanceValidator {
         let testName = "OCR Adaptive Timing"
         logger.info("Testing: \(testName)")
 
-        let ocrDetector = OCRTaskDetector()
+        let ocrDetector = await MainActor.run {
+            OCRTaskDetector()
+        }
 
         do {
             try await ocrDetector.startDetection()
@@ -317,7 +332,9 @@ class PerformanceValidator {
                 try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
             }
 
-            ocrDetector.stopDetection()
+            await MainActor.run {
+                ocrDetector.stopDetection()
+            }
 
             guard intervals.count >= 5 else {
                 testResults.append(PerformanceTestResult(
@@ -365,7 +382,9 @@ class PerformanceValidator {
         let testName = "Fusion Adaptive Timing"
         logger.info("Testing: \(testName)")
 
-        let detectorFuser = DetectorFuser()
+        let detectorFuser = await MainActor.run {
+            DetectorFuser.shared
+        }
 
         do {
             try await detectorFuser.startFusion()
@@ -376,13 +395,15 @@ class PerformanceValidator {
 
             // Monitor for 90 seconds
             while Date().timeIntervalSince(startTime) < 90 && updateCount < 30 {
-                if detectorFuser.getStabilizedTask() != nil {
+                if await MainActor.run(body: { detectorFuser.getStabilizedTask() }) != nil {
                     updateCount += 1
                 }
                 try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
             }
 
-            detectorFuser.stopFusion()
+            await MainActor.run {
+                detectorFuser.stopFusion()
+            }
 
             let result = PerformanceTestResult(
                 testName: testName,
@@ -412,7 +433,9 @@ class PerformanceValidator {
         let testName = "Cache Efficiency"
         logger.info("Testing: \(testName)")
 
-        let detectorFuser = DetectorFuser()
+        let detectorFuser = await MainActor.run {
+            DetectorFuser.shared
+        }
 
         do {
             try await detectorFuser.startFusion()
@@ -424,7 +447,7 @@ class PerformanceValidator {
 
             while Date().timeIntervalSince(startTime) < 30 {
                 let requestStart = Date()
-                _ = detectorFuser.getStabilizedTask()
+                _ = await MainActor.run { detectorFuser.getStabilizedTask() }
                 let requestDuration = Date().timeIntervalSince(requestStart)
 
                 // Fast requests likely indicate cache hits
@@ -437,7 +460,9 @@ class PerformanceValidator {
                 try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
             }
 
-            detectorFuser.stopFusion()
+            await MainActor.run {
+                detectorFuser.stopFusion()
+            }
 
             let hitRate = Double(cacheHits) / Double(requests)
 
@@ -483,8 +508,12 @@ class PerformanceValidator {
         // Wait for health score to stabilize
         try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
 
-        let healthScore = sessionManager.sessionHealthScore
-        let metrics = sessionManager.currentPerformanceMetrics
+        let healthScore = await MainActor.run {
+            sessionManager.sessionHealthScore
+        }
+        let metrics = await MainActor.run {
+            sessionManager.currentPerformanceMetrics
+        }
 
         await sessionManager.endSession()
 
@@ -515,7 +544,9 @@ class PerformanceValidator {
         let startTime = Date()
 
         while Date().timeIntervalSince(startTime) < 30 {
-            let currentMetrics = sessionManager.currentPerformanceMetrics
+            let currentMetrics = await MainActor.run {
+                sessionManager.currentPerformanceMetrics
+            }
             if let currentMetrics = currentMetrics {
                 metrics.append(currentMetrics)
             }
@@ -574,12 +605,16 @@ class PerformanceValidator {
         logger.info("Testing: \(testName)")
 
         let sessionManager = SessionManager.shared
-        let detectorFuser = DetectorFuser()
-        let ocrDetector = OCRTaskDetector()
+        let detectorFuser = await MainActor.run {
+            DetectorFuser.shared
+        }
+        let ocrDetector = await MainActor.run {
+            OCRTaskDetector()
+        }
 
         do {
             // Start all systems simultaneously
-            sessionManager.startSession(taskName: "Concurrent Test")
+            await sessionManager.startSession(taskName: "Concurrent Test")
             try await detectorFuser.startFusion()
             try await ocrDetector.startDetection()
 
@@ -591,8 +626,12 @@ class PerformanceValidator {
             let peak = await measureResourceUsage()
 
             // Stop all systems
-            ocrDetector.stopDetection()
-            detectorFuser.stopFusion()
+            await MainActor.run {
+                ocrDetector.stopDetection()
+            }
+            await MainActor.run {
+                detectorFuser.stopFusion()
+            }
             await sessionManager.endSession()
 
             let cpuIncrease = peak.cpuPercent - baseline.cpuPercent
@@ -636,7 +675,9 @@ class PerformanceValidator {
 
         // Monitor for 10 minutes
         while Date().timeIntervalSince(startTime) < 600 {
-            let usage = sessionManager.resourceUsage
+            let usage = await MainActor.run {
+                sessionManager.resourceUsage
+            }
             if let usage = usage {
                 memoryMeasurements.append(usage.memoryMB)
             }
@@ -716,7 +757,9 @@ class PerformanceValidator {
     // MARK: - Utility Methods
 
     private func measureResourceUsage() async -> ResourceUsage {
-        if let usage = sessionManager.resourceUsage {
+        let usage = sessionManager.resourceUsage
+
+        if let usage = usage {
             return usage
         }
 

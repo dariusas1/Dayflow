@@ -9,6 +9,7 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import GRDB
+import os.log
 
 struct ProcessedBatchResult {
     let cards: [ActivityCardData]
@@ -41,45 +42,54 @@ enum LLMServiceError: Error, LocalizedError {
 protocol LLMServicing {
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void)
     func generateResponse(prompt: String, maxTokens: Int, temperature: Double) async throws -> String
+    func generateText(prompt: String, systemPrompt: String) async throws -> String
 }
 
 final class LLMService: LLMServicing {
     static let shared: LLMServicing = LLMService()
     
     private var providerType: LLMProviderType {
+        let logger = Logger(subsystem: "Dayflow", category: "LLMService")
+        
+        #if DEBUG
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        print("\n🔍 [LLMService] Reading provider type at \(timestamp)")
+        logger.debug("Reading provider type at \(timestamp)")
+        #endif
         
         guard let savedData = UserDefaults.standard.data(forKey: "llmProviderType") else {
-            print("⚠️ [LLMService] No saved provider type in UserDefaults - defaulting to Gemini")
+            logger.info("No saved provider type in UserDefaults - defaulting to Gemini")
             return .geminiDirect
         }
         
-        print("✅ [LLMService] Found provider data in UserDefaults: \(savedData.count) bytes")
+        #if DEBUG
+        logger.debug("Found provider data in UserDefaults: \(savedData.count) bytes")
+        #endif
         
         do {
             let decoded = try JSONDecoder().decode(LLMProviderType.self, from: savedData)
-            print("✅ [LLMService] Successfully decoded provider type: \(decoded)")
+            #if DEBUG
+            logger.debug("Successfully decoded provider type: \(String(describing: decoded))")
+            #endif
             
             if case .chatGPTClaude = decoded {
-                print("⚠️ [LLMService] Deprecated ChatGPT/Claude provider detected. Migrating selection to a supported provider.")
+                logger.info("Deprecated ChatGPT/Claude provider detected. Migrating selection to a supported provider.")
                 
                 let fallbackType: LLMProviderType = {
                     if let dayflowToken = KeychainManager.shared.retrieve(for: "dayflow"), !dayflowToken.isEmpty {
-                        print("   ↳ Found Dayflow backend credentials. Migrating to Dayflow backend provider.")
+                        logger.info("Found Dayflow backend credentials. Migrating to Dayflow backend provider.")
                         return .dayflowBackend()
                     }
                     
-                    print("   ↳ No Dayflow token detected. Migrating to Gemini Direct provider.")
+                    logger.info("No Dayflow token detected. Migrating to Gemini Direct provider.")
                     return .geminiDirect
                 }()
                 
                 do {
                     let encodedFallback = try JSONEncoder().encode(fallbackType)
                     UserDefaults.standard.set(encodedFallback, forKey: "llmProviderType")
-                    print("✅ [LLMService] Persisted migrated provider selection: \(fallbackType)")
+                    logger.info("Persisted migrated provider selection: \(String(describing: fallbackType))")
                 } catch {
-                    print("❌ [LLMService] Failed to persist migrated provider selection: \(error)")
+                    logger.error("Failed to persist migrated provider selection: \(error.localizedDescription)")
                 }
                 
                 return fallbackType
@@ -87,17 +97,23 @@ final class LLMService: LLMServicing {
             
             return decoded
         } catch {
-            print("❌ [LLMService] Failed to decode provider type: \(error)")
-            print("   Raw data (hex): \(savedData.map { String(format: "%02x", $0) }.joined())")
+            logger.error("Failed to decode provider type: \(error.localizedDescription)")
+            #if DEBUG
+            logger.debug("Raw data (hex): \(savedData.map { String(format: "%02x", $0) }.joined())")
+            #endif
             return .geminiDirect
         }
     }
     
     private var provider: LLMProvider? {
         let type = providerType
+        let logger = Logger(subsystem: "Dayflow", category: "LLMService")
+        
+        #if DEBUG
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        print("\n🏗️ [LLMService] Creating provider at \(timestamp)")
-        print("   Provider type: \(type)")
+        logger.debug("Creating provider at \(timestamp)")
+        logger.debug("Provider type: \(String(describing: type))")
+        #endif
 
         switch type {
         case .geminiDirect:
@@ -106,24 +122,25 @@ final class LLMService: LLMServicing {
             if let token = KeychainManager.shared.retrieve(for: "dayflow"), !token.isEmpty {
                 return DayflowBackendProvider(token: token, endpoint: endpoint)
             } else {
-                print("❌ [LLMService] Failed to retrieve Dayflow token from Keychain")
+                logger.error("Failed to retrieve Dayflow token from Keychain")
                 return nil
             }
 
         case .ollamaLocal(let endpoint):
             return OllamaProvider(endpoint: endpoint)
         case .chatGPTClaude:
-            print("⚠️ [LLMService] Received deprecated ChatGPT/Claude provider after migration. Falling back to Gemini Direct.")
+            logger.warning("Received deprecated ChatGPT/Claude provider after migration. Falling back to Gemini Direct.")
             return makeGeminiProvider()
         }
     }
     
     private func makeGeminiProvider() -> LLMProvider? {
+        let logger = Logger(subsystem: "Dayflow", category: "LLMService")
         if let apiKey = KeychainManager.shared.retrieve(for: "gemini"), !apiKey.isEmpty {
             let preference = GeminiModelPreference.load()
             return GeminiDirectProvider(apiKey: apiKey, preference: preference)
         } else {
-            print("❌ [LLMService] Failed to retrieve Gemini API key from Keychain")
+            logger.error("Failed to retrieve Gemini API key from Keychain")
             return nil
         }
     }
@@ -154,6 +171,23 @@ final class LLMService: LLMServicing {
             throw LLMServiceError.chatGenerationUnsupported
         }
     }
+    
+    func generateText(prompt: String, systemPrompt: String) async throws -> String {
+        let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPrompt.isEmpty else {
+            throw LLMServiceError.invalidPrompt
+        }
+
+        switch providerType {
+        case .geminiDirect:
+            return try await generateGeminiTextWithSystem(
+                prompt: trimmedPrompt,
+                systemPrompt: systemPrompt
+            )
+        case .dayflowBackend, .ollamaLocal, .chatGPTClaude:
+            throw LLMServiceError.chatGenerationUnsupported
+        }
+    }
 
     // Keep the existing processBatch implementation for backward compatibility
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void) {
@@ -169,11 +203,14 @@ final class LLMService: LLMServicing {
             let processingStartTime = Date()
 
             do {
-                print("\n📦 [LLMService] Processing batch \(batchId)")
-                print("   Batch time: \(Date(timeIntervalSince1970: TimeInterval(batchStartTs))) to \(Date(timeIntervalSince1970: TimeInterval(batchEndTs)))")
+                let logger = Logger(subsystem: "Dayflow", category: "LLMService")
+                #if DEBUG
+                logger.debug("Processing batch \(batchId)")
+                logger.debug("Batch time: \(Date(timeIntervalSince1970: TimeInterval(batchStartTs))) to \(Date(timeIntervalSince1970: TimeInterval(batchEndTs)))")
+                #endif
 
                 // Track analysis batch started
-                await AnalyticsService.shared.capture("analysis_batch_started", [
+                AnalyticsService.shared.capture("analysis_batch_started", [
                     "batch_id": batchId,
                     "total_duration_seconds": batchEndTs - batchStartTs,
                     "llm_provider": providerName()
@@ -207,12 +244,12 @@ final class LLMService: LLMServicing {
                     throw NSError(domain: "LLMService", code: 6, userInfo: [NSLocalizedDescriptionKey: "Failed to create composition track"])
                 }
                 
-                for (index, filePath) in chunkFiles.enumerated() {
+                for (_, filePath) in chunkFiles.enumerated() {
                     let url = URL(fileURLWithPath: filePath)
                     
                     let asset = AVAsset(url: url)
                     let duration = try await asset.load(.duration)
-                    let durationSeconds = CMTimeGetSeconds(duration)
+                    _ = CMTimeGetSeconds(duration)
                     
         
                     if let track = try await asset.loadTracks(withMediaType: .video).first {
@@ -254,20 +291,22 @@ final class LLMService: LLMServicing {
                 )
                 
                 // Clean up temp file after transcription is complete
-                try? FileManager.default.removeItem(at: tempURL)
+                cleanupTempFileWithRetry(url: tempURL)
                 
                 StorageManager.shared.saveObservations(batchId: batchId, observations: observations)
                 
                 // If no observations, mark batch as complete with no activities
                 guard !observations.isEmpty else {
-                    print("⚠️ [LLMService] Transcription returned 0 observations for batch \(batchId)")
+                    logger.warning("Transcription returned 0 observations for batch \(batchId)")
+                    #if DEBUG
                     if let logOutput = transcribeLog.output, !logOutput.isEmpty {
-                        print("   ↳ transcribeLog.output: \(logOutput)")
+                        logger.debug("transcribeLog.output: \(logOutput)")
                     }
                     if let logInput = transcribeLog.input, !logInput.isEmpty {
-                        print("   ↳ transcribeLog.input: \(logInput)")
+                        logger.debug("transcribeLog.input: \(logInput)")
                     }
-                    await AnalyticsService.shared.capture("transcription_returned_empty", [
+                    #endif
+                    AnalyticsService.shared.capture("transcription_returned_empty", [
                         "batch_id": batchId,
                         "provider": providerName(),
                         "transcribe_latency_ms": Int((transcribeLog.latency ?? 0) * 1000)
@@ -289,11 +328,13 @@ final class LLMService: LLMServicing {
                     to: currentTime
                 )
 
-                print("[DEBUG] LLMService fetched \(recentObservations.count) observations")
+                #if DEBUG
+                logger.debug("LLMService fetched \(recentObservations.count) observations")
                 for (i, obs) in recentObservations.enumerated() {
-                    print("  [\(i)] observation type: \(type(of: obs.observation))")
-                    print("       observation: \(obs.observation)")
+                    logger.debug("[\(i)] observation type: \(String(describing: type(of: obs.observation)))")
+                    logger.debug("observation: \(obs.observation)")
                 }
+                #endif
                 
                 // Fetch existing timeline cards that overlap with the last hour
                 let existingTimelineCards = StorageManager.shared.fetchTimelineCardsByTimeRange(
@@ -318,11 +359,13 @@ final class LLMService: LLMServicing {
                 
                 // Prepare context for activity generation
                 let categories = CategoryStore.descriptorsForLLM()
-                print("[DEBUG] LLMService loaded \(categories.count) categories")
+                #if DEBUG
+                logger.debug("LLMService loaded \(categories.count) categories")
                 for (i, cat) in categories.enumerated() {
-                    print("  [\(i)] name type: \(type(of: cat.name)), value: \(cat.name)")
-                    print("       description type: \(type(of: cat.description)), value: \(cat.description ?? "nil")")
+                    logger.debug("[\(i)] name type: \(String(describing: type(of: cat.name))), value: \(cat.name)")
+                    logger.debug("description type: \(String(describing: type(of: cat.description))), value: \(cat.description ?? "nil")")
                 }
+                #endif
 
                 let context = ActivityGenerationContext(
                     batchObservations: observations,
@@ -332,7 +375,7 @@ final class LLMService: LLMServicing {
                 )
                 
                 // Generate activity cards using sliding window observations
-                let (cards, cardsLog) = try await provider.generateActivityCards(
+                let (cards, _) = try await provider.generateActivityCards(
                     observations: recentObservations,
                     context: context,
                     batchId: batchId
@@ -364,9 +407,9 @@ final class LLMService: LLMServicing {
                     let url = URL(fileURLWithPath: path)
                     do {
                         try FileManager.default.removeItem(at: url)
-                        print("🗑️ Deleted timelapse: \(path)")
+                        logger.debug("Deleted timelapse: \(path)")
                     } catch {
-                        print("❌ Failed to delete timelapse: \(path) - \(error)")
+                        logger.error("Failed to delete timelapse: \(path) - \(error.localizedDescription)")
                     }
                 }
                 
@@ -374,7 +417,7 @@ final class LLMService: LLMServicing {
                 StorageManager.shared.updateBatch(batchId, status: "analyzed")
 
                 // Track analysis batch completed
-                await AnalyticsService.shared.capture("analysis_batch_completed", [
+                AnalyticsService.shared.capture("analysis_batch_completed", [
                     "batch_id": batchId,
                     "cards_generated": cards.count,
                     "processing_duration_seconds": Int(Date().timeIntervalSince(processingStartTime)),
@@ -384,13 +427,16 @@ final class LLMService: LLMServicing {
                 completion(.success(ProcessedBatchResult(cards: cards, cardIds: insertedCardIds)))
                 
             } catch {
-                print("Error processing batch: \(error)")
+                #if DEBUG
+                let logger = Logger(subsystem: "Dayflow", category: "LLMService")
+                logger.error("Error processing batch: \(error.localizedDescription)")
                 if let ns = error as NSError?, ns.domain == "GeminiError" {
-                    print("🔎 GEMINI DEBUG: NSError.userInfo=\(ns.userInfo)")
+                    logger.debug("GEMINI DEBUG: NSError.userInfo=\(String(describing: ns.userInfo))")
                 }
+                #endif
 
                 // Track analysis batch failed
-                await AnalyticsService.shared.capture("analysis_batch_failed", [
+                AnalyticsService.shared.capture("analysis_batch_failed", [
                     "batch_id": batchId,
                     "error_message": error.localizedDescription,
                     "processing_duration_seconds": Int(Date().timeIntervalSince(processingStartTime)),
@@ -425,14 +471,14 @@ final class LLMService: LLMServicing {
                     let url = URL(fileURLWithPath: path)
                     do {
                         try FileManager.default.removeItem(at: url)
-                        print("🗑️ Deleted timelapse for replaced card: \(path)")
+                        logger.debug("Deleted timelapse for replaced card: \(path)")
                     } catch {
-                        print("❌ Failed to delete timelapse: \(path) - \(error)")
+                        logger.error("Failed to delete timelapse: \(path) - \(error.localizedDescription)")
                     }
                 }
                 
                 if !insertedCardIds.isEmpty {
-                    print("✅ Created error card (ID: \(insertedCardIds.first ?? -1)) for failed batch \(batchId), replacing \(deletedVideoPaths.count) existing cards")
+                    logger.info("Created error card (ID: \(insertedCardIds.first ?? -1)) for failed batch \(batchId), replacing \(deletedVideoPaths.count) existing cards")
                 }
                 
                 // Still return failure but with the error card created
@@ -455,6 +501,32 @@ final class LLMService: LLMServicing {
                     prompt: prompt,
                     maxTokens: maxTokens,
                     temperature: temperature,
+                    apiKey: apiKey,
+                    model: model.rawValue,
+                    attempt: index + 1
+                )
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+
+        throw lastError
+    }
+    
+    private func generateGeminiTextWithSystem(prompt: String, systemPrompt: String) async throws -> String {
+        guard let apiKey = KeychainManager.shared.retrieve(for: "gemini"), !apiKey.isEmpty else {
+            throw LLMServiceError.missingAPIKey
+        }
+
+        let preference = GeminiModelPreference.load()
+        var lastError: Error = LLMServiceError.invalidResponse
+
+        for (index, model) in preference.orderedModels.enumerated() {
+            do {
+                return try await sendGeminiTextRequest(
+                    prompt: prompt,
+                    systemPrompt: systemPrompt,
                     apiKey: apiKey,
                     model: model.rawValue,
                     attempt: index + 1
@@ -500,6 +572,141 @@ final class LLMService: LLMServicing {
             provider: providerName(),
             model: model,
             operation: "jarvis_chat",
+            requestMethod: request.httpMethod,
+            requestURL: request.url,
+            requestHeaders: request.allHTTPHeaderFields,
+            requestBody: request.httpBody,
+            startedAt: startedAt
+        )
+
+        var didLogFailure = false
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: nil,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: nil,
+                    errorMessage: "Invalid HTTP response"
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            let responseHeaders: [String: String] = httpResponse.allHeaderFields.reduce(into: [String: String]()) { partialResult, element in
+                if let key = element.key as? String, let value = element.value as? CustomStringConvertible {
+                    partialResult[key] = value.description
+                }
+            }
+            let httpInfo = LLMHTTPInfo(
+                httpStatus: httpResponse.statusCode,
+                responseHeaders: responseHeaders,
+                responseBody: data
+            )
+
+            guard httpResponse.statusCode == 200 else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: httpInfo,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: httpResponse.statusCode,
+                    errorMessage: HTTPURLResponse.localizedString(forStatusCode: httpResponse.statusCode)
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let firstCandidate = candidates.first,
+                  let content = firstCandidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]],
+                  let text = parts.compactMap({ $0["text"] as? String }).first else {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: httpInfo,
+                    finishedAt: Date(),
+                    errorDomain: "LLMService",
+                    errorCode: nil,
+                    errorMessage: "Unexpected response format"
+                )
+                didLogFailure = true
+                throw LLMServiceError.invalidResponse
+            }
+
+            LLMLogger.logSuccess(
+                ctx: ctx,
+                http: httpInfo,
+                finishedAt: Date()
+            )
+
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            let nsError = error as NSError
+            if !didLogFailure {
+                LLMLogger.logFailure(
+                    ctx: ctx,
+                    http: nil,
+                    finishedAt: Date(),
+                    errorDomain: nsError.domain,
+                    errorCode: nsError.code,
+                    errorMessage: nsError.localizedDescription
+                )
+            }
+            throw error
+        }
+    }
+    
+    private func sendGeminiTextRequest(
+        prompt: String,
+        systemPrompt: String,
+        apiKey: String,
+        model: String,
+        attempt: Int
+    ) async throws -> String {
+        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent"
+        guard let url = URL(string: "\(endpoint)?key=\(apiKey)") else {
+            throw LLMServiceError.providerUnavailable
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let requestBody: [String: Any] = [
+            "contents": [
+                [
+                    "parts": [
+                        ["text": prompt]
+                    ]
+                ]
+            ],
+            "systemInstruction": [
+                "parts": [
+                    ["text": systemPrompt]
+                ]
+            ],
+            "generationConfig": [
+                "temperature": 0.7,
+                "maxOutputTokens": 8192,
+                "topP": 0.95,
+                "topK": 40
+            ]
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+
+        let startedAt = Date()
+        let ctx = LLMCallContext(
+            batchId: nil,
+            callGroupId: nil,
+            attempt: attempt,
+            provider: providerName(),
+            model: model,
+            operation: "generate_text",
             requestMethod: request.httpMethod,
             requestURL: request.url,
             requestHeaders: request.allHTTPHeaderFields,
@@ -634,7 +841,7 @@ final class LLMService: LLMServicing {
             subcategory: "Error",
             title: "Processing failed",
             summary: "Failed to process \(duration) minutes of recording from \(startTimeStr) to \(endTimeStr). \(humanError) Your recording is safe and can be reprocessed.",
-            detailedSummary: "Error details: \(error.localizedDescription)\n\nThis recording batch (ID: \(batchId)) failed during AI processing. The original video files are preserved and can be reprocessed by retrying from Settings. Common causes include network issues, API rate limits, or temporary service outages.",
+            detailedSummary: "\(humanError)\n\nYour recording is safe and can be reprocessed. Go to Settings → Recordings to retry processing this time period. Common causes include network issues, API rate limits, or temporary service outages.",
             distractions: nil,
             appSites: nil
         )
@@ -749,21 +956,62 @@ final class LLMService: LLMServicing {
             return "The AI got confused about the video timing."
             
         case errorDescription.contains("no llm provider") || errorDescription.contains("not configured"):
-            return "No AI provider is configured. Please set one up in Settings."
+            return "No AI provider is configured. Please set one up in Settings → Providers."
             
         case errorDescription.contains("failed to upload"):
-            return "Failed to upload the video for processing."
+            return "Failed to upload the video for processing. Check your internet connection and try again."
             
         case errorDescription.contains("invalid response") || errorDescription.contains("json"):
-            return "The AI returned an unexpected response format."
+            return "The AI returned an unexpected response format. Try reprocessing this recording."
             
         case errorDescription.contains("failed after") && errorDescription.contains("attempts"):
-            return "Couldn't connect to the AI service after multiple attempts."
+            return "Couldn't connect to the AI service after multiple attempts. Check your internet connection or try again later."
+            
+        case errorDescription.contains("disk") || errorDescription.contains("space") || errorDescription.contains("storage"):
+            return "Insufficient disk space. Free up space or adjust storage limits in Settings → Storage."
+            
+        case errorDescription.contains("permission") || errorDescription.contains("access"):
+            return "Screen recording permission required. Grant permission in System Settings → Privacy & Security → Screen Recording."
+            
+        case errorDescription.contains("database") || errorDescription.contains("sqlite"):
+            return "Database error occurred. Try restarting the app or contact support if the issue persists."
             
         default:
-            // For unknown errors, keep it simple
-            return "An unexpected error occurred."
+            // For unknown errors, keep it simple and provide guidance
+            return "An unexpected error occurred. Your recording is safe. Try reprocessing from Settings, or contact support if the issue persists."
+        }
+    }
+    
+    // MARK: - Temp File Cleanup Helpers
+    
+    private func cleanupTempFileWithRetry(url: URL, maxAttempts: Int = 3) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return // File already gone
+        }
+        
+        let logger = Logger(subsystem: "Dayflow", category: "LLMService")
+        
+        var attempt = 0
+        while attempt < maxAttempts {
+            do {
+                try FileManager.default.removeItem(at: url)
+                if attempt > 0 {
+                    logger.info("Successfully deleted temp file after \(attempt) retries: \(url.lastPathComponent)")
+                }
+                return // Success
+            } catch {
+                attempt += 1
+                
+                if attempt >= maxAttempts {
+                    logger.error("Failed to delete temp file after \(maxAttempts) attempts: \(url.path) - \(error.localizedDescription)")
+                } else {
+                    // Retry with exponential backoff
+                    let delay = pow(2.0, Double(attempt - 1)) // 1s, 2s
+                    logger.warning("Temp file cleanup failed (attempt \(attempt)/\(maxAttempts)), retrying in \(Int(delay))s: \(error.localizedDescription)")
+                    Thread.sleep(forTimeInterval: delay)
+                }
+            }
         }
     }
 
-  }
+}

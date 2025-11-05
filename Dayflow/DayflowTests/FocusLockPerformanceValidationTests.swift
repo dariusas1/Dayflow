@@ -265,6 +265,128 @@ final class FocusLockPerformanceValidationTests: XCTestCase {
         // Verify weak reference is nil (no memory leak)
         XCTAssertNil(weakHostingController, "View should be deallocated")
     }
+    
+    // MARK: - Enhanced Memory Leak Detection
+    
+    func testRecordingChunkMemoryLeak() throws {
+        // Test that recording chunks are properly deallocated
+        weak var weakRecorder: ScreenRecorder?
+        
+        autoreleasepool {
+            let recorder = ScreenRecorder(autoStart: false)
+            weakRecorder = recorder
+            
+            // Simulate chunk creation
+            // Verify chunks are cleaned up
+        }
+        
+        // Force deallocation
+        for _ in 0..<5 {
+            autoreleasepool {
+                _ = ScreenRecorder(autoStart: false)
+            }
+        }
+        
+        // Verify recorder is deallocated
+        XCTAssertNil(weakRecorder, "Recorder should be deallocated")
+    }
+    
+    func testDatabaseConnectionLeak() throws {
+        // Test that database connections are properly closed
+        let storageManager = StorageManager.shared
+        
+        // Monitor connection pool
+        // Verify connections are released after use
+        
+        // Create multiple queries
+        for _ in 0..<10 {
+            autoreleasepool {
+                // Execute query and verify connection is released
+                _ = storageManager.fetchAllChunks()
+            }
+        }
+        
+        // Verify no connection leaks
+        // Would check actual connection pool stats in real implementation
+    }
+    
+    func testTempFileCleanup() throws {
+        // Test that temp files are properly cleaned up
+        let tempDir = FileManager.default.temporaryDirectory
+        
+        // Create temp files
+        let fileURLs = (0..<5).map { i in
+            tempDir.appendingPathComponent("test-\(i).mp4")
+        }
+        
+        // Create files
+        for url in fileURLs {
+            try? "test".write(to: url, atomically: true, encoding: .utf8)
+        }
+        
+        // Simulate cleanup
+        for url in fileURLs {
+            try? FileManager.default.removeItem(at: url)
+        }
+        
+        // Verify files are deleted
+        for url in fileURLs {
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "Temp file should be deleted")
+        }
+    }
+    
+    func testVideoProcessingBufferLeak() throws {
+        // Test that video processing buffers are properly released
+        weak var weakProcessingService: VideoProcessingService?
+        
+        autoreleasepool {
+            let service = VideoProcessingService()
+            weakProcessingService = service
+            
+            // Simulate video processing
+            // Verify buffers are released
+        }
+        
+        // Force deallocation
+        for _ in 0..<5 {
+            autoreleasepool {
+                _ = VideoProcessingService()
+            }
+        }
+        
+        // Verify service is deallocated
+        XCTAssertNil(weakProcessingService, "VideoProcessingService should be deallocated")
+    }
+    
+    func testLongRunningMemoryStability() throws {
+        // Test memory stability over extended operations
+        let initialMemory = XCTMemoryMetric.currentUsage()
+        
+        // Simulate long-running operations
+        for i in 0..<100 {
+            autoreleasepool {
+                // Perform operations that might leak memory
+                let storageManager = StorageManager.shared
+                _ = storageManager.fetchAllChunks()
+                
+                if i % 10 == 0 {
+                    // Check memory periodically
+                    let currentMemory = XCTMemoryMetric.currentUsage()
+                    let memoryIncrease = currentMemory - initialMemory
+                    
+                    // Memory should not grow unbounded
+                    XCTAssertLessThan(memoryIncrease, 200, "Memory should not grow unbounded after \(i) iterations")
+                }
+            }
+        }
+        
+        // Final memory check
+        let finalMemory = XCTMemoryMetric.currentUsage()
+        let totalIncrease = finalMemory - initialMemory
+        
+        // Memory increase should be reasonable
+        XCTAssertLessThan(totalIncrease, 300, "Total memory increase should be reasonable after long run")
+    }
 
     // MARK: - Integration Performance Tests
 

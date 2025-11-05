@@ -35,41 +35,6 @@ private struct InsightPresentation {
     }
 }
 
-private extension ProductivityInsight {
-    var presentation: InsightPresentation { .make(for: type) }
-
-    var isHighConfidence: Bool { confidenceLevel >= 0.7 }
-
-    var isTrendRelated: Bool {
-        switch type {
-        case .peakPerformance, .productivityPattern, .taskEfficiency, .schedulingImprovement, .goalProgress:
-            return true
-        case .energyOptimization, .burnoutRisk, .focusQuality:
-            return metrics.contains { $0.category == .focusTime || $0.category == .productivity }
-        }
-    }
-
-    var isPatternInsight: Bool {
-        switch type {
-        case .productivityPattern, .taskEfficiency, .focusQuality:
-            return true
-        case .peakPerformance, .energyOptimization, .schedulingImprovement, .goalProgress, .burnoutRisk:
-            return false
-        }
-    }
-
-    var isTimeRelated: Bool {
-        type == .schedulingImprovement || metrics.contains { $0.category == .focusTime || $0.category == .taskCompletion }
-    }
-
-    var isGoalRelated: Bool {
-        type == .goalProgress || metrics.contains { $0.category == .goals }
-    }
-
-    var isProductivityRelated: Bool {
-        type == .peakPerformance || type == .productivityPattern || metrics.contains { $0.category == .productivity }
-    }
-}
 
 private extension Array where Element == ProductivityInsight {
     var highConfidence: [ProductivityInsight] {
@@ -109,7 +74,7 @@ struct InsightsView: View {
                 if !insights.isEmpty {
                     InsightsSection(
                         title: "Key Insights",
-                        insights: insights.filter { $0.priority.level >= Recommendation.Priority.medium.level },
+                        insights: insights.filter { $0.priority.numericValue >= PlannerPriority.medium.numericValue },
                         selectedInsight: $selectedInsight
                     )
                 }
@@ -156,7 +121,7 @@ struct InsightsView: View {
             }
             .padding(.vertical)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(Color(nsColor: NSColor.controlBackgroundColor))
         .sheet(item: $selectedInsight) { insight in
             InsightDetailView(insight: insight)
         }
@@ -644,7 +609,7 @@ struct QuickActionsSection: View {
                 GridItem(.flexible())
             ], spacing: 12) {
                 ForEach(QuickAction.allCases, id: \.self) { action in
-                    QuickActionButton(
+                    InsightsQuickActionButton(
                         action: action,
                         insights: insights,
                         recommendations: recommendations,
@@ -691,7 +656,7 @@ enum QuickAction: CaseIterable {
     }
 }
 
-struct QuickActionButton: View {
+struct InsightsQuickActionButton: View {
     let action: QuickAction
     let insights: [ProductivityInsight]
     let recommendations: [Recommendation]
@@ -924,7 +889,7 @@ struct GoalProgressRow: View {
 
         if let progress = insight.progressValue {
             ProgressView(value: progress)
-                .progressViewStyle(LinearProgressViewStyle(tint: insight.color))
+                .progressViewStyle(LinearProgressViewStyle(tint: insight.type.color))
                 .scaleEffect(y: 0.8)
         }
     }
@@ -1110,9 +1075,8 @@ struct InsightDetailView: View {
                 .padding()
             }
             .navigationTitle("Insight Details")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }
@@ -1123,7 +1087,7 @@ struct InsightDetailView: View {
 }
 
 struct DetailedDataView: View {
-    let data: [String: String]
+    let metrics: [ProductivityMetric]
     let color: Color
 
     var body: some View {
@@ -1157,57 +1121,43 @@ struct DetailedDataView: View {
     }
 }
 
-private extension ProductivityInsight {
-    enum Category {
-        case productivity
-        case pattern
-        case timeManagement
-        case trend
-        case goal
-    }
+extension ProductivityInsight {
+    fileprivate var presentation: InsightPresentation { .make(for: type) }
 
-    var category: Category {
+    var isHighConfidence: Bool { confidenceLevel >= 0.7 }
+
+    var isTrendRelated: Bool {
         switch type {
-        case .peakPerformance, .focusQuality:
-            return .productivity
-        case .productivityPattern, .taskEfficiency:
-            return .pattern
-        case .schedulingImprovement:
-            return .timeManagement
-        case .goalProgress:
-            return .goal
-        case .energyOptimization, .burnoutRisk:
-            return .trend
+        case .peakPerformance, .productivityPattern, .taskEfficiency, .schedulingImprovement, .goalProgress:
+            return true
+        case .energyOptimization, .burnoutRisk, .focusQuality:
+            return metrics.contains { $0.category == .focusTime || $0.category == .productivity }
         }
     }
 
-    var icon: String {
+    var isPatternInsight: Bool {
         switch type {
-        case .peakPerformance: return "speedometer"
-        case .productivityPattern: return "chart.line.uptrend.xyaxis"
-        case .energyOptimization: return "bolt.fill"
-        case .taskEfficiency: return "checkmark.seal.fill"
-        case .schedulingImprovement: return "calendar"
-        case .goalProgress: return "target"
-        case .burnoutRisk: return "exclamationmark.triangle.fill"
-        case .focusQuality: return "eye.fill"
+        case .productivityPattern, .taskEfficiency, .focusQuality:
+            return true
+        case .peakPerformance, .energyOptimization, .schedulingImprovement, .goalProgress, .burnoutRisk:
+            return false
         }
     }
 
-    var color: Color {
-        switch type {
-        case .peakPerformance: return .green
-        case .productivityPattern: return .purple
-        case .energyOptimization: return .orange
-        case .taskEfficiency: return .blue
-        case .schedulingImprovement: return .teal
-        case .goalProgress: return .pink
-        case .burnoutRisk: return .red
-        case .focusQuality: return .indigo
-        }
+    var isTimeRelated: Bool {
+        type == .schedulingImprovement || metrics.contains { $0.category == .focusTime || $0.category == .taskCompletion }
     }
 
-    var priority: Recommendation.Priority {
+    var isGoalRelated: Bool {
+        type == .goalProgress || metrics.contains { $0.category == .goals }
+    }
+
+    var isProductivityRelated: Bool {
+        type == .peakPerformance || type == .productivityPattern || metrics.contains { $0.category == .productivity }
+    }
+
+  
+    var recommendationPriority: Recommendation.Priority {
         switch confidenceLevel {
         case ..<0.4: return .low
         case ..<0.7: return .medium
@@ -1298,6 +1248,8 @@ private extension TrendData {
 
 #if DEBUG
 #Preview {
+    @Previewable @State var showDetailedAnalysis = true
+    
     let focusMetric = ProductivityMetric(
         name: "Focus Time",
         value: 180,
@@ -1389,7 +1341,8 @@ private extension TrendData {
                     "Open calendar",
                     "Block a recurring session",
                     "Mute notifications"
-                ]
+                ],
+                type: .productivity
             )
         ],
         evidence: [dashboardMetric],
@@ -1426,15 +1379,10 @@ private extension TrendData {
         title: "Insights",
         position: DashboardWidget.WidgetPosition(column: 0, row: 0, width: 4, height: 2),
         size: .medium,
-        isVisible: true,
-        configuration: DashboardWidget.WidgetConfiguration(
-            timeRange: .lastWeek,
-            refreshInterval: 300,
-            customSettings: [:]
-        )
-    )
+    isVisible: true
+)
 
-    let configuration = DashboardConfiguration(
+    _ = DashboardConfiguration(
         widgets: [widget],
         theme: DashboardConfiguration.DashboardTheme(
             colorScheme: .light,
@@ -1445,11 +1393,11 @@ private extension TrendData {
         preferences: .default
     )
 
-    InsightsView(
+    return InsightsView(
         insights: [focusInsight, energyInsight],
         recommendations: [dashboardRecommendation],
         trends: [trend],
-        configuration: configuration
+        showDetailedAnalysis: showDetailedAnalysis
     )
 }
 #endif

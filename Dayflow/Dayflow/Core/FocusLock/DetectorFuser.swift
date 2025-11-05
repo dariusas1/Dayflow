@@ -13,7 +13,9 @@ import os.log
 typealias DetectionMethod = TaskDetectionResult.DetectionMethod
 
 @MainActor
-class DetectorFuser {
+class DetectorFuser: ObservableObject {
+    static let shared = DetectorFuser()
+    
     private let logger = Logger(subsystem: "FocusLock", category: "DetectorFuser")
     private let accessibilityDetector = AccessibilityTaskDetector()
     private let ocrDetector = OCRTaskDetector()
@@ -46,7 +48,7 @@ class DetectorFuser {
     @Published var isDetecting: Bool = false
     @Published var confidence: Double = 0.0
 
-    init() {
+    private init() {
         setupAdaptiveFusion()
     }
 
@@ -57,6 +59,9 @@ class DetectorFuser {
     }
 
     // MARK: - Public Interface
+    
+    // Store detector tasks to prevent deallocation
+    private var detectorTasks: [Task<Void, Never>] = []
 
     func startFusion() async throws {
         guard !isDetecting else { return }
@@ -71,9 +76,25 @@ class DetectorFuser {
         lastOCRResult = nil
         lastOCRResultTime = nil
 
-        // Start all detectors
-        async let accessibilityResult = accessibilityDetector.startDetection()
-        async let ocrResult = ocrDetector.startDetection()
+        // Start all detectors - store tasks to prevent deallocation crashes
+        let accessibilityTask = Task {
+            do {
+                try await accessibilityDetector.startDetection()
+            } catch {
+                logger.error("Failed to start accessibility detector: \(error.localizedDescription)")
+            }
+        }
+        
+        let ocrTask = Task {
+            do {
+                try await ocrDetector.startDetection()
+            } catch {
+                logger.error("Failed to start OCR detector: \(error.localizedDescription)")
+            }
+        }
+        
+        // Store tasks to prevent deallocation
+        detectorTasks = [accessibilityTask, ocrTask]
 
         // Start adaptive fusion
         startAdaptiveFusion()
@@ -81,6 +102,13 @@ class DetectorFuser {
 
     func stopFusion() {
         isDetecting = false
+        
+        // Cancel all detector tasks
+        for task in detectorTasks {
+            task.cancel()
+        }
+        detectorTasks.removeAll()
+        
         fusionTimer?.invalidate()
         fusionTimer = nil
         accessibilityDetector.stopDetection()

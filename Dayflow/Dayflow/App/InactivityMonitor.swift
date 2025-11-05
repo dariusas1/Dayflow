@@ -74,14 +74,16 @@ final class InactivityMonitor: ObservableObject {
         // Also observe app activation as an interaction (e.g., returning to the app)
         let center = NotificationCenter.default
         let act = center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.handleInteraction()
+            Task { @MainActor in
+                self?.handleInteraction()
+            }
         }
         monitors.append(act)
     }
 
     private func removeEventMonitors() {
         for monitor in monitors {
-            if let m = monitor as? AnyObject, NSStringFromClass(type(of: m)).contains("NSConcreteNotification") {
+            if let m = monitor as AnyObject?, NSStringFromClass(type(of: m)).contains("NSConcreteNotification") {
                 NotificationCenter.default.removeObserver(m)
             } else {
                 NSEvent.removeMonitor(monitor)

@@ -92,6 +92,16 @@ class DataMigrationManager: ObservableObject {
         migrationResults = nil
     }
 
+    func markMigrationSkipped() {
+        // Mark migration as complete so the view disappears
+        userDefaults.set(currentMigrationVersion, forKey: migrationVersionKey)
+        userDefaults.set(Date(), forKey: migrationDateKey)
+        migrationStatus = .completed
+        migrationProgress = 1.0
+        migrationError = nil
+        print("⚠️ Migration skipped by user")
+    }
+
     // MARK: - Migration Execution
     private func executeMigration() async throws -> MigrationResults {
         var results = MigrationResults()
@@ -122,7 +132,7 @@ class DataMigrationManager: ObservableObject {
 
         // Step 7: Create Backup
         await updateProgress(0.95, message: "Creating backup...")
-        try await createMigrationBackup()
+        try await createMigrationBackup(results: results)
 
         await updateProgress(1.0, message: "Migration completed!")
         return results
@@ -272,27 +282,18 @@ class DataMigrationManager: ObservableObject {
 
     private func convertLegacySession(_ legacySession: LegacyFocusSession) async throws -> FocusSession {
         // Convert legacy session to new format with performance metrics
-        // Since FocusSession has let properties, we need to create a new session with the correct initializer
+        // Since the old LegacyFocusSession structure has been removed, create a minimal FocusSession
+        let taskName = legacySession.taskId?.uuidString ?? legacySession.mode.displayName
         let focusSession = FocusSession(
             id: legacySession.id,
-            taskName: legacySession.taskName,
+            taskName: taskName,
             startTime: legacySession.startTime,
             endTime: legacySession.endTime,
-            state: legacySession.state,
-            allowedApps: legacySession.allowedApps,
-            emergencyBreaks: legacySession.emergencyBreaks.compactMap { legacyBreak in
-                EmergencyBreak(
-                    id: legacyBreak.id,
-                    startTime: legacyBreak.startTime,
-                    endTime: legacyBreak.endTime,
-                    reason: legacyBreak.reason
-                )
-            },
+            state: .active,
+            allowedApps: [],
+            emergencyBreaks: [],
             interruptions: []
         )
-
-        // Note: performanceMetrics is not a property of FocusSession based on the constructor
-        // We'll need to handle this separately if needed
 
         return focusSession
     }
@@ -335,18 +336,30 @@ class DataMigrationManager: ObservableObject {
 
     // MARK: - Backup and Restore
 
-    private func createMigrationBackup() async throws {
-        let backupData = MigrationBackup(
-            version: currentMigrationVersion,
-            timestamp: Date(),
-            migrationResults: migrationResults!
-        )
+    private func createMigrationBackup(results: MigrationResults) async throws {
+        // Don't fail the entire migration if backup creation fails
+        do {
+            let backupData = MigrationBackup(
+                version: currentMigrationVersion,
+                timestamp: Date(),
+                migrationResults: results
+            )
 
-        let encoder = JSONEncoder()
-        if let data = try? encoder.encode(backupData) {
-            let backupURL = getBackupURL()
-            try data.write(to: backupURL)
-            print("✅ Migration backup created at: \(backupURL.path)")
+            let encoder = JSONEncoder()
+            if let data = try? encoder.encode(backupData) {
+                let backupURL = getBackupURL()
+                
+                // Create directory if it doesn't exist
+                let directoryURL = backupURL.deletingLastPathComponent()
+                try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true, attributes: nil)
+                
+                // Write backup file
+                try data.write(to: backupURL)
+                print("✅ Migration backup created at: \(backupURL.path)")
+            }
+        } catch {
+            // Log error but don't throw - backup is optional
+            print("⚠️ Failed to create migration backup: \(error.localizedDescription)")
         }
     }
 
@@ -433,17 +446,6 @@ struct LegacyAnalyticsData {
     let event: String
     let timestamp: Date
     let properties: [String: Any]
-}
-
-struct LegacyFocusSession {
-    let id: UUID
-    let taskName: String
-    let startTime: Date
-    let endTime: Date?
-    let allowedApps: [String]
-    let state: FocusSessionState
-    let emergencyBreaks: [LegacyEmergencyBreak]
-    let performanceMetrics: [String: Any]
 }
 
 struct LegacyEmergencyBreak {
@@ -626,33 +628,403 @@ extension FocusAnalytics {
     }
 }
 
-// MARK: - Data Store Placeholder (would be implemented with actual persistence)
+// MARK: - Data Store Implementation (GRDB-based persistence)
+
+import GRDB
+import os.log
 
 class FocusLockDataStore {
     static let shared = FocusLockDataStore()
 
-    private init() {}
+    private let dbURL: URL
+    private let db: DatabaseQueue
+    private let logger = Logger(subsystem: "FocusLock", category: "FocusLockDataStore")
+    private let fileManager = FileManager.default
+
+    private init() {
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let baseDir = appSupport.appendingPathComponent("Dayflow", isDirectory: true)
+        
+        // Ensure directory exists
+        try? fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        
+        dbURL = baseDir.appendingPathComponent("FocusLockData.sqlite")
+        
+        // Configure database
+        var config = Configuration()
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode = WAL")
+            try db.execute(sql: "PRAGMA synchronous = NORMAL")
+            try db.execute(sql: "PRAGMA busy_timeout = 5000")
+        }
+        
+        db = try! DatabaseQueue(path: dbURL.path, configuration: config)
+        
+        // Create tables
+        try! createTables()
+    }
+
+    private func createTables() throws {
+        try db.write { db in
+            // Activities table
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS focus_activities (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    category_id TEXT NOT NULL,
+                    start_time REAL NOT NULL,
+                    end_time REAL,
+                    duration REAL,
+                    metadata TEXT,
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY (category_id) REFERENCES focus_categories(id)
+                )
+            """)
+            
+            // Categories table
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS focus_categories (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    color TEXT NOT NULL,
+                    icon TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL
+                )
+            """)
+            
+            // Sessions table
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS focus_sessions (
+                    id TEXT PRIMARY KEY,
+                    task_name TEXT NOT NULL,
+                    start_time REAL NOT NULL,
+                    end_time REAL,
+                    state TEXT NOT NULL,
+                    allowed_apps TEXT,
+                    emergency_breaks TEXT,
+                    interruptions TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            
+            // Create indexes
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_activities_start_time ON focus_activities(start_time)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON focus_sessions(start_time)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_categories_active ON focus_categories(is_active)")
+        }
+        
+        logger.info("FocusLock data store tables created")
+    }
 
     func saveActivity(_ activity: FocusActivity) async throws {
-        // Implementation would save to database
+        try await db.write { db in
+            let metadataJSON = try JSONEncoder().encode(activity.metadata)
+            let metadataString = String(data: metadataJSON, encoding: .utf8) ?? "{}"
+            
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO focus_activities 
+                (id, title, category_id, start_time, end_time, duration, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                activity.id.uuidString,
+                activity.title,
+                activity.category.id.uuidString,
+                activity.startTime.timeIntervalSince1970,
+                activity.endTime?.timeIntervalSince1970,
+                activity.duration,
+                metadataString,
+                Date().timeIntervalSince1970
+            ])
+        }
+        
+        logger.info("Saved activity: \(activity.title)")
     }
 
     func saveCategory(_ category: FocusCategory) async throws {
-        // Implementation would save to database
+        try await db.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO focus_categories 
+                (id, name, color, icon, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                category.id.uuidString,
+                category.name,
+                category.color,
+                category.icon,
+                category.isActive ? 1 : 0,
+                Date().timeIntervalSince1970
+            ])
+        }
+        
+        logger.info("Saved category: \(category.name)")
     }
 
     func saveSession(_ session: FocusSession) async throws {
-        // Implementation would save to database
+        try await db.write { db in
+            let allowedAppsJSON = try JSONEncoder().encode(session.allowedApps)
+            let allowedAppsString = String(data: allowedAppsJSON, encoding: .utf8) ?? "[]"
+            
+            let emergencyBreaksJSON = try JSONEncoder().encode(session.emergencyBreaks)
+            let emergencyBreaksString = String(data: emergencyBreaksJSON, encoding: .utf8) ?? "[]"
+            
+            let interruptionsJSON = try JSONEncoder().encode(session.interruptions)
+            let interruptionsString = String(data: interruptionsJSON, encoding: .utf8) ?? "[]"
+            
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO focus_sessions 
+                (id, task_name, start_time, end_time, state, allowed_apps, emergency_breaks, interruptions, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                session.id.uuidString,
+                session.taskName,
+                session.startTime.timeIntervalSince1970,
+                session.endTime?.timeIntervalSince1970,
+                session.state.rawValue,
+                allowedAppsString,
+                emergencyBreaksString,
+                interruptionsString,
+                Date().timeIntervalSince1970
+            ])
+        }
+        
+        logger.info("Saved session: \(session.taskName)")
+    }
+    
+    func loadActivities() async throws -> [FocusActivity] {
+        return try await db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT a.*, c.id as cat_id, c.name as cat_name, c.color as cat_color, 
+                       c.icon as cat_icon, c.is_active as cat_is_active
+                FROM focus_activities a
+                JOIN focus_categories c ON a.category_id = c.id
+                ORDER BY a.start_time DESC
+            """)
+            
+            return rows.map { row in
+                let categoryId = UUID(uuidString: row["cat_id"]) ?? UUID()
+                let category = FocusCategory(
+                    id: categoryId,
+                    name: row["cat_name"],
+                    color: row["cat_color"],
+                    icon: row["cat_icon"],
+                    isActive: row["cat_is_active"] == 1
+                )
+                
+                let metadataString: String = row["metadata"] ?? "{}"
+                let metadataData = metadataString.data(using: .utf8) ?? Data()
+                let metadata = try? JSONDecoder().decode([String: AnyCodable].self, from: metadataData)
+                
+                return FocusActivity(
+                    id: UUID(uuidString: row["id"]) ?? UUID(),
+                    title: row["title"],
+                    category: category,
+                    startTime: Date(timeIntervalSince1970: row["start_time"]),
+                    endTime: row["end_time"] != nil ? Date(timeIntervalSince1970: row["end_time"]) : nil,
+                    duration: row["duration"],
+                    metadata: metadata ?? [:]
+                )
+            }
+        }
+    }
+    
+    func loadCategories() async throws -> [FocusCategory] {
+        return try await db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM focus_categories
+                ORDER BY name ASC
+            """)
+            
+            return rows.map { row in
+                FocusCategory(
+                    id: UUID(uuidString: row["id"]) ?? UUID(),
+                    name: row["name"],
+                    color: row["color"],
+                    icon: row["icon"],
+                    isActive: row["is_active"] == 1
+                )
+            }
+        }
+    }
+    
+    func loadSessions() async throws -> [FocusSession] {
+        return try await db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM focus_sessions
+                ORDER BY start_time DESC
+            """)
+            
+            return rows.map { row in
+                let allowedAppsString: String = row["allowed_apps"] ?? "[]"
+                let allowedAppsData = allowedAppsString.data(using: .utf8) ?? Data()
+                let allowedApps = (try? JSONDecoder().decode([String].self, from: allowedAppsData)) ?? []
+                
+                let emergencyBreaksString: String = row["emergency_breaks"] ?? "[]"
+                let emergencyBreaksData = emergencyBreaksString.data(using: .utf8) ?? Data()
+                let emergencyBreaks = (try? JSONDecoder().decode([EmergencyBreak].self, from: emergencyBreaksData)) ?? []
+                
+                let interruptionsString: String = row["interruptions"] ?? "[]"
+                let interruptionsData = interruptionsString.data(using: .utf8) ?? Data()
+                let interruptions = (try? JSONDecoder().decode([SessionInterruption].self, from: interruptionsData)) ?? []
+                
+                return FocusSession(
+                    id: UUID(uuidString: row["id"]) ?? UUID(),
+                    taskName: row["task_name"],
+                    startTime: Date(timeIntervalSince1970: row["start_time"]),
+                    endTime: row["end_time"] != nil ? Date(timeIntervalSince1970: row["end_time"]) : nil,
+                    state: FocusSessionState(rawValue: row["state"]) ?? .idle,
+                    allowedApps: allowedApps,
+                    emergencyBreaks: emergencyBreaks,
+                    interruptions: interruptions
+                )
+            }
+        }
     }
 }
 
 class FocusLockAnalyticsStore {
     static let shared = FocusLockAnalyticsStore()
 
-    private init() {}
+    private let dbURL: URL
+    private let db: DatabaseQueue
+    private let logger = Logger(subsystem: "FocusLock", category: "FocusLockAnalyticsStore")
+    private let fileManager = FileManager.default
+
+    private init() {
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let baseDir = appSupport.appendingPathComponent("Dayflow", isDirectory: true)
+        
+        // Ensure directory exists
+        try? fileManager.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        
+        dbURL = baseDir.appendingPathComponent("FocusLockAnalytics.sqlite")
+        
+        // Configure database
+        var config = Configuration()
+        config.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode = WAL")
+            try db.execute(sql: "PRAGMA synchronous = NORMAL")
+            try db.execute(sql: "PRAGMA busy_timeout = 5000")
+        }
+        
+        db = try! DatabaseQueue(path: dbURL.path, configuration: config)
+        
+        // Create tables
+        try! createTables()
+    }
+
+    private func createTables() throws {
+        try db.write { db in
+            // Analytics table
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS focus_analytics (
+                    id TEXT PRIMARY KEY,
+                    date REAL NOT NULL,
+                    total_focus_time REAL NOT NULL,
+                    tasks_completed INTEGER NOT NULL,
+                    distraction_count INTEGER NOT NULL,
+                    productivity_score REAL NOT NULL,
+                    top_categories TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            
+            // Create indexes
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_analytics_date ON focus_analytics(date)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_analytics_created_at ON focus_analytics(created_at)")
+        }
+        
+        logger.info("FocusLock analytics store tables created")
+    }
 
     func saveAnalytics(_ analytics: FocusAnalytics) async throws {
-        // Implementation would save to analytics store
+        try await db.write { db in
+            let topCategoriesJSON = try JSONEncoder().encode(analytics.topCategories)
+            let topCategoriesString = String(data: topCategoriesJSON, encoding: .utf8) ?? "[]"
+            
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO focus_analytics 
+                (id, date, total_focus_time, tasks_completed, distraction_count, productivity_score, top_categories, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                analytics.id.uuidString,
+                analytics.date.timeIntervalSince1970,
+                analytics.totalFocusTime,
+                analytics.tasksCompleted,
+                analytics.distractionCount,
+                analytics.productivityScore,
+                topCategoriesString,
+                Date().timeIntervalSince1970
+            ])
+        }
+        
+        logger.info("Saved analytics for date: \(analytics.date)")
+    }
+    
+    func loadAnalytics(for date: Date) async throws -> FocusAnalytics? {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        return try await db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM focus_analytics
+                WHERE date >= ? AND date < ?
+                LIMIT 1
+            """, arguments: [
+                startOfDay.timeIntervalSince1970,
+                endOfDay.timeIntervalSince1970
+            ])
+            
+            guard let row = rows.first else { return nil }
+            
+            let topCategoriesString: String = row["top_categories"] ?? "[]"
+            let topCategoriesData = topCategoriesString.data(using: .utf8) ?? Data()
+            let topCategories = (try? JSONDecoder().decode([String].self, from: topCategoriesData)) ?? []
+            
+            return FocusAnalytics(
+                id: UUID(uuidString: row["id"]) ?? UUID(),
+                date: Date(timeIntervalSince1970: row["date"]),
+                totalFocusTime: row["total_focus_time"],
+                tasksCompleted: row["tasks_completed"],
+                distractionCount: row["distraction_count"],
+                productivityScore: row["productivity_score"],
+                topCategories: topCategories
+            )
+        }
+    }
+    
+    func loadAllAnalytics() async throws -> [FocusAnalytics] {
+        return try await db.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM focus_analytics
+                ORDER BY date DESC
+            """)
+            
+            return rows.map { row in
+                let topCategoriesString: String = row["top_categories"] ?? "[]"
+                let topCategoriesData = topCategoriesString.data(using: .utf8) ?? Data()
+                let topCategories = (try? JSONDecoder().decode([String].self, from: topCategoriesData)) ?? []
+                
+                return FocusAnalytics(
+                    id: UUID(uuidString: row["id"]) ?? UUID(),
+                    date: Date(timeIntervalSince1970: row["date"]),
+                    totalFocusTime: row["total_focus_time"],
+                    tasksCompleted: row["tasks_completed"],
+                    distractionCount: row["distraction_count"],
+                    productivityScore: row["productivity_score"],
+                    topCategories: topCategories
+                )
+            }
+        }
+    }
+    
+    func clearAllAnalytics() async throws {
+        try await db.write { db in
+            try db.execute(sql: "DELETE FROM focus_analytics")
+        }
+        
+        logger.info("Cleared all analytics data")
     }
 }
 
@@ -804,7 +1176,11 @@ struct DataMigrationView: View {
                     .font(.custom("Nunito", size: 14))
                     .foregroundColor(.red.opacity(0.8))
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
             }
 
             HStack(spacing: 12) {
@@ -823,7 +1199,8 @@ struct DataMigrationView: View {
                 .buttonStyle(PlainButtonStyle())
 
                 Button("Skip") {
-                    dismiss()
+                    // Mark migration as skipped so the view disappears
+                    migrationManager.markMigrationSkipped()
                 }
                 .font(.custom("Nunito", size: 14))
                 .fontWeight(.medium)

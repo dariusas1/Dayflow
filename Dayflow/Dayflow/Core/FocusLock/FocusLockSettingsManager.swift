@@ -3,16 +3,21 @@
 //  FocusLock
 //
 //  Settings management for FocusLock functionality
+//  Consolidated from SettingsManager and FocusLockSettingsManager
 //
 
 import Foundation
+import SwiftUI
 import Combine
 
 @MainActor
 class FocusLockSettingsManager: ObservableObject {
     static let shared = FocusLockSettingsManager()
 
-    // MARK: - Published Properties
+    // MARK: - Published Properties (struct-based)
+    @Published var settings: FocusLockSettings = .default
+    
+    // MARK: - Legacy Published Properties (for backward compatibility)
     @Published var isAutostartEnabled: Bool = false
     @Published var emergencyBreakDuration: TimeInterval = 20.0
     @Published var enableBackgroundMonitoring: Bool = true
@@ -21,9 +26,10 @@ class FocusLockSettingsManager: ObservableObject {
 
     // MARK: - Private Properties
     private let userDefaults = UserDefaults.standard
+    private let settingsKey = "FocusLockSettings"
     private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - UserDefaults Keys
+    // MARK: - UserDefaults Keys (legacy, for migration)
     private enum Keys {
         static let autostartEnabled = "FocusLockAutostartEnabled"
         static let emergencyBreakDuration = "FocusLockEmergencyBreakDuration"
@@ -34,11 +40,26 @@ class FocusLockSettingsManager: ObservableObject {
 
     private init() {
         loadSettings()
+        setupAutoSave()
+        syncPublishedProperties()
     }
 
     // MARK: - Settings Management
 
     func loadSettings() {
+        // Try to load from new struct-based storage
+        if let data = userDefaults.data(forKey: settingsKey),
+           let decoded = try? JSONDecoder().decode(FocusLockSettings.self, from: data) {
+            settings = decoded
+            migrateLegacySettingsIfNeeded()
+        } else {
+            // Try to load from legacy individual property storage
+            loadLegacySettings()
+            migrateToStructStorage()
+        }
+    }
+    
+    private func loadLegacySettings() {
         isAutostartEnabled = userDefaults.bool(forKey: Keys.autostartEnabled)
         emergencyBreakDuration = userDefaults.double(forKey: Keys.emergencyBreakDuration)
         if emergencyBreakDuration == 0 {
@@ -49,18 +70,118 @@ class FocusLockSettingsManager: ObservableObject {
         enableNotifications = userDefaults.bool(forKey: Keys.notificationsEnabled)
 
         // Enable features by default if not set
-        if !userDefaults.bool(forKey: Keys.backgroundMonitoringEnabled) {
+        if !userDefaults.bool(forKey: Keys.backgroundMonitoringEnabled) && !userDefaults.bool(forKey: Keys.taskDetectionEnabled) && !userDefaults.bool(forKey: Keys.notificationsEnabled) {
             enableBackgroundMonitoring = true
-            saveSettings()
+            enableTaskDetection = true
+            enableNotifications = true
+        }
+    }
+    
+    private func migrateToStructStorage() {
+        // Create settings struct from legacy properties
+        settings = FocusLockSettings(
+            globalAllowedApps: settings.globalAllowedApps, // Keep existing if available
+            emergencyBreakDuration: emergencyBreakDuration,
+            minimumSessionDuration: settings.minimumSessionDuration,
+            autoStartDetection: isAutostartEnabled,
+            enableNotifications: enableNotifications,
+            logSessions: settings.logSessions,
+            enableBackgroundMonitoring: enableBackgroundMonitoring,
+            enableTaskDetection: enableTaskDetection
+        )
+        saveSettings()
+    }
+    
+    private func migrateLegacySettingsIfNeeded() {
+        // Sync legacy properties from struct if they're different
+        if isAutostartEnabled != settings.autoStartDetection {
+            isAutostartEnabled = settings.autoStartDetection
+        }
+        if emergencyBreakDuration != settings.emergencyBreakDuration {
+            emergencyBreakDuration = settings.emergencyBreakDuration
+        }
+        if enableBackgroundMonitoring != settings.enableBackgroundMonitoring {
+            enableBackgroundMonitoring = settings.enableBackgroundMonitoring
+        }
+        if enableTaskDetection != settings.enableTaskDetection {
+            enableTaskDetection = settings.enableTaskDetection
+        }
+        if enableNotifications != settings.enableNotifications {
+            enableNotifications = settings.enableNotifications
         }
     }
 
     func saveSettings() {
-        userDefaults.set(isAutostartEnabled, forKey: Keys.autostartEnabled)
-        userDefaults.set(emergencyBreakDuration, forKey: Keys.emergencyBreakDuration)
-        userDefaults.set(enableBackgroundMonitoring, forKey: Keys.backgroundMonitoringEnabled)
-        userDefaults.set(enableTaskDetection, forKey: Keys.taskDetectionEnabled)
-        userDefaults.set(enableNotifications, forKey: Keys.notificationsEnabled)
+        if let encoded = try? JSONEncoder().encode(settings) {
+            userDefaults.set(encoded, forKey: settingsKey)
+        }
+        syncPublishedProperties()
+    }
+    
+    private func setupAutoSave() {
+        $settings
+            .debounce(for: 1.0, scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.saveSettings()
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func syncPublishedProperties() {
+        // Sync individual properties with struct
+        isAutostartEnabled = settings.autoStartDetection
+        emergencyBreakDuration = settings.emergencyBreakDuration
+        enableBackgroundMonitoring = settings.enableBackgroundMonitoring
+        enableTaskDetection = settings.enableTaskDetection
+        enableNotifications = settings.enableNotifications
+    }
+    
+    // MARK: - Convenience Properties (backward compatibility)
+    
+    var currentSettings: FocusLockSettings {
+        return settings
+    }
+
+    // MARK: - Convenience Methods (backward compatibility with SettingsManager)
+    
+    func updateGlobalAllowedApps(_ apps: [String]) {
+        settings.globalAllowedApps = apps
+        saveSettings()
+    }
+
+    func updateEmergencyBreakDuration(_ duration: TimeInterval) {
+        settings.emergencyBreakDuration = duration
+        emergencyBreakDuration = duration
+        saveSettings()
+    }
+
+    func enableAutoStartDetection(_ enabled: Bool) {
+        settings.autoStartDetection = enabled
+        isAutostartEnabled = enabled
+        saveSettings()
+    }
+
+    func enableNotifications(_ enabled: Bool) {
+        settings.enableNotifications = enabled
+        saveSettings()
+        syncPublishedProperties()
+    }
+
+    func enableSessionLogging(_ enabled: Bool) {
+        settings.logSessions = enabled
+        saveSettings()
+    }
+    
+    func enableBackgroundMonitoring(_ enabled: Bool) {
+        settings.enableBackgroundMonitoring = enabled
+        saveSettings()
+        syncPublishedProperties()
+    }
+    
+    func enableTaskDetection(_ enabled: Bool) {
+        settings.enableTaskDetection = enabled
+        saveSettings()
+        syncPublishedProperties()
     }
 
     // MARK: - Autostart Management
@@ -73,6 +194,7 @@ class FocusLockSettingsManager: ObservableObject {
             let success = launchAgentManager.uninstallLaunchAgent()
             if success {
                 isAutostartEnabled = false
+                settings.autoStartDetection = false
                 saveSettings()
             }
             return success
@@ -81,6 +203,7 @@ class FocusLockSettingsManager: ObservableObject {
             let success = launchAgentManager.installLaunchAgent()
             if success {
                 isAutostartEnabled = true
+                settings.autoStartDetection = true
                 saveSettings()
             }
             return success
@@ -89,7 +212,10 @@ class FocusLockSettingsManager: ObservableObject {
 
     func refreshAutostartStatus() {
         LaunchAgentManager.shared.checkAgentStatus()
-        isAutostartEnabled = LaunchAgentManager.shared.isEnabled
+        let status = LaunchAgentManager.shared.isEnabled
+        isAutostartEnabled = status
+        settings.autoStartDetection = status
+        saveSettings()
     }
 
     // MARK: - Convenience Properties
@@ -130,11 +256,8 @@ extension FocusLockSettingsManager {
     }
 
     func resetToDefaults() {
-        isAutostartEnabled = false
-        emergencyBreakDuration = 20.0
-        enableBackgroundMonitoring = true
-        enableTaskDetection = true
-        enableNotifications = true
+        settings = FocusLockSettings.default
+        syncPublishedProperties()
         saveSettings()
 
         // Uninstall LaunchAgent if it was installed

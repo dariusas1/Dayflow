@@ -37,16 +37,16 @@ struct TimelineView: View {
                     timeBlocksContent
                 }
                 .frame(minHeight: calculateTotalHeight(for: plan))
-                .background(Color(.systemBackground))
+                .background(Color(NSColor.controlBackgroundColor))
             }
             .coordinateSpace(name: "timeline")
-            .onReceive(Timer.publish(every: 1).autoconnect().compactMap { _ in Date() }) { newTime in
+            .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect().compactMap { _ in Date() }) { newTime in
                 currentTime = newTime
             }
         }
         .overlay(alignment: .topLeading) {
             // Current time indicator
-            if plan?.date.isToday == true {
+            if let plan = plan, Calendar.current.isDateInToday(plan.date) {
                 currentTimeIndicator
             }
         }
@@ -100,7 +100,7 @@ struct TimelineView: View {
             }
             .frame(height: hourHeight)
             .padding(.horizontal)
-            .background(Color(.secondarySystemGroupedBackground))
+            .background(Color(NSColor.textBackgroundColor))
         }
     }
 
@@ -112,7 +112,7 @@ struct TimelineView: View {
             hourGridLines
 
             // Current time line
-            if plan?.date.isToday == true {
+            if let plan = plan, Calendar.current.isDateInToday(plan.date) {
                 currentTimeLine
             }
 
@@ -137,7 +137,7 @@ struct TimelineView: View {
                         },
                         onDragEnd: { offset in
                             let newTime = calculateTimeForOffset(offset, from: block.startTime)
-                            onBlockDropped(block, at: newTime)
+                            onBlockDropped(block, newTime)
                             draggedBlock = nil
                             isDragging = false
                             draggedOffset = .zero
@@ -155,14 +155,14 @@ struct TimelineView: View {
         VStack(spacing: 0) {
             ForEach(8...20, id: \.self) { _ in
                 Rectangle()
-                    .fill(Color(.systemGray4))
+                    .fill(Color(NSColor.separatorColor))
                     .frame(height: 0.5)
                     .frame(maxWidth: .infinity)
             }
         }
     }
 
-    private var currentTimeLine: View {
+    private var currentTimeLine: some View {
         let currentHour = Calendar.current.component(.hour, from: currentTime)
         let currentMinute = Calendar.current.component(.minute, from: currentTime)
         let yOffset = calculateYOffset(for: currentHour, minute: currentMinute)
@@ -296,7 +296,7 @@ struct TimelineBlockView: View {
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    if let task = task {
+                    if task != nil {
                         // Priority indicator
                         Circle()
                             .fill(priorityColor)
@@ -330,7 +330,7 @@ struct TimelineBlockView: View {
 
                 // Time info
                 HStack {
-                    Text(block.startTime.formatted(date: .omitted))
+                    Text(block.startTime.formatted(date: .omitted, time: .shortened))
                         .font(.custom("Nunito", size: 10))
                         .foregroundColor(.white.opacity(0.8))
 
@@ -338,7 +338,7 @@ struct TimelineBlockView: View {
                         .font(.custom("Nunito", size: 10))
                         .foregroundColor(.white.opacity(0.6))
 
-                    Text(block.endTime.formatted(date: .omitted))
+                    Text(block.endTime.formatted(date: .omitted, time: .shortened))
                         .font(.custom("Nunito", size: 10))
                         .foregroundColor(.white.opacity(0.8))
 
@@ -440,6 +440,7 @@ struct TaskListView: View {
                 TaskRowView(
                     task: task,
                     isSelected: selectedTask?.id == task.id,
+                    isCompleted: task.isCompleted,
                     onTap: { onTaskTapped(task) }
                 )
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
@@ -454,13 +455,14 @@ struct TaskListView: View {
                 ForEach(tasks.filter { $0.isCompleted }, id: \.id) { task in
                     TaskRowView(
                         task: task,
+                        isSelected: false,
                         isCompleted: true,
                         onTap: { onTaskTapped(task) }
                     )
                 }
             }
         }
-        .listStyle(InsetGroupedListStyle())
+        .listStyle(.sidebar)
     }
 }
 
@@ -507,7 +509,7 @@ struct TaskRowView: View {
                     }
 
                     if let deadline = task.deadline {
-                        Label(deadline.formatted(date: .abbreviated), systemImage: "clock")
+                        Label(deadline.formatted(date: .abbreviated, time: .omitted), systemImage: "clock")
                             .font(.custom("Nunito", size: 9))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -557,14 +559,14 @@ struct CalendarView: View {
             VStack {
                 DatePicker("Select Date", selection: $selectedDate, displayedComponents: [.date])
                     .datePickerStyle(GraphicalDatePickerStyle())
-                    .onChange(of: selectedDate) { newDate in
-                        onDateSelected(newDate)
+                    .onChange(of: selectedDate) { oldValue, newValue in
+                        onDateSelected(newValue)
                     }
 
                 if let plan = currentPlan {
                     Divider()
 
-                    Text("Tasks for \(selectedDate.formatted(date: .full))")
+                    Text("Tasks for \(selectedDate.formatted(date: .complete, time: .omitted))")
                         .font(.custom("InstrumentSerif-Regular", size: 18))
                         .padding()
 
@@ -789,7 +791,7 @@ struct TimeDistributionChart: View {
         }
         .padding()
         .frame(height: 120)
-        .background(Color(.systemGray6))
+        .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(12)
     }
 
@@ -816,6 +818,7 @@ struct TaskSuggestionsView: View {
                 )
             }
             .navigationTitle("Suggestions")
+#if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -824,6 +827,7 @@ struct TaskSuggestionsView: View {
                     }
                 }
             }
+#endif
         }
         .frame(width: 500, height: 600)
     }
@@ -849,7 +853,7 @@ struct TaskSuggestionRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 8) {
-                Text(suggestion.durationFormatted)
+                Text(suggestion.estimatedDuration != nil ? "\(Int(suggestion.estimatedDuration! / 60))m" : "N/A")
                     .font(.custom("Nunito", size: 12))
                     .foregroundColor(.secondary)
 
@@ -926,7 +930,12 @@ struct TaskDetailsView: View {
                         HStack {
                             Text("Scheduled Start")
                             Spacer()
-                            Text(scheduledStart.formatted(date: .short))
+                            Text({
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return formatter.string(from: scheduledStart)
+              }())
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -935,7 +944,12 @@ struct TaskDetailsView: View {
                         HStack {
                             Text("Scheduled End")
                             Spacer()
-                            Text(scheduledEnd.formatted(date: .short))
+                            Text({
+                let formatter = DateFormatter()
+                formatter.dateStyle = .short
+                formatter.timeStyle = .short
+                return formatter.string(from: scheduledEnd)
+              }())
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -944,7 +958,7 @@ struct TaskDetailsView: View {
                         HStack {
                             Text("Deadline")
                             Spacer()
-                            Text(deadline.formatted(date: .short))
+                            Text(deadline, style: .date)
                                 .foregroundColor(deadline < Date() ? .red : .primary)
                         }
                     }
@@ -993,15 +1007,14 @@ struct TaskDetailsView: View {
                 }
             }
             .navigationTitle("Task Details")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         isPresented = false
                     }
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         // In production, would update task with any changes
                         isPresented = false

@@ -10,6 +10,7 @@ import NaturalLanguage
 import Combine
 import os.log
 
+@MainActor
 class QueryProcessor: ObservableObject {
     static let shared = QueryProcessor()
 
@@ -208,7 +209,7 @@ class QueryProcessor: ObservableObject {
         var suggestions: [String] = []
 
         // Analyze the original query and suggest related questions
-        let normalizedQuery = normalizeQuery(query)
+        let _ = normalizeQuery(query)
 
         // Time-based suggestions
         if !context.targetMetrics.isEmpty {
@@ -403,7 +404,7 @@ class QueryProcessor: ObservableObject {
 
         if let metric = relevantData.first {
             let value = Int(metric.value)
-            let unit = metric.unit
+            let _ = metric.unit
 
             switch metric.category {
             case .focusTime:
@@ -442,7 +443,7 @@ class QueryProcessor: ObservableObject {
         }
 
         let totalValue = relevantData.reduce(0) { $0 + $1.value }
-        let averageValue = totalValue / Double(relevantData.count)
+        let _ = totalValue / Double(relevantData.count)
         let topItem = relevantData.max { $0.value < $1.value }
 
         var answer = "Across your tracked metrics:"
@@ -638,9 +639,8 @@ class QueryProcessor: ObservableObject {
         do {
             // Search MemoryStore for relevant memories
             let memoryResults = try await HybridMemoryStore.shared.hybridSearch(
-                query: searchTerms.joined(separator: " "),
-                limit: 5,
-                threshold: 0.3
+                searchTerms.joined(separator: " "),
+                limit: 5
             )
 
             guard !memoryResults.isEmpty else {
@@ -698,11 +698,12 @@ class QueryProcessor: ObservableObject {
 
         let foundTerms = productivityTerms.filter { filteredQuery.contains($0) }
 
-        // Add metric and app terms if present
-        let metricTerms = context.targetMetrics.map { $0.displayName.lowercased() }
-        let appTerms = context.targetApps
+        // Extract additional terms from the query itself
+        let additionalTerms = filteredQuery.components(separatedBy: " ")
+            .map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty && $0.count > 2 }
 
-        return Array(Set(foundTerms + metricTerms + appTerms))
+        return Array(Set(foundTerms + additionalTerms))
     }
 
     private func generateProductivityInsights(from memories: [MemorySearchResult]) -> String {

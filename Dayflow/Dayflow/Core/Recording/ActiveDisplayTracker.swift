@@ -35,8 +35,10 @@ final class ActiveDisplayTracker: ObservableObject {
             object: NSApplication.shared,
             queue: .main
         ) { [weak self] _ in
-            self?.resetCandidateDueToDisplayChange()
-            self?.tick()
+            Task { @MainActor [weak self] in
+                self?.resetCandidateDueToDisplayChange()
+                self?.tick()
+            }
         }
 
         start()
@@ -52,7 +54,9 @@ final class ActiveDisplayTracker: ObservableObject {
     private func start() {
         stop()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / pollHz, repeats: true) { [weak self] _ in
-            self?.tick()
+            Task { @MainActor in
+                self?.tick()
+            }
         }
         RunLoop.current.add(timer!, forMode: .common)
     }

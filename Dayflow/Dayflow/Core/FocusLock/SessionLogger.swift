@@ -105,7 +105,7 @@ class SessionLogger {
     private struct ExportData: Codable {
         let sessions: [FocusSession]
         let exportDate: Date
-        let version: String = "1.0"
+        var version: String = "1.0"
     }
 }
 

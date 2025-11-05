@@ -32,6 +32,10 @@ struct MainView: View {
     @State private var sidebarOffset: CGFloat = -30
     @State private var sidebarOpacity: Double = 0
     @State private var contentOpacity: Double = 0
+    @State private var dashboardOffset: CGFloat = -20
+    @State private var dashboardOpacity: Double = 0
+    @State private var journalOffset: CGFloat = -20
+    @State private var journalOpacity: Double = 0
     
     // Track if we've performed the initial scroll to current time
     @State private var didInitialScroll = false
@@ -85,57 +89,111 @@ struct MainView: View {
                 .environmentObject(featureFlagManager)
                 .frame(minWidth: 800, minHeight: 600)
         }
+        .onChange(of: focusLockOnboardingCompleted) { oldValue, newValue in
+            if newValue {
+                showFocusLockOnboarding = false
+            }
+        }
     }
 
     @ViewBuilder
     private var mainAppContent: some View {
-        // Two-column layout: left logo + sidebar; right white panel with header, filters, timeline
+        // Two-column layout: left logo + sidebar; right white panel including header + content
         HStack(alignment: .top, spacing: 0) {
             // Left column: Logo on top, sidebar centered
-            VStack(spacing: 0) {
-                // Logo area (keeps same animation)
-                LogoBadgeView(imageName: "DayflowLogoMainApp", size: 36)
-                    .frame(height: 100)
-                    .frame(maxWidth: .infinity)
-                    .scaleEffect(logoScale)
-                    .opacity(logoOpacity)
-
-                Spacer(minLength: 0)
-
-                // Sidebar in fixed-width gutter
-                VStack {
-                    Spacer()
-                    SidebarView(selectedIcon: $selectedIcon)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .offset(y: sidebarOffset)
-                        .opacity(sidebarOpacity)
-                    Spacer()
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(width: 100)
-            .fixedSize(horizontal: true, vertical: false)
-            .frame(maxHeight: .infinity)
-            .layoutPriority(1)
-
+            leftSidebarColumn
+            
             // Right column: Main white panel including header + content
-            ZStack {
+            rightContentColumn
+        }
+        .background(
+            Image("MainUIBackground")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+        )
+    }
+    
+    private var leftSidebarColumn: some View {
+        VStack(spacing: 0) {
+            // Logo area (keeps same animation)
+            LogoBadgeView(imageName: "DayflowLogoMainApp", size: 36)
+                .frame(height: 100)
+                .frame(maxWidth: .infinity)
+                .scaleEffect(logoScale)
+                .opacity(logoOpacity)
+
+            Spacer(minLength: 0)
+
+            // Sidebar in fixed-width gutter
+            VStack {
+                Spacer()
+                SidebarView(selectedIcon: $selectedIcon)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .offset(y: sidebarOffset)
+                    .opacity(sidebarOpacity)
+                Spacer()
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 100)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxHeight: .infinity)
+        .layoutPriority(1)
+    }
+    
+    @ViewBuilder
+    private var rightContentColumn: some View {
+        // Right column: Main white panel including header + content
+        ZStack {
                 switch selectedIcon {
                 case .settings:
                     enhancedSettingsView
                         .padding(15)
                 case .dashboard:
                     enhancedDashboardView
-                        .padding(15)
+                        .offset(y: dashboardOffset)
+                        .opacity(dashboardOpacity)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                dashboardOffset = 0
+                                dashboardOpacity = 1
+                            }
+                        }
+                        .onChange(of: selectedIcon) { oldValue, newValue in
+                            if newValue != .dashboard {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    dashboardOffset = -20
+                                    dashboardOpacity = 0
+                                }
+                            }
+                        }
                 case .journal:
                     enhancedJournalView
-                        .padding(15)
-                case .bug:
-                    BugReportView()
-                        .padding(15)
+                        .offset(y: journalOffset)
+                        .opacity(journalOpacity)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                journalOffset = 0
+                                journalOpacity = 1
+                            }
+                        }
+                        .onChange(of: selectedIcon) { oldValue, newValue in
+                            if newValue != .journal {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    journalOffset = -20
+                                    journalOpacity = 0
+                                }
+                            }
+                        }
+                case .jarvisChat:
+                    JarvisChatView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .focuslock:
                     enhancedFocusLockView
-                        .padding(15)
+                case .smartTodos:
+                    SmartTodoView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .timeline:
                     GeometryReader { geo in
                         HStack(alignment: .top, spacing: 0) {
@@ -244,7 +302,7 @@ struct MainView: View {
 
                             // Divider
                             Rectangle()
-                                .fill(Color(hex: "ECECEC") ?? Color.gray)
+                                .fill(Color(hex: "ECECEC"))
                                 .frame(width: 1)
                                 .frame(maxHeight: .infinity)
 
@@ -297,80 +355,45 @@ struct MainView: View {
                 }
                 .compositingGroup()
             )
-        }
-        .padding([.top, .trailing, .bottom], 15)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
-        .ignoresSafeArea()
-        .sheet(isPresented: $showDatePicker) {
-            DatePickerSheet(
-                selectedDate: Binding(
-                    get: { selectedDate },
-                    set: {
-                        lastDateNavMethod = "picker"
-                        setSelectedDate($0)
-                    }
-                ),
-                isPresented: $showDatePicker
-            )
-        }
+            .padding([.top, .trailing, .bottom], 15)
         .onAppear {
-            // screen viewed and initial timeline view
-            AnalyticsService.shared.screen("timeline")
-            AnalyticsService.shared.withSampling(probability: 0.01) {
-                AnalyticsService.shared.capture("timeline_viewed", ["date_bucket": dayString(selectedDate)])
-            }
-            // Orchestrated entrance animations following Emil Kowalski principles
-            // Fast, under 300ms, natural spring motion
-            
-            // Logo appears first with scale and fade
+            // Orchestrated entrance animations
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8, blendDuration: 0)) {
                 logoScale = 1.0
                 logoOpacity = 1
             }
-            
-            // Timeline text slides in from left
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8, blendDuration: 0).delay(0.1)) {
                 timelineOffset = 0
                 timelineOpacity = 1
             }
-            
-            // Sidebar slides up
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8, blendDuration: 0).delay(0.15)) {
                 sidebarOffset = 0
                 sidebarOpacity = 1
             }
-            
-            // Main content fades in last
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8, blendDuration: 0).delay(0.2)) {
                 contentOpacity = 1
             }
-            
-            // Perform initial scroll to current time on cold start
             if !didInitialScroll {
                 performInitialScrollIfNeeded()
             }
-
-            // Start minute-level tick to detect civil-day rollover (midnight)
             startDayChangeTimer()
         }
-        // Trigger reset when idle fired and timeline is visible
-        .onChange(of: inactivity.pendingReset) { fired in
+        .onChange(of: inactivity.pendingReset) { oldValue, fired in
             if fired, selectedIcon != .settings {
                 performIdleResetAndScroll()
                 InactivityMonitor.shared.markHandledIfPending()
             }
         }
-        .onChange(of: selectedIcon) { newIcon in
+        .onChange(of: selectedIcon) { oldValue, newIcon in
             // tab selected + screen viewed
             let tabName: String
             switch newIcon {
             case .timeline: tabName = "timeline"
             case .dashboard: tabName = "dashboard"
             case .journal: tabName = "journal"
-            case .bug: tabName = "bug_report"
+            case .jarvisChat: tabName = "jarvis_chat"
             case .focuslock: tabName = "focuslock"
+            case .smartTodos: tabName = "smart_todos"
             case .settings: tabName = "settings"
             }
 
@@ -397,7 +420,7 @@ struct MainView: View {
                 }
             }
         }
-        .onChange(of: selectedDate) { newDate in
+        .onChange(of: selectedDate) { oldValue, newDate in
             // If changed via picker, emit navigation now
             if let method = lastDateNavMethod, method == "picker" {
                 AnalyticsService.shared.capture("date_navigation", [
@@ -411,7 +434,7 @@ struct MainView: View {
                 AnalyticsService.shared.capture("timeline_viewed", ["date_bucket": dayString(newDate)])
             }
         }
-        .onChange(of: selectedActivity?.id) { _ in
+        .onChange(of: selectedActivity?.id) { oldValue, newValue in
             guard let a = selectedActivity else { return }
             let dur = a.endTime.timeIntervalSince(a.startTime)
             AnalyticsService.shared.capture("activity_card_opened", [
@@ -419,17 +442,6 @@ struct MainView: View {
                 "duration_bucket": AnalyticsService.shared.secondsBucket(dur),
                 "has_video": a.videoSummaryURL != nil
             ])
-        }
-        // If user returns from Settings and a reset was pending, perform it once
-        .onChange(of: selectedIcon) { newIcon in
-            if newIcon != .settings, inactivity.pendingReset {
-                performIdleResetAndScroll()
-                InactivityMonitor.shared.markHandledIfPending()
-            }
-        }
-        .onDisappear {
-            // Safety: stop timer if view disappears
-            stopDayChangeTimer()
         }
         .overlay {
             if showCategoryEditor {
@@ -440,6 +452,22 @@ struct MainView: View {
                 .environmentObject(categoryStore)
                 // Removed .contentShape(Rectangle()) and .onTapGesture to allow keyboard input
             }
+        }
+        .sheet(isPresented: $showDatePicker) {
+            DatePickerSheet(
+                selectedDate: Binding(
+                    get: { selectedDate },
+                    set: {
+                        lastDateNavMethod = "picker"
+                        setSelectedDate($0)
+                    }
+                ),
+                isPresented: $showDatePicker
+            )
+        }
+        .sheet(isPresented: $showCategoryEditor) {
+            CategoryEditorView(categoryStore: categoryStore)
+                .frame(minWidth: 800, minHeight: 600)
         }
     }
     
@@ -493,43 +521,56 @@ struct MainView: View {
 
     @ViewBuilder
     private var enhancedDashboardView: some View {
-        VStack {
+        // Show only EnhancedDashboardView if feature flag is enabled, otherwise show DashboardView
+        if featureFlagManager.isEnabled(.enhancedDashboard) {
+            EnhancedDashboardView(featureFlagManager: featureFlagManager)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
             DashboardView()
-
-            if featureFlagManager.isEnabled(.enhancedDashboard) {
-                EnhancedDashboardView()
-                    .environmentObject(featureFlagManager)
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     @ViewBuilder
     private var enhancedJournalView: some View {
-        VStack {
+        // Show EnhancedJournalView (Second Brain) if feature flag is enabled, otherwise show legacy JournalView
+        if featureFlagManager.isEnabled(.dailyJournal) {
+            EnhancedJournalView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
             JournalView()
-
-            if featureFlagManager.isEnabled(.dailyJournal) {
-                DailyJournalView()
-                    .environmentObject(featureFlagManager)
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     @ViewBuilder
     private var enhancedFocusLockView: some View {
-        VStack {
+        // Show enhanced FocusLock view if any features are enabled
+        if featureFlagManager.isEnabled(.focusSessions) ||
+           featureFlagManager.isEnabled(.emergencyBreaks) ||
+           featureFlagManager.isEnabled(.suggestedTodos) ||
+           featureFlagManager.isEnabled(.planner) {
+            EnhancedFocusLockView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 0) {
             FocusLockView()
 
             // Suggested Todos Section
             if featureFlagManager.isEnabled(.suggestedTodos) {
+                Divider()
+                    .padding(.vertical, 0)
                 SuggestedTodosView()
                     .environmentObject(featureFlagManager)
             }
 
             // Planner Section
             if featureFlagManager.isEnabled(.planner) {
+                Divider()
+                    .padding(.vertical, 0)
                 PlannerView()
                     .environmentObject(featureFlagManager)
+            }
             }
         }
     }
@@ -568,6 +609,8 @@ struct MainView: View {
             return featureFlagManager.isEnabled(.enhancedDashboard) && featureFlagManager.getOnboardingStatus(for: .enhancedDashboard) == .completed
         case .journal:
             return featureFlagManager.isEnabled(.dailyJournal) && featureFlagManager.getOnboardingStatus(for: .dailyJournal) == .completed
+        case .jarvisChat:
+            return featureFlagManager.isEnabled(.jarvisChat) && featureFlagManager.getOnboardingStatus(for: .jarvisChat) == .completed
         case .focuslock:
             let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
                                    featureFlagManager.isEnabled(.emergencyBreaks) ||
@@ -586,7 +629,7 @@ struct MainView: View {
             return featureFlagManager.isEnabled(.enhancedDashboard) ? "EnhancedDashboardIcon" : "DashboardIcon"
         case .journal:
             return featureFlagManager.isEnabled(.dailyJournal) ? "DailyJournalIcon" : "JournalIcon"
-        case .bug: return nil
+        case .jarvisChat: return nil
         case .focuslock:
             // Show enhanced icon when any FocusLock features are enabled
             let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
@@ -594,6 +637,7 @@ struct MainView: View {
                                    featureFlagManager.isEnabled(.suggestedTodos) ||
                                    featureFlagManager.isEnabled(.planner)
             return hasAnyFocusFeature ? "EnhancedFocusLockIcon" : "FocusLockIcon"
+        case .smartTodos: return nil
         case .settings: return nil
         }
     }
@@ -603,8 +647,9 @@ enum SidebarIcon: CaseIterable {
     case timeline
     case dashboard
     case journal
-    case bug
+    case jarvisChat
     case focuslock
+    case smartTodos
     case settings
 
     var assetName: String? {
@@ -612,16 +657,18 @@ enum SidebarIcon: CaseIterable {
         case .timeline: return "TimelineIcon"
         case .dashboard: return "DashboardIcon"
         case .journal: return "JournalIcon"
-        case .bug: return nil
+        case .jarvisChat: return nil
         case .focuslock: return nil
+        case .smartTodos: return nil
         case .settings: return nil
         }
     }
 
     var systemNameFallback: String? {
         switch self {
-        case .bug: return "exclamationmark.bubble"
+        case .jarvisChat: return "brain.head.profile"
         case .focuslock: return "lock.shield"
+        case .smartTodos: return "checklist"
         case .settings: return "gearshape"
         default: return nil
         }
@@ -664,12 +711,17 @@ struct SidebarIconButton: View {
         case .journal:
             return featureFlagManager.isEnabled(.dailyJournal) &&
                    featureFlagManager.getOnboardingStatus(for: .dailyJournal) == .completed
+        case .jarvisChat:
+            return featureFlagManager.isEnabled(.jarvisChat) &&
+                   featureFlagManager.getOnboardingStatus(for: .jarvisChat) == .completed
         case .focuslock:
             let hasAnyFocusFeature = featureFlagManager.isEnabled(.focusSessions) ||
                                    featureFlagManager.isEnabled(.emergencyBreaks) ||
                                    featureFlagManager.isEnabled(.suggestedTodos) ||
                                    featureFlagManager.isEnabled(.planner)
             return hasAnyFocusFeature
+        case .smartTodos:
+            return featureFlagManager.isEnabled(.suggestedTodos) || featureFlagManager.isEnabled(.planner)
         default:
             return false
         }
@@ -750,7 +802,7 @@ struct TabFilterBar: View {
             HStack(spacing: 0) {
                 Spacer()
                 LinearGradient(
-                    gradient: Gradient(colors: [Color.clear, Color(hex: "FFF8F1") ?? Color.white]),
+                    gradient: Gradient(colors: [Color.clear, Color(hex: "FFF8F1")]),
                     startPoint: .leading,
                     endPoint: .trailing
                 )
@@ -781,7 +833,7 @@ struct TabFilterBar: View {
         var body: some View {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(Color(hex: category.colorHex) ?? .blue)
+                    .fill(Color(hex: category.colorHex))
                     .frame(width: 10, height: 10)
 
                 Text(category.name)
@@ -894,8 +946,7 @@ struct DateNavigationControls: View {
         let horizontalPadding: CGFloat = 11.77829 * 2
         return textSize.width + horizontalPadding + 8
     }
-}
-
+} // End of MainView struct
 
 extension View {
     @ViewBuilder

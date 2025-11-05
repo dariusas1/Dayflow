@@ -14,7 +14,7 @@ import os.log
 class DashboardEngine: ObservableObject {
     static let shared = DashboardEngine()
 
-    // MARK: - Published Properties
+    // MARK: - Published Properties (MainActor-isolated for UI safety)
     @Published var productivityMetrics: [ProductivityMetric] = []
     @Published var trendData: [TrendData] = []
     @Published var recommendations: [Recommendation] = []
@@ -48,7 +48,6 @@ class DashboardEngine: ObservableObject {
 
     // MARK: - Private Properties
     private let logger = Logger(subsystem: "FocusLock", category: "DashboardEngine")
-    private let memoryStore = try! HybridMemoryStore.shared
     private let activityTap = ActivityTap.shared
     private var cancellables = Set<AnyCancellable>()
     private let refreshInterval: TimeInterval = 300 // 5 minutes
@@ -68,20 +67,28 @@ class DashboardEngine: ObservableObject {
 
         logger.info("Starting dashboard data refresh")
 
-        async let metrics = Task { await generateProductivityMetrics() }
-        async let trends = Task { await generateTrendData() }
-        async let recommendations = Task { await generateRecommendations() }
-
-        do {
-            self.productivityMetrics = try await metrics.get()
-            self.trendData = try await trends.get()
-            self.recommendations = try await recommendations.get()
-            self.lastUpdateTime = Date()
-
-            logger.info("Dashboard data refresh completed")
-        } catch {
-            logger.error("Failed to refresh dashboard data: \(error.localizedDescription)")
+        // Use Task.detached to avoid concurrency crashes with asyncLet
+        async let metricsTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return [] as [ProductivityMetric] }
+            return await self.generateProductivityMetrics()
         }
+        
+        async let trendsTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return [] as [TrendData] }
+            return await self.generateTrendData()
+        }
+        
+        async let recommendationsTask = Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self = self else { return [] as [Recommendation] }
+            return await self.generateRecommendations()
+        }
+
+        self.productivityMetrics = await metricsTask.value
+        self.trendData = await trendsTask.value
+        self.recommendations = await recommendationsTask.value
+        self.lastUpdateTime = Date()
+
+        logger.info("Dashboard data refresh completed")
     }
 
     func processQuery(_ query: String) async -> QueryResult {
@@ -89,45 +96,31 @@ class DashboardEngine: ObservableObject {
 
         logger.info("Processing dashboard query: \(query)")
 
-        do {
-            // Parse the query and extract relevant data
-            let queryContext = await parseQuery(query)
-            let supportingData = await extractSupportingData(for: queryContext)
-            let answer = await generateAnswer(for: queryContext, with: supportingData)
-            let visualizations = determineVisualizations(for: queryContext)
+        // Parse the query and extract relevant data
+        let queryContext = await parseQuery(query)
+        let supportingData = await extractSupportingData(for: queryContext)
+        let answer = await generateAnswer(for: queryContext, with: supportingData)
+        let visualizations = determineVisualizations(for: queryContext)
 
-            let processingTime = CFAbsoluteTimeGetCurrent() - startTime
-            let result = QueryResult(
-                query: query,
-                answer: answer,
-                supportingData: supportingData,
-                visualizations: visualizations,
-                confidence: calculateConfidence(for: queryContext, data: supportingData),
-                processingTime: processingTime,
-                timestamp: Date()
-            )
+        let processingTime = CFAbsoluteTimeGetCurrent() - startTime
+        let result = QueryResult(
+            query: query,
+            answer: answer,
+            supportingData: supportingData,
+            visualizations: visualizations,
+            confidence: calculateConfidence(for: queryContext, data: supportingData),
+            processingTime: processingTime,
+            timestamp: Date()
+        )
 
-            // Add to recent results
-            recentQueryResults.insert(result, at: 0)
-            if recentQueryResults.count > 50 {
-                recentQueryResults.removeLast()
-            }
-
-            logger.info("Query processed successfully in \(String(format: "%.2f", processingTime))s")
-            return result
-
-        } catch {
-            logger.error("Failed to process query: \(error.localizedDescription)")
-            return QueryResult(
-                query: query,
-                answer: "Sorry, I couldn't process that query. Please try rephrasing it.",
-                supportingData: [],
-                visualizations: [],
-                confidence: 0.0,
-                processingTime: CFAbsoluteTimeGetCurrent() - startTime,
-                timestamp: Date()
-            )
+        // Add to recent results
+        recentQueryResults.insert(result, at: 0)
+        if recentQueryResults.count > 50 {
+            recentQueryResults.removeLast()
         }
+
+        logger.info("Query processed successfully in \(String(format: "%.2f", processingTime))s")
+        return result
     }
 
     private func getMetrics(for category: ProductivityMetric.MetricCategory, timeRange: TimeRange) -> [ProductivityMetric] {
@@ -141,7 +134,7 @@ class DashboardEngine: ObservableObject {
 
     func dismissRecommendation(_ recommendation: Recommendation) {
         if let index = recommendations.firstIndex(where: { $0.id == recommendation.id }) {
-            var updatedRec = recommendations[index]
+            _ = recommendations[index]
             // In a real implementation, you'd save this to persistent storage
             recommendations.remove(at: index)
         }
@@ -152,36 +145,29 @@ class DashboardEngine: ObservableObject {
     private func generateProductivityMetrics() async -> [ProductivityMetric] {
         var metrics: [ProductivityMetric] = []
 
-        do {
-            // Get real data from ActivityTap
-            let activityHistory = ActivityTap.shared.getActivityHistory(limit: 1000)
-            let activityStats = ActivityTap.shared.getActivityStatistics()
+        // Get real data from ActivityTap
+        let activityHistory = ActivityTap.shared.getActivityHistory(limit: 1000)
+        _ = ActivityTap.shared.getActivityStatistics()
 
-            // Generate focus time metrics from real activity data
-            let focusMetrics = generateFocusTimeFromActivities(activityHistory)
-            metrics.append(contentsOf: focusMetrics)
+        // Generate focus time metrics from real activity data
+        let focusMetrics = generateFocusTimeFromActivities(activityHistory)
+        metrics.append(contentsOf: focusMetrics)
 
-            // Generate productivity score from real activity summary
-            let productivityMetrics = generateProductivityFromActivities(activityHistory)
-            metrics.append(contentsOf: productivityMetrics)
+        // Generate productivity score from real activity summary
+        let productivityMetrics = generateProductivityFromActivities(activityHistory)
+        metrics.append(contentsOf: productivityMetrics)
 
-            // Generate app usage metrics from activity data
-            let appMetrics = generateAppUsageFromActivities(activityHistory)
-            metrics.append(contentsOf: appMetrics)
+        // Generate app usage metrics from activity data
+        let appMetrics = generateAppUsageFromActivities(activityHistory)
+        metrics.append(contentsOf: appMetrics)
 
-            // Generate task completion metrics
-            let taskMetrics = generateTaskCompletionFromActivities(activityHistory)
-            metrics.append(contentsOf: taskMetrics)
+        // Generate task completion metrics
+        let taskMetrics = generateTaskCompletionFromActivities(activityHistory)
+        metrics.append(contentsOf: taskMetrics)
 
-            // Generate time management metrics
-            let timeMetrics = generateTimeManagementFromActivities(activityHistory)
-            metrics.append(contentsOf: timeMetrics)
-
-        } catch {
-            logger.error("Failed to generate metrics from ActivityTap: \(error.localizedDescription)")
-            // Fallback to mock data
-            metrics.append(contentsOf: generateMockProductivityMetrics())
-        }
+        // Generate time management metrics
+        let timeMetrics = generateTimeManagementFromActivities(activityHistory)
+        metrics.append(contentsOf: timeMetrics)
 
         // Add metrics from MemoryStore if available
         do {
@@ -236,7 +222,7 @@ class DashboardEngine: ObservableObject {
         let calendar = Calendar.current
         let groupedActivities = Dictionary(grouping: activities, by: { calendar.startOfDay(for: $0.timestamp) })
 
-        for (date, dayActivities) in groupedActivities.sorted(by: { $0.key < $1.key }) {
+        for (date, _) in groupedActivities.sorted(by: { $0.key < $1.key }) {
             let summary = ActivityTap.shared.getActivitySummary(for: DateInterval(start: date, end: date.addingTimeInterval(24 * 60 * 60)))
 
             let metric = ProductivityMetric(
@@ -458,14 +444,16 @@ class DashboardEngine: ObservableObject {
                         description: "Use the Pomodoro technique with 25-minute focused work sessions",
                         difficulty: .easy,
                         estimatedTime: 25 * 60,
-                        steps: ["Set a 25-minute timer", "Work on one task only", "Take a 5-minute break", "Repeat"]
+                        steps: ["Set a 25-minute timer", "Work on one task only", "Take a 5-minute break", "Repeat"],
+                        type: .productivity
                     ),
                     Recommendation.SuggestedAction(
                         title: "Minimize distractions",
                         description: "Use Focus Lock to block distracting apps during work sessions",
                         difficulty: .moderate,
                         estimatedTime: 10 * 60,
-                        steps: ["Enable Focus Lock", "Configure allowed apps", "Start a focus session"]
+                        steps: ["Enable Focus Lock", "Configure allowed apps", "Start a focus session"],
+                        type: .productivity
                     )
                 ],
                 evidence: [focusMetric],
@@ -490,7 +478,8 @@ class DashboardEngine: ObservableObject {
                         description: "Configure time limits for distracting applications",
                         difficulty: .easy,
                         estimatedTime: 5 * 60,
-                        steps: ["Open System Settings", "Set screen time limits", "Configure \(distractingApp.name)"]
+                        steps: ["Open System Settings", "Set screen time limits", "Configure \(distractingApp.name)"],
+                        type: .productivity
                     )
                 ],
                 evidence: [distractingApp],
@@ -516,7 +505,8 @@ class DashboardEngine: ObservableObject {
                         description: "Work for 50 minutes, then take a 10-minute break",
                         difficulty: .easy,
                         estimatedTime: 1 * 60,
-                        steps: ["Set 50-minute work timer", "Take 10-minute break", "Repeat throughout day"]
+                        steps: ["Set 50-minute work timer", "Take 10-minute break", "Repeat throughout day"],
+                        type: .health
                     )
                 ],
                 evidence: [wellnessMetric],
@@ -861,8 +851,4 @@ class DashboardEngine: ObservableObject {
 
 // MARK: - Helper Extensions
 
-extension Date {
-    func addingTimeInterval(_ interval: TimeInterval) -> Date {
-        return self.addingTimeInterval(interval)
-    }
-}
+// Date.addingTimeInterval is already provided by Foundation, no need to extend

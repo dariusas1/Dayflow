@@ -95,61 +95,51 @@ class CompatibilityManager: ObservableObject {
     func migrateFromLegacyVersion() async -> MigrationResult {
         migrationStatus = .inProgress
 
-        do {
-            // Check for legacy data
-            let hasLegacyData = checkForLegacyData()
-            guard hasLegacyData else {
-                migrationStatus = .completed
-                return MigrationResult(success: true, migratedItems: 0, errors: [])
-            }
-
-            // Perform migration steps
-            var migratedItems = 0
-            var migrationErrors: [MigrationError] = []
-
-            // Step 1: Migrate user preferences
-            let preferencesResult = await migrateLegacyPreferences()
-            migratedItems += preferencesResult.itemsMigrated
-            migrationErrors.append(contentsOf: preferencesResult.errors)
-
-            // Step 2: Migrate session data
-            let sessionsResult = await migrateLegacySessions()
-            migratedItems += sessionsResult.itemsMigrated
-            migrationErrors.append(contentsOf: sessionsResult.errors)
-
-            // Step 3: Migrate focus statistics
-            let statsResult = await migrateLegacyStatistics()
-            migratedItems += statsResult.itemsMigrated
-            migrationErrors.append(contentsOf: statsResult.errors)
-
-            // Step 4: Validate migration
-            let validationResult = validateMigration()
-            if !validationResult.isValid {
-                migrationErrors.append(MigrationError(
-                    type: .validationFailed,
-                    message: "Migration validation failed: \(validationResult.issues.joined(separator: ", "))"
-                ))
-            }
-
-            // Save migration status
-            userDefaults.set(true, forKey: migrationKey)
-            userDefaults.set(Date(), forKey: "MigrationDate")
-
-            migrationStatus = migrationErrors.isEmpty ? .completed : .failed
-            return MigrationResult(
-                success: migrationErrors.isEmpty,
-                migratedItems: migratedItems,
-                errors: migrationErrors
-            )
-
-        } catch {
-            migrationStatus = .failed
-            return MigrationResult(
-                success: false,
-                migratedItems: 0,
-                errors: [MigrationError(type: .unknownError, message: error.localizedDescription)]
-            )
+        // Check for legacy data
+        let hasLegacyData = checkForLegacyData()
+        guard hasLegacyData else {
+            migrationStatus = .completed
+            return MigrationResult(success: true, migratedItems: 0, errors: [])
         }
+
+        // Perform migration steps
+        var migratedItems = 0
+        var migrationErrors: [MigrationError] = []
+
+        // Step 1: Migrate user preferences
+        let preferencesResult = await migrateLegacyPreferences()
+        migratedItems += preferencesResult.itemsMigrated
+        migrationErrors.append(contentsOf: preferencesResult.errors)
+
+        // Step 2: Migrate session data
+        let sessionsResult = await migrateLegacySessions()
+        migratedItems += sessionsResult.itemsMigrated
+        migrationErrors.append(contentsOf: sessionsResult.errors)
+
+        // Step 3: Migrate focus statistics
+        let statsResult = await migrateLegacyStatistics()
+        migratedItems += statsResult.itemsMigrated
+        migrationErrors.append(contentsOf: statsResult.errors)
+
+        // Step 4: Validate migration
+        let validationResult = validateMigration()
+        if !validationResult.isValid {
+            migrationErrors.append(MigrationError(
+                type: .validationFailed,
+                message: "Migration validation failed: \(validationResult.issues.joined(separator: ", "))"
+            ))
+        }
+
+        // Save migration status
+        userDefaults.set(true, forKey: migrationKey)
+        userDefaults.set(Date(), forKey: "MigrationDate")
+
+        migrationStatus = migrationErrors.isEmpty ? .completed : .failed
+        return MigrationResult(
+            success: migrationErrors.isEmpty,
+            migratedItems: migratedItems,
+            errors: migrationErrors
+        )
     }
 
     func isFeatureAvailable(_ feature: String) -> Bool {
@@ -335,7 +325,7 @@ class CompatibilityManager: ObservableObject {
     }
 
     private func validateMigration() -> ValidationResult {
-        var issues: [String] = []
+        let issues: [String] = []
 
         // Validate migrated data integrity
         // Check for missing or corrupted data
@@ -410,7 +400,7 @@ struct CompatibilityReport {
 }
 
 struct CompatibilityWarning: Identifiable, Codable {
-    let id = UUID()
+    var id = UUID()
     let type: CompatibilityWarningType
     let message: String
     let severity: WarningSeverity

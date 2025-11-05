@@ -29,7 +29,7 @@ class SessionManager: ObservableObject {
 
     // MARK: - Private Properties
     private var sessionTimer: Timer?
-    private let settingsManager = SettingsManager.shared
+    private let settingsManager = FocusLockSettingsManager.shared
     private let lockController = LockController.shared
     private let emergencyBreakManager = EmergencyBreakManager.shared
     private var cancellables = Set<AnyCancellable>()
@@ -190,7 +190,7 @@ class SessionManager: ObservableObject {
     // MARK: - Private Methods
     private func applyAppBlocking(for session: FocusSession) {
         // Create app policy based on session settings
-        let appPolicy = AppPolicy(
+        let _ = AppPolicy(
             bundleID: "com.focuslock.session",
             appName: "Focus Session",
             isAllowed: false,
@@ -199,7 +199,7 @@ class SessionManager: ObservableObject {
 
         // Allow specified apps and block everything else
         let allowedBundleIDs = Set(session.allowedApps)
-        let blockedApps = Array(allowedBundleIDs) // Will be filtered in LockController
+        let _ = Array(allowedBundleIDs) // Will be filtered in LockController
 
         lockController.applyBlocking(allowedApps: Array(allowedBundleIDs))
 
@@ -241,7 +241,7 @@ class SessionManager: ObservableObject {
         // Monitor when break ends naturally to resume focus
         emergencyBreakManager.$isActive
             .sink { [weak self] isActive in
-                guard let self = self, let session = self.currentSession else { return }
+                guard let self = self, let _ = self.currentSession else { return }
 
                 // When break ends, if we're still in break state, resume focus
                 if !isActive && self.currentState == .break {

@@ -8,10 +8,14 @@
 import SwiftUI
 
 struct FeatureFlagsSettingsView: View {
-    @ObservedObject private var featureFlagManager: FeatureFlagManager
+    @EnvironmentObject private var featureFlagManager: FeatureFlagManager
     @State private var selectedCategory: FeatureCategory = .core
     @State private var showRecommended = false
     @State private var searchTerm = ""
+
+    init() {
+        // EnvironmentObject is injected via environment, not initializer
+    }
 
     private var filteredFeatures: [FeatureFlag] {
         let allFeatures = showRecommended ? featureFlagManager.getRecommendedFeatures() : FeatureFlag.allCases
@@ -23,8 +27,8 @@ struct FeatureFlagsSettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // Header
+        VStack(alignment: .leading, spacing: 16) {
+            // Header - Fixed height section
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("FocusLock Features")
@@ -53,8 +57,9 @@ struct FeatureFlagsSettingsView: View {
                     .font(.custom("Nunito", size: 14))
                     .foregroundColor(.black.opacity(0.6))
             }
+            .fixedSize(horizontal: false, vertical: true)
 
-            // Search and Categories
+            // Search and Categories - Fixed height section
             VStack(alignment: .leading, spacing: 12) {
                 // Search
                 HStack {
@@ -91,31 +96,32 @@ struct FeatureFlagsSettingsView: View {
                     .padding(.horizontal, 4)
                 }
             }
+            .fixedSize(horizontal: false, vertical: true)
 
-            // Feature Cards
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 16) {
+            // Feature Cards - Expandable scrollable container
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVStack(spacing: 12) {
                     ForEach(filteredFeatures, id: \.self) { feature in
                         FeatureFlagCard(flag: feature)
-                            .environmentObject(featureFlagManager)
                             .onTapGesture {
                                 featureFlagManager.recordFeatureUsage(feature, action: .viewed)
                             }
                     }
                 }
-                .padding(.trailing, 4)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 8)
             }
-
-            Spacer()
+            .frame(minHeight: 300, maxHeight: .infinity)
         }
-        .padding(.top, 4)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
 // MARK: - Enhanced Views (these would be implemented as separate files)
 
 struct EnhancedDashboardView: View {
-    @ObservedObject private var featureFlagManager: FeatureFlagManager
+    @ObservedObject var featureFlagManager: FeatureFlagManager
     @State private var selectedTab: DashboardTab = .overview
 
     enum DashboardTab: String, CaseIterable {
@@ -203,31 +209,69 @@ struct EnhancedDashboardView: View {
 
     @ViewBuilder
     private var overviewContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Today's Overview")
                 .font(.custom("Nunito", size: 18))
                 .fontWeight(.semibold)
                 .foregroundColor(.black.opacity(0.8))
 
+            // Real-time metrics from DashboardEngine
+            if let focusMetric = DashboardEngine.shared.metrics.first(where: { $0.category == .focusTime }) {
+                DashboardMetricCard(
+                    title: "Focus Time",
+                    value: formatDuration(focusMetric.value),
+                    change: nil, // Trend calculation would need historical data
+                    icon: "clock.fill",
+                    color: .blue
+                )
+            }
+            
+            // Current activity from ActivityTap
+            if let currentActivity = ActivityTap.shared.currentActivity {
+                CurrentActivityCard(activity: currentActivity)
+            }
+            
+            // Active sessions from SessionManager
+            let sessionManager = SessionManager.shared
+            if let currentSession = sessionManager.currentSession {
+                ActiveSessionCard(session: currentSession, state: sessionManager.currentState)
+            }
+            
             Text("Enhanced insights powered by AI analysis")
                 .font(.custom("Nunito", size: 14))
                 .foregroundColor(.black.opacity(0.5))
         }
     }
+    
+    private func formatDuration(_ seconds: Double) -> String {
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
+    }
 
     @ViewBuilder
     private var productivityContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Productivity Metrics")
                 .font(.custom("Nunito", size: 18))
                 .fontWeight(.semibold)
                 .foregroundColor(.black.opacity(0.8))
 
+            // Display productivity metrics from DashboardEngine
+            ForEach(DashboardEngine.shared.productivityMetrics.prefix(5), id: \.id) { metric in
+                ProductivityMetricRow(metric: metric)
+            }
+            
             if featureFlagManager.isEnabled(.suggestedTodos) {
+                Divider()
                 SuggestedTodosPreview()
             }
 
             if featureFlagManager.isEnabled(.planner) {
+                Divider()
                 PlannerPreview()
             }
         }
@@ -235,38 +279,527 @@ struct EnhancedDashboardView: View {
 
     @ViewBuilder
     private var analyticsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Advanced Analytics")
                 .font(.custom("Nunito", size: 18))
                 .fontWeight(.semibold)
                 .foregroundColor(.black.opacity(0.8))
 
+            // Display trend data from DashboardEngine
+            ForEach(DashboardEngine.shared.trends.prefix(3), id: \.id) { trend in
+                TrendDataCard(trend: trend)
+            }
+            
+            // Performance metrics from PerformanceMonitor
+            if let performanceMetrics = getPerformanceMetrics() {
+                DashboardPerformanceMetricsCard(metrics: performanceMetrics)
+            }
+            
             if featureFlagManager.isEnabled(.performanceAnalytics) {
+                Divider()
                 PerformanceAnalyticsPreview()
             }
         }
     }
+    
+    private func getPerformanceMetrics() -> DashboardPerformanceMetrics? {
+        // Get current performance data
+        let processInfo = ProcessInfo.processInfo
+        return DashboardPerformanceMetrics(
+            cpuUsage: 0.0, // Would need to calculate from system
+            memoryUsage: Double(processInfo.physicalMemory) / 1024.0 / 1024.0,
+            diskUsage: 0.0
+        )
+    }
 
     @ViewBuilder
     private var insightsContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("AI Insights")
                 .font(.custom("Nunito", size: 18))
                 .fontWeight(.semibold)
                 .foregroundColor(.black.opacity(0.8))
 
+            // Display AI insights from DashboardEngine
+            ForEach(DashboardEngine.shared.insights.prefix(5), id: \.id) { insight in
+                DashboardInsightCard(insight: insight)
+            }
+            
+            // Display recommendations
+            if !DashboardEngine.shared.recommendations.isEmpty {
+                Divider()
+                Text("Recommendations")
+                    .font(.custom("Nunito", size: 16))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black.opacity(0.7))
+                
+                ForEach(DashboardEngine.shared.recommendations.prefix(3), id: \.id) { recommendation in
+                    DashboardRecommendationCard(recommendation: recommendation)
+                }
+            }
+            
             if featureFlagManager.isEnabled(.dataInsights) {
+                Divider()
                 DataInsightsPreview()
             }
         }
     }
 }
 
+// MARK: - Supporting View Components
+
+struct DashboardMetricCard: View {
+    let title: String
+    let value: String
+    let change: Double?
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 20))
+                .foregroundColor(color)
+                .frame(width: 40, height: 40)
+                .background(color.opacity(0.1))
+                .cornerRadius(8)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.custom("Nunito", size: 13))
+                    .foregroundColor(.black.opacity(0.6))
+                
+                HStack(spacing: 6) {
+                    Text(value)
+                        .font(.custom("Nunito", size: 18))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.black.opacity(0.9))
+                    
+                    if let change = change {
+                        HStack(spacing: 2) {
+                            Image(systemName: change >= 0 ? "arrow.up" : "arrow.down")
+                                .font(.system(size: 10))
+                            Text(String(format: "%.1f%%", abs(change)))
+                                .font(.custom("Nunito", size: 11))
+                        }
+                        .foregroundColor(change >= 0 ? .green : .red)
+                    }
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.white)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+struct CurrentActivityCard: View {
+    let activity: Activity
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "app.badge")
+                    .font(.system(size: 14))
+                    .foregroundColor(.purple)
+                
+                Text("Current Activity")
+                    .font(.custom("Nunito", size: 13))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Spacer()
+                
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+            }
+            
+            Text(activity.windowInfo.bundleIdentifier.components(separatedBy: ".").last ?? "Unknown App")
+                .font(.custom("Nunito", size: 15))
+                .fontWeight(.semibold)
+                .foregroundColor(.black.opacity(0.9))
+            
+            if !activity.windowInfo.title.isEmpty {
+                Text(activity.windowInfo.title)
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.6))
+                    .lineLimit(2)
+            }
+        }
+        .padding(12)
+        .background(Color.purple.opacity(0.05))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+        )
+    }
+}
+
+struct ActiveSessionCard: View {
+    let session: FocusSession
+    let state: FocusSessionState
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(stateColor)
+                
+                Text("Focus Session")
+                    .font(.custom("Nunito", size: 13))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Spacer()
+                
+                Text(stateText)
+                    .font(.custom("Nunito", size: 11))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(stateColor.opacity(0.2))
+                    .cornerRadius(4)
+                    .foregroundColor(stateColor)
+            }
+            
+            if !session.taskName.isEmpty {
+                Text(session.taskName)
+                    .font(.custom("Nunito", size: 15))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black.opacity(0.9))
+            }
+            
+            Text(formatSessionDuration(session))
+                .font(.custom("Nunito", size: 12))
+                .foregroundColor(.black.opacity(0.6))
+        }
+        .padding(12)
+        .background(stateColor.opacity(0.05))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(stateColor.opacity(0.2), lineWidth: 1)
+        )
+    }
+    
+    private var stateColor: Color {
+        switch state {
+        case .idle: return .gray
+        case .active: return .green
+        case .arming: return .blue
+        case .break: return .orange
+        case .ended: return .purple
+        }
+    }
+    
+    private var stateText: String {
+        switch state {
+        case .idle: return "Idle"
+        case .active: return "Active"
+        case .arming: return "Starting"
+        case .break: return "Break"
+        case .ended: return "Ended"
+        }
+    }
+    
+    private func formatSessionDuration(_ session: FocusSession) -> String {
+        let duration = Date().timeIntervalSince(session.startTime)
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
+    }
+}
+
+struct ProductivityMetricRow: View {
+    let metric: ProductivityMetric
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(metric.category.displayName)
+                    .font(.custom("Nunito", size: 13))
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Text(String(format: "%.1f", metric.value))
+                    .font(.custom("Nunito", size: 16))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black.opacity(0.9))
+            }
+            
+            Spacer()
+            
+            // Trend indicator removed - would need historical data
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+struct TrendDirectionBadge: View {
+    let direction: TrendData.TrendDirection
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: iconName)
+                .font(.system(size: 12))
+            Text(direction.rawValue.capitalized)
+                .font(.custom("Nunito", size: 12))
+        }
+        .foregroundColor(badgeColor)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(badgeColor.opacity(0.1))
+        .cornerRadius(6)
+    }
+    
+    private var iconName: String {
+        switch direction {
+        case .increasing: return "arrow.up.right"
+        case .decreasing: return "arrow.down.right"
+        case .stable: return "equal"
+        case .volatile: return "arrow.up.arrow.down"
+        }
+    }
+    
+    private var badgeColor: Color {
+        switch direction {
+        case .increasing: return .green
+        case .decreasing: return .red
+        case .stable: return .blue
+        case .volatile: return .orange
+        }
+    }
+}
+
+struct TrendDataCard: View {
+    let trend: TrendData
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(trend.metricName)
+                    .font(.custom("Nunito", size: 14))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Spacer()
+                
+                // Trend direction indicator
+                TrendDirectionBadge(direction: trend.trendDirection)
+            }
+            
+            if !trend.insights.isEmpty {
+                Text(trend.insights.first?.description ?? "")
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.6))
+                    .lineLimit(2)
+            }
+        }
+        .padding(12)
+        .background(Color.white)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+struct DashboardPerformanceMetricsCard: View {
+    let metrics: DashboardPerformanceMetrics
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("System Performance")
+                .font(.custom("Nunito", size: 14))
+                .fontWeight(.medium)
+                .foregroundColor(.black.opacity(0.8))
+            
+            VStack(spacing: 8) {
+                PerformanceBar(label: "CPU", value: metrics.cpuUsage, maxValue: 100, color: .blue)
+                PerformanceBar(label: "Memory", value: metrics.memoryUsage, maxValue: 1024, color: .purple)
+            }
+        }
+        .padding(12)
+        .background(Color.white)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+struct PerformanceBar: View {
+    let label: String
+    let value: Double
+    let maxValue: Double
+    let color: Color
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.6))
+                
+                Spacer()
+                
+                Text(String(format: "%.1f", value))
+                    .font(.custom("Nunito", size: 12))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+            }
+            
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.05))
+                        .frame(height: 6)
+                        .cornerRadius(3)
+                    
+                    Rectangle()
+                        .fill(color)
+                        .frame(width: geometry.size.width * CGFloat(min(value / maxValue, 1.0)), height: 6)
+                        .cornerRadius(3)
+                }
+            }
+            .frame(height: 6)
+        }
+    }
+}
+
+struct DashboardInsightCard: View {
+    let insight: ProductivityInsight
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: iconForInsightType(insight.type))
+                    .font(.system(size: 14))
+                    .foregroundColor(.orange)
+                
+                Text(insight.title)
+                    .font(.custom("Nunito", size: 14))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Spacer()
+                
+                ConfidenceBadge(confidence: insight.confidenceLevel)
+            }
+            
+            Text(insight.description)
+                .font(.custom("Nunito", size: 12))
+                .foregroundColor(.black.opacity(0.6))
+                .lineLimit(3)
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.05))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+        )
+    }
+    
+    private func iconForInsightType(_ type: ProductivityInsight.InsightType) -> String {
+        switch type {
+        case .peakPerformance: return "chart.line.uptrend.xyaxis"
+        case .productivityPattern: return "chart.bar.fill"
+        case .energyOptimization: return "battery.100"
+        case .taskEfficiency: return "clock.fill"
+        case .schedulingImprovement: return "calendar.badge.clock"
+        case .goalProgress: return "target"
+        case .burnoutRisk: return "exclamationmark.triangle.fill"
+        case .focusQuality: return "eye.fill"
+        }
+    }
+}
+
+struct ConfidenceBadge: View {
+    let confidence: Double
+    
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(confidenceColor)
+                .frame(width: 6, height: 6)
+            Text(String(format: "%.0f%%", confidence * 100))
+                .font(.custom("Nunito", size: 11))
+                .foregroundColor(.black.opacity(0.6))
+        }
+    }
+    
+    private var confidenceColor: Color {
+        if confidence >= 0.8 {
+            return .green
+        } else if confidence >= 0.6 {
+            return .orange
+        } else {
+            return .red
+        }
+    }
+}
+
+struct DashboardRecommendationCard: View {
+    let recommendation: Recommendation
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 16))
+                .foregroundColor(.purple)
+                .frame(width: 32, height: 32)
+                .background(Color.purple.opacity(0.1))
+                .cornerRadius(6)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recommendation.title)
+                    .font(.custom("Nunito", size: 13))
+                    .fontWeight(.medium)
+                    .foregroundColor(.black.opacity(0.8))
+                
+                Text(recommendation.description)
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.6))
+                    .lineLimit(2)
+            }
+            
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.white)
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+}
+
+struct DashboardPerformanceMetrics {
+    let cpuUsage: Double
+    let memoryUsage: Double
+    let diskUsage: Double
+}
+
 struct DailyJournalView: View {
-    @ObservedObject private var featureFlagManager: FeatureFlagManager
+    @ObservedObject var featureFlagManager: FeatureFlagManager
+    @StateObject private var generator = DailyJournalGenerator.shared
     @State private var journalEntry: String = ""
     @State private var selectedMood: JournalMood = .neutral
     @State private var journalEntries: [JournalEntry] = []
+    @State private var selectedTemplate: JournalTemplate = .reflective
+    @State private var showingTemplateSelector = false
+    @State private var selectedDate = Date()
 
     enum JournalMood: String, CaseIterable, Codable {
         case productive = "productive"
@@ -315,182 +848,130 @@ struct DailyJournalView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
-            // Header
-            HStack {
-                Text("Daily Journal")
-                    .font(.custom("InstrumentSerif-Regular", size: 24))
-                    .foregroundColor(.black.opacity(0.9))
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 18) {
+                // Header
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Daily Journal")
+                            .font(.custom("InstrumentSerif-Regular", size: 36))
+                            .foregroundColor(.black)
 
-                Spacer()
-
-                Button(action: { saveJournalEntry() }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 14))
-                        Text("Save")
-                            .font(.custom("Nunito", size: 13))
+                        Spacer()
                     }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(red: 0.25, green: 0.17, blue: 0))
-                    .cornerRadius(8)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(journalEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            // Mood Selector
-            VStack(alignment: .leading, spacing: 8) {
-                Text("How are you feeling?")
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.medium)
-                    .foregroundColor(.black.opacity(0.7))
-
-                HStack(spacing: 12) {
-                    ForEach(JournalMood.allCases, id: \.self) { mood in
-                        Button(action: { selectedMood = mood }) {
-                            VStack(spacing: 4) {
-                                Text(mood.emoji)
-                                    .font(.system(size: 24))
-                                Text(mood.rawValue.capitalized)
-                                    .font(.custom("Nunito", size: 10))
-                                    .foregroundColor(.black.opacity(0.6))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(selectedMood == mood ? Color(hex: mood.color).opacity(0.2) : Color.gray.opacity(0.1))
-                            .cornerRadius(8)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(selectedMood == mood ? Color(hex: mood.color) : Color.clear, lineWidth: selectedMood == mood ? 2 : 0)
-                            )
-                        }
-                        .buttonStyle(PlainButtonStyle())
+                    
+                    HStack(spacing: 12) {
+                        Image(systemName: "moon.stars.fill")
+                                    .font(.system(size: 14))
+                            .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
+                        
+                        Text("Auto-generated daily at midnight • \(formatDate(selectedDate))")
+                                    .font(.custom("Nunito", size: 13))
+                        .foregroundColor(.black.opacity(0.6))
                     }
                 }
-            }
 
-            // Journal Entry
-            VStack(alignment: .leading, spacing: 8) {
-                Text("What's on your mind?")
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.medium)
-                    .foregroundColor(.black.opacity(0.7))
-
-                TextEditor(text: $journalEntry)
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(.black.opacity(0.8))
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 120)
-                    .padding(12)
-                    .background(Color.white)
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.black.opacity(0.2), lineWidth: 1)
-                    )
-            }
-
-            // Previous Entries
-            if !journalEntries.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Previous Entries")
-                        .font(.custom("Nunito", size: 14))
-                        .fontWeight(.medium)
-                        .foregroundColor(.black.opacity(0.7))
-
-                    ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 8) {
-                            ForEach(journalEntries.sorted(by: { $0.date > $1.date }), id: \.id) { entry in
-                                JournalEntryCard(entry: entry)
-                            }
-                        }
-                        .padding(.trailing, 4)
-                    }
-                    .frame(maxHeight: 200)
+                // Loading state
+                if generator.isGenerating {
+                    GenerationProgressCard(generator: generator)
+                }
+                
+                // Error state
+                if let error = generator.generationError {
+                    ErrorCard(error: error, onRetry: { regenerateJournal() })
+                }
+                
+                // Generated journal content
+                if let journal = generator.generatedJournal {
+                    GeneratedJournalContent(journal: journal)
+                }
+                
+                // Empty state
+                if !generator.isGenerating && generator.generatedJournal == nil && generator.generationError == nil {
+                    EmptyJournalState(onGenerate: { generateTodayJournal() })
                 }
             }
-
-            Spacer()
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(20)
-        .background(Color.white.opacity(0.8))
-        .cornerRadius(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingTemplateSelector) {
+            TemplateSelector(selectedTemplate: $selectedTemplate)
+        }
+        .onAppear {
+            // Auto-generate journal if none exists for today
+            if generator.generatedJournal == nil && !generator.isGenerating {
+                generateTodayJournal()
+            }
+        }
     }
-
-    private func saveJournalEntry() {
-        let trimmedEntry = journalEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedEntry.isEmpty else { return }
-
-        let entry = JournalEntry(
-            id: UUID(),
-            date: Date(),
-            content: trimmedEntry,
-            mood: selectedMood,
-            tags: extractTags(from: trimmedEntry)
-        )
-
-        journalEntries.insert(entry, at: 0)
-        journalEntry = ""
-        selectedMood = .neutral
-
-        // Track usage
-        featureFlagManager.recordFeatureUsage(.dailyJournal, action: .interacted)
+    
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        return formatter.string(from: date)
     }
-
-    private func extractTags(from text: String) -> [String] {
-        let words = text.components(separatedBy: .whitespacesAndNewlines)
-        return words.filter { $0.hasPrefix("#") }.map { String($0.dropFirst()) }
+    
+    private func generateTodayJournal() {
+        Task {
+            await generator.generateJournal(for: selectedDate, template: selectedTemplate)
+        }
+    }
+    
+    private func regenerateJournal() {
+        Task {
+            await generator.generateJournal(for: selectedDate, template: selectedTemplate)
+        }
     }
 }
 
 struct JournalEntryCard: View {
-    let entry: JournalEntry
+    let entry: DailyJournalView.JournalEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(entry.mood.emoji)
-                    .font(.system(size: 20))
+        UnifiedCard(padding: 16, cornerRadius: 12, hoverEnabled: true) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(entry.mood.emoji)
+                        .font(.system(size: 20))
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.formattedDate)
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.formattedDate)
+                            .font(.custom("Nunito", size: 12))
+                            .foregroundColor(.black.opacity(0.6))
 
-                    Text(entry.mood.rawValue.capitalized)
-                        .font(.custom("Nunito", size: 10))
-                        .foregroundColor(Color(hex: entry.mood.color))
+                        Text(entry.mood.rawValue.capitalized)
+                            .font(.custom("Nunito", size: 10))
+                            .fontWeight(.medium)
+                            .foregroundColor(Color(hex: entry.mood.color))
+                    }
+
+                    Spacer()
                 }
 
-                Spacer()
-            }
+                Text(entry.content)
+                    .font(.custom("Nunito", size: 14))
+                    .foregroundColor(.black.opacity(0.8))
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Text(entry.content)
-                .font(.custom("Nunito", size: 13))
-                .foregroundColor(.black.opacity(0.7))
-                .lineLimit(3)
-                .multilineTextAlignment(.leading)
-
-            if !entry.tags.isEmpty {
-                HStack {
-                    ForEach(entry.tags, id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.custom("Nunito", size: 10))
-                            .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color(red: 0.25, green: 0.17, blue: 0).opacity(0.1))
-                            .cornerRadius(4)
+                if !entry.tags.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(entry.tags, id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.custom("Nunito", size: 11))
+                                .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color(red: 0.25, green: 0.17, blue: 0).opacity(0.1))
+                                .cornerRadius(6)
+                        }
                     }
                 }
             }
         }
-        .padding(12)
-        .background(Color.white.opacity(0.6))
-        .cornerRadius(8)
     }
 }
 
@@ -788,12 +1269,12 @@ struct DataInsightsPreview: View {
                 .foregroundColor(.black.opacity(0.8))
 
             VStack(spacing: 8) {
-                InsightCard(
+                FeatureInsightCard(
                     title: "Peak Productivity",
                     insight: "You're most productive between 10 AM - 12 PM",
                     confidence: 0.85
                 )
-                InsightCard(
+                FeatureInsightCard(
                     title: "Focus Pattern",
                     insight: "Music helps you stay focused longer",
                     confidence: 0.72
@@ -914,7 +1395,7 @@ struct PlannerItem: View {
     }
 }
 
-struct InsightCard: View {
+struct FeatureInsightCard: View {
     let title: String
     let insight: String
     let confidence: Double

@@ -34,9 +34,9 @@ struct SuggestedTodosView: View {
         case .personal:
             suggestions = suggestions.filter { $0.suggestedAction.type == .personal }
         case .communication:
-            suggestions = suggestions.filter { $0.suggestedAction.type == .communication }
+            suggestions = suggestions.filter { $0.suggestedAction.type == .productivity || $0.contextTags.contains("communication") }
         case .quick:
-            suggestions = suggestions.filter { $0.estimatedDuration < 300 } // Less than 5 minutes
+            suggestions = suggestions.filter { ($0.estimatedDuration ?? 600) < 300 } // Less than 5 minutes
         }
 
         // Apply search
@@ -44,11 +44,11 @@ struct SuggestedTodosView: View {
             suggestions = suggestions.filter { suggestion in
                 suggestion.title.localizedCaseInsensitiveContains(searchText) ||
                 suggestion.description.localizedCaseInsensitiveContains(searchText) ||
-                suggestion.suggestedAction.verb.localizedCaseInsensitiveContains(searchText)
+                suggestion.suggestedAction.title.localizedCaseInsensitiveContains(searchText)
             }
         }
 
-        return suggestions.sorted { $0.priorityScore > $1.priorityScore }
+        return suggestions.sorted { ($0.urgencyScore * 0.5 + $0.relevanceScore * 0.5) > ($1.urgencyScore * 0.5 + $1.relevanceScore * 0.5) }
     }
 
     var body: some View {
@@ -68,7 +68,7 @@ struct SuggestedTodosView: View {
                 suggestionsListView
             }
         }
-        .background(Color(.systemBackground))
+        .background(Color(NSColor.controlBackgroundColor))
         .sheet(isPresented: $showingDetail) {
             if let suggestion = selectedSuggestion {
                 SuggestionDetailView(suggestion: suggestion)
@@ -123,13 +123,13 @@ struct SuggestedTodosView: View {
 
                 StatItem(
                     title: "Quick Tasks",
-                    value: "\(suggestionEngine.currentSuggestions.filter { $0.estimatedDuration < 300 }.count)",
+                    value: "\(suggestionEngine.currentSuggestions.filter { ($0.estimatedDuration ?? 600) < 300 }.count)",
                     color: .green
                 )
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(Color(NSColor.controlBackgroundColor))
         .shadow(color: Color.black.opacity(0.05), radius: 1, y: 1)
     }
 
@@ -156,7 +156,7 @@ struct SuggestedTodosView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(Color(.systemGray6))
+            .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(8)
 
             // Filter chips
@@ -269,9 +269,9 @@ struct SuggestedTodosView: View {
         case .personal:
             return suggestionEngine.currentSuggestions.filter { $0.suggestedAction.type == .personal }.count
         case .communication:
-            return suggestionEngine.currentSuggestions.filter { $0.suggestedAction.type == .communication }.count
+            return suggestionEngine.currentSuggestions.filter { $0.suggestedAction.type == .productivity || $0.contextTags.contains("communication") }.count
         case .quick:
-            return suggestionEngine.currentSuggestions.filter { $0.estimatedDuration < 300 }.count
+            return suggestionEngine.currentSuggestions.filter { ($0.estimatedDuration ?? 600) < 300 }.count
         }
     }
 
@@ -279,36 +279,55 @@ struct SuggestedTodosView: View {
         isLoading = true
 
         Task {
-            do {
-                try await suggestionEngine.processPendingActivities()
-                await MainActor.run {
-                    isLoading = false
-                }
-            } catch {
-                await MainActor.run {
-                    isLoading = false
-                    // Handle error - maybe show an alert
-                }
+            // Load suggestions instead of processing activities
+            let suggestions = await suggestionEngine.generateSuggestions()
+            await MainActor.run {
+                suggestionEngine.currentSuggestions = suggestions
+                isLoading = false
             }
         }
     }
 
     private func acceptSuggestion(_ suggestion: SuggestedTodo) {
         Task {
-            await suggestionEngine.recordUserFeedback(suggestionId: suggestion.id, feedback: .accepted)
-            // Maybe integrate with a task management system
+            do {
+                try await suggestionEngine.recordUserFeedback(
+                    for: suggestion.id,
+                    feedback: UserFeedback(score: 1.0, timestamp: Date()),
+                    accept: true
+                )
+                // Maybe integrate with a task management system
+            } catch {
+                print("Failed to record feedback: \(error)")
+            }
         }
     }
 
     private func dismissSuggestion(_ suggestion: SuggestedTodo) {
         Task {
-            await suggestionEngine.recordUserFeedback(suggestionId: suggestion.id, feedback: .dismissed)
+            do {
+                try await suggestionEngine.recordUserFeedback(
+                    for: suggestion.id,
+                    feedback: UserFeedback(score: 0.0, timestamp: Date(), comment: "Dismissed"),
+                    accept: false
+                )
+            } catch {
+                print("Failed to record feedback: \(error)")
+            }
         }
     }
 
     private func snoozeSuggestion(_ suggestion: SuggestedTodo) {
         Task {
-            await suggestionEngine.recordUserFeedback(suggestionId: suggestion.id, feedback: .snoozed)
+            do {
+                try await suggestionEngine.recordUserFeedback(
+                    for: suggestion.id,
+                    feedback: UserFeedback(score: 0.5, timestamp: Date(), comment: "Snoozed"),
+                    accept: false
+                )
+            } catch {
+                print("Failed to record feedback: \(error)")
+            }
         }
     }
 }
@@ -355,7 +374,7 @@ struct FilterChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
-            .background(isSelected ? colorForFilter(filter) : Color(.systemGray6))
+            .background(isSelected ? colorForFilter(filter) : Color(NSColor.controlBackgroundColor))
             .foregroundColor(isSelected ? .white : Color.primary)
             .cornerRadius(16)
         }
@@ -397,9 +416,11 @@ struct SuggestionCard: View {
                     HStack(spacing: 8) {
                         PriorityBadge(priority: suggestion.priority)
 
-                        DurationBadge(duration: suggestion.estimatedDuration)
+                        if let duration = suggestion.estimatedDuration {
+                            DurationBadge(duration: duration)
+                        }
 
-                        TypeBadge(type: suggestion.suggestedAction.type)
+                        TaskCategoryBadge(category: suggestion.suggestedAction.type)
                     }
                 }
 
@@ -434,7 +455,8 @@ struct SuggestionCard: View {
 
                 Spacer()
 
-                if let confidence = suggestion.extractionConfidence {
+                if suggestion.confidence > 0 {
+                    let confidence = suggestion.confidence
                     Text("\(Int(confidence * 100))% confidence")
                         .font(.custom("Nunito", size: 12))
                         .foregroundColor(Color.gray)
@@ -467,7 +489,7 @@ struct SuggestionCard: View {
                     .foregroundColor(Color.gray)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color(.systemGray6))
+                    .background(Color(NSColor.controlBackgroundColor))
                     .cornerRadius(6)
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -477,7 +499,7 @@ struct SuggestionCard: View {
                         .font(.custom("Nunito", size: 14))
                         .foregroundColor(Color.gray)
                         .frame(width: 32, height: 32)
-                        .background(Color(.systemGray6))
+                        .background(Color(NSColor.controlBackgroundColor))
                         .clipShape(Circle())
                 }
                 .buttonStyle(PlainButtonStyle())
@@ -486,7 +508,7 @@ struct SuggestionCard: View {
             }
         }
         .padding()
-        .background(Color(.systemBackground))
+        .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(12)
         .shadow(color: Color.black.opacity(0.05), radius: 2, y: 1)
     }
@@ -496,7 +518,7 @@ struct PriorityBadge: View {
     let priority: SuggestionPriority
 
     var body: some View {
-        Text(priority.displayName)
+        Text(priority.rawValue.capitalized)
             .font(.custom("Nunito", size: 10))
             .fontWeight(.medium)
             .foregroundColor(.white)
@@ -508,6 +530,7 @@ struct PriorityBadge: View {
 
     private func colorForPriority(_ priority: SuggestionPriority) -> Color {
         switch priority {
+        case .urgent: return .red
         case .high: return .red
         case .medium: return .orange
         case .low: return .green
@@ -525,7 +548,7 @@ struct DurationBadge: View {
             .foregroundColor(Color.gray)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color(.systemGray6))
+            .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(4)
     }
 
@@ -541,29 +564,41 @@ struct DurationBadge: View {
     }
 }
 
-struct TypeBadge: View {
-    let type: ActionType
+struct TaskCategoryBadge: View {
+    let category: TaskCategory
 
     var body: some View {
-        Text(type.displayName)
+        Text(category.displayName)
             .font(.custom("Nunito", size: 10))
             .fontWeight(.medium)
             .foregroundColor(.white)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(colorForType(type))
+            .background(colorForCategory(category))
             .cornerRadius(4)
     }
 
-    private func colorForType(_ type: ActionType) -> Color {
-        switch type {
+    private func colorForCategory(_ category: TaskCategory) -> Color {
+        switch category {
         case .work: return .purple
         case .personal: return .mint
-        case .communication: return .cyan
-        case .health: return .pink
-        case .finance: return .orange
         case .learning: return .blue
-        case .other: return .gray
+        case .health: return .pink
+        case .productivity: return .cyan
+        case .career: return .orange
+        }
+    }
+}
+
+extension TaskCategory {
+    var displayName: String {
+        switch self {
+        case .work: return "Work"
+        case .learning: return "Learning"
+        case .personal: return "Personal"
+        case .health: return "Health"
+        case .productivity: return "Productivity"
+        case .career: return "Career"
         }
     }
 }
@@ -586,8 +621,10 @@ struct SuggestionDetailView: View {
 
                         HStack(spacing: 12) {
                             PriorityBadge(priority: suggestion.priority)
-                            DurationBadge(duration: suggestion.estimatedDuration)
-                            TypeBadge(type: suggestion.suggestedAction.type)
+                            if let duration = suggestion.estimatedDuration {
+                                DurationBadge(duration: duration)
+                            }
+                            TaskCategoryBadge(category: suggestion.suggestedAction.type)
                         }
                     }
 
@@ -612,11 +649,11 @@ struct SuggestionDetailView: View {
                             .fontWeight(.medium)
                             .foregroundColor(Color.black)
 
-                        Text(suggestion.suggestedAction.verb + " " + suggestion.suggestedAction.object)
+                        Text(suggestion.suggestedAction.description)
                             .font(.custom("Nunito", size: 14))
                             .foregroundColor(Color.gray)
                             .padding()
-                            .background(Color(.systemGray6))
+                            .background(Color(NSColor.controlBackgroundColor))
                             .cornerRadius(8)
                     }
 
@@ -637,7 +674,7 @@ struct SuggestionDetailView: View {
                                     .fontWeight(.medium)
                             }
 
-                            if let confidence = suggestion.extractionConfidence {
+                            if let confidence = Optional(suggestion.confidence) {
                                 HStack {
                                     Text("Confidence:")
                                         .font(.custom("Nunito", size: 14))
@@ -648,15 +685,14 @@ struct SuggestionDetailView: View {
                                 }
                             }
 
-                            if let score = suggestion.priorityScore {
-                                HStack {
-                                    Text("Priority Score:")
-                                        .font(.custom("Nunito", size: 14))
-                                        .foregroundColor(Color.gray)
-                                    Text(String(format: "%.1f", score))
-                                        .font(.custom("Nunito", size: 14))
-                                        .fontWeight(.medium)
-                                }
+                            let score = suggestion.urgencyScore * 0.5 + suggestion.relevanceScore * 0.5
+                            HStack {
+                                Text("Priority Score:")
+                                    .font(.custom("Nunito", size: 14))
+                                    .foregroundColor(Color.gray)
+                                Text(String(format: "%.1f", score))
+                                    .font(.custom("Nunito", size: 14))
+                                    .fontWeight(.medium)
                             }
                         }
                     }
@@ -678,17 +714,8 @@ struct SuggestionDetailView: View {
                                     .fontWeight(.medium)
                             }
 
-                            if let expiresAt = suggestion.expiresAt {
-                                HStack {
-                                    Text("Expires:")
-                                        .font(.custom("Nunito", size: 14))
-                                        .foregroundColor(Color.gray)
-                                    Text(expiresAt, style: .relative)
-                                        .font(.custom("Nunito", size: 14))
-                                        .fontWeight(.medium)
-                                        .foregroundColor(expiresAt < Date() ? .red : .primary)
-                                }
-                            }
+                            // Note: SuggestedTodo doesn't have expiresAt property
+                            // Removed expiresAt display as it's not part of SuggestedTodo model
 
                             if let sourceId = suggestion.sourceActivityId {
                                 HStack {
@@ -696,9 +723,7 @@ struct SuggestionDetailView: View {
                                         .font(.custom("Nunito", size: 14))
                                         .foregroundColor(Color.gray)
                                     Text(sourceId.uuidString.prefix(8) + "...")
-                                        .font(.custom("Nunito", size: 14))
-                                        .fontWeight(.medium)
-                                        .font(.system(.monospaced, size: 12))
+                                        .font(.system(size: 12, design: .monospaced))
                                 }
                             }
                         }
@@ -709,9 +734,8 @@ struct SuggestionDetailView: View {
                 .padding()
             }
             .navigationTitle("Task Details")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }
@@ -723,31 +747,6 @@ struct SuggestionDetailView: View {
     }
 }
 
-// MARK: - Filter Enum
-
-enum SuggestionFilter: CaseIterable {
-    case all
-    case highPriority
-    case mediumPriority
-    case lowPriority
-    case work
-    case personal
-    case communication
-    case quick
-
-    var displayName: String {
-        switch self {
-        case .all: return "All"
-        case .highPriority: return "High Priority"
-        case .mediumPriority: return "Medium Priority"
-        case .lowPriority: return "Low Priority"
-        case .work: return "Work"
-        case .personal: return "Personal"
-        case .communication: return "Communication"
-        case .quick: return "Quick (< 5m)"
-        }
-    }
-}
 
 // MARK: - Extensions
 

@@ -144,7 +144,9 @@ struct ProductivityScoreChart: View {
                         )
                         .foregroundStyle(style.accentColor)
                         .lineStyle(StrokeStyle(lineWidth: 3))
-                        .symbol(Circle().strokeBorder(lineWidth: 2).fill(Color.white))
+                        .symbol {
+                      Circle().strokeBorder(lineWidth: 2).fill(Color.white)
+                  }
                     }
                 }
                 .chartYScale(domain: 0...100)
@@ -175,6 +177,7 @@ struct ProductivityScoreChart: View {
 struct AppUsageChart: View {
     let metrics: [ProductivityMetric]
     let style: ChartStyle
+    @State private var selectedAngle: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -212,7 +215,10 @@ struct AppUsageChart: View {
                     }
                 }
                 .frame(height: 250)
-                .chartAngleSelection(value: .at(270))
+                .chartAngleSelection(value: Binding(
+                get: { selectedAngle ?? 270 },
+                set: { selectedAngle = $0 }
+            ))
                 .chartBackground { _ in
                     Color.clear
                 }

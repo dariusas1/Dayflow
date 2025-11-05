@@ -9,7 +9,7 @@ import Foundation
 import AppKit
 import os.log
 
-class AXExtractor {
+final class AXExtractor: @unchecked Sendable {
     static let shared = AXExtractor()
 
     private let logger = Logger(subsystem: "FocusLock", category: "AXExtractor")
@@ -134,7 +134,7 @@ class AXExtractor {
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
 
         var focusedWindow: AnyObject?
-        let result = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
+        _ = AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindow)
 
         guard let window = focusedWindow else { return nil }
 
@@ -188,7 +188,7 @@ class AXExtractor {
 
         // Get all windows for the application
         var windowsValue: AnyObject?
-        let result = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue)
+        _ = AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute as CFString, &windowsValue)
 
         guard let windows = windowsValue as? [AXUIElement] else { return nil }
 
@@ -221,7 +221,7 @@ class AXExtractor {
 
         // Try to get direct text content first
         var textValue: AnyObject?
-        let textResult = AXUIElementCopyAttributeValue(axElement, kAXValueAttribute as CFString, &textValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXValueAttribute as CFString, &textValue)
 
         if let text = textValue as? String, !text.isEmpty {
             content = text
@@ -235,7 +235,7 @@ class AXExtractor {
 
     private func extractTextFromChildren(of axElement: AXUIElement) async throws -> String {
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return "" }
 
@@ -325,7 +325,7 @@ class AXExtractor {
         var elements: [CapturedAXElement] = []
 
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return elements }
 
@@ -361,7 +361,7 @@ class AXExtractor {
         var tables: [AXTable] = []
 
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return tables }
 
@@ -417,7 +417,7 @@ class AXExtractor {
         var lists: [AXList] = []
 
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return lists }
 
@@ -473,7 +473,7 @@ class AXExtractor {
         var forms: [AXForm] = []
 
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return forms }
 
@@ -500,7 +500,7 @@ class AXExtractor {
         var elements: [AXFormElement] = []
 
         var childrenValue: AnyObject?
-        let childrenResult = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
+        _ = AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &childrenValue)
 
         guard let children = childrenValue as? [AXUIElement] else { return elements }
 

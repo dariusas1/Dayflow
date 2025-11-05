@@ -12,6 +12,7 @@ import os.log
 
 // MARK: - Task Detection Protocol
 
+@MainActor
 protocol TaskDetector {
     func detectCurrentTask() async -> TaskDetectionResult?
     func startDetection() async throws
@@ -25,6 +26,7 @@ protocol TaskDetector {
 // MARK: - Accessibility Task Detector
 
 @MainActor
+@preconcurrency
 class AccessibilityTaskDetector: TaskDetector {
     private let logger = Logger(subsystem: "FocusLock", category: "TaskDetector")
     internal var isDetecting = false

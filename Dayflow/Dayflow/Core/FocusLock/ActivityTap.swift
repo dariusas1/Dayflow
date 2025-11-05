@@ -10,6 +10,7 @@ import AppKit
 import ScreenCaptureKit
 import os.log
 
+@MainActor
 class ActivityTap {
     static let shared = ActivityTap()
 
@@ -19,8 +20,8 @@ class ActivityTap {
     private let axExtractor = AXExtractor.shared
     private let ocrExtractor = OCRExtractor.shared
 
-    // Activity tracking
-    private var currentActivity: Activity?
+    // Activity tracking (thread-safe with MainActor isolation)
+    var currentActivity: Activity?
     private var activityHistory: [Activity] = []
     private let maxHistorySize = 1000
 
@@ -38,10 +39,6 @@ class ActivityTap {
     }
 
     // MARK: - Public Interface
-
-    func getCurrentActivity() async -> Activity? {
-        return currentActivity
-    }
 
     func getActivityHistory(since date: Date? = nil, limit: Int = 100) -> [Activity] {
         var filteredHistory = activityHistory
@@ -76,93 +73,106 @@ class ActivityTap {
     // MARK: - Private Methods
 
     private func startActivityMonitoring() {
-        activityTimer = Timer.scheduledTimer(withTimeInterval: self.activityUpdateInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                await self?.updateCurrentActivity()
+        // Timer must be created on main thread
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.activityTimer = Timer.scheduledTimer(withTimeInterval: self.activityUpdateInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    _ = await self?.updateCurrentActivity()
+                }
             }
         }
-
+        
         logger.info("Started activity monitoring with \(self.activityUpdateInterval)s interval")
     }
 
     private func updateCurrentActivity() async -> Activity? {
         let startTime = CFAbsoluteTimeGetCurrent()
 
-        do {
-            // Get current foreground application and window
-            guard let foregroundApp = getForegroundApplication(),
-                  let activeWindow = getActiveWindow(for: foregroundApp) else {
-                logger.warning("Could not determine foreground application or active window")
-                return nil
-            }
+        // Get current foreground application and window (must be on main thread)
+        guard let foregroundApp = getForegroundApplication() else {
+            logger.warning("Could not determine foreground application")
+            return nil
+        }
+        
+        // Get window info without creating NSWindow (must be on main thread)
+        let windowInfoData = getActiveWindowInfo(for: foregroundApp)
+        let windowTitle = windowInfoData?.title ?? ""
+        let windowFrame = windowInfoData?.frame ?? CGRect.zero
+        
+        let windowInfo = WindowInfo(
+            bundleIdentifier: foregroundApp.bundleIdentifier ?? "",
+            title: windowTitle,
+            frame: windowFrame,
+            processIdentifier: foregroundApp.processIdentifier
+        )
 
-            // Collect data from multiple sources
-            let windowInfo = WindowInfo(
-                bundleIdentifier: foregroundApp.bundleIdentifier ?? "",
-                title: activeWindow.title ?? "",
-                frame: activeWindow.frame,
-                processIdentifier: foregroundApp.processIdentifier
-            )
+        // Extract these concurrently - properly isolated to avoid concurrency crashes
+        // Background operations are detached, main thread operations stay on main actor
+        async let axResult = Task.detached(priority: .userInitiated) { [axExtractor, windowInfo] in
+            // extractContent doesn't throw, but may return error in result
+            await axExtractor.extractContent(from: windowInfo)
+        }.value
+        
+        // Screenshot must be on main thread (already @MainActor)
+        async let screenshot = captureScreenshot()
+        
+        async let appState = Task.detached(priority: .userInitiated) { [axExtractor, bundleIdentifier = foregroundApp.bundleIdentifier ?? ""] in
+            // extractApplicationState doesn't throw, returns optional
+            await axExtractor.extractApplicationState(bundleIdentifier: bundleIdentifier)
+        }.value
 
-            async let axResult = axExtractor.extractContent(from: windowInfo)
-            async let screenshot = captureScreenshot(for: activeWindow)
-            async let appState = axExtractor.extractApplicationState(bundleIdentifier: foregroundApp.bundleIdentifier ?? "")
+        // Wait for all async operations
+        let (axExtraction, screenImage, applicationState) = await (axResult, screenshot, appState)
 
-            // Wait for all async operations
-            let (axExtraction, screenImage, applicationState) = try await (axResult, screenshot, appState)
+        // Process OCR if we have a screenshot
+        var ocrResult: OCRResult?
+        if let image = screenImage {
+            // extractText doesn't throw, but may return error in result
+            ocrResult = await ocrExtractor.extractText(from: image)
+        }
 
-            // Process OCR if we have a screenshot
-            var ocrResult: OCRResult?
-            if let image = screenImage {
-                ocrResult = await ocrExtractor.extractText(from: image)
-            }
+        // Fusion analysis
+        let fusionResult = fuseActivityData(
+            windowInfo: windowInfo,
+            axResult: axExtraction,
+            ocrResult: ocrResult,
+            appState: applicationState
+        )
 
-            // Fusion analysis
-            let fusionResult = fuseActivityData(
+        // Create activity object
+        let activity = Activity(
+            id: UUID(),
+            timestamp: Date(),
+            windowInfo: windowInfo,
+            applicationState: applicationState,
+            axExtraction: axExtraction,
+            ocrResult: ocrResult,
+            fusionResult: fusionResult,
+            confidence: fusionResult.overallConfidence,
+            category: fusionResult.primaryCategory,
+            context: fusionResult.context,
+            metadata: buildActivityMetadata(
                 windowInfo: windowInfo,
                 axResult: axExtraction,
                 ocrResult: ocrResult,
                 appState: applicationState
             )
+        )
 
-            // Create activity object
-            let activity = Activity(
-                id: UUID(),
-                timestamp: Date(),
-                windowInfo: windowInfo,
-                applicationState: applicationState,
-                axExtraction: axExtraction,
-                ocrResult: ocrResult,
-                fusionResult: fusionResult,
-                confidence: fusionResult.overallConfidence,
-                category: fusionResult.primaryCategory,
-                context: fusionResult.context,
-                metadata: buildActivityMetadata(
-                    windowInfo: windowInfo,
-                    axResult: axExtraction,
-                    ocrResult: ocrResult,
-                    appState: applicationState
-                )
-            )
+        // Update current activity and history
+        currentActivity = activity
+        addToHistory(activity)
 
-            // Update current activity and history
-            currentActivity = activity
-            addToHistory(activity)
-
-            let duration = CFAbsoluteTimeGetCurrent() - startTime
-            processingTimes.append(duration)
-            if processingTimes.count > maxProcessingTimeSamples {
-                processingTimes.removeFirst()
-            }
-
-            logger.info("Activity fusion completed in \(String(format: "%.3f", duration))s - Category: \(activity.category), Confidence: \(String(format: "%.2f", activity.confidence))")
-
-            return activity
-
-        } catch {
-            logger.error("Activity update failed: \(error.localizedDescription)")
-            return nil
+        let duration = CFAbsoluteTimeGetCurrent() - startTime
+        processingTimes.append(duration)
+        if processingTimes.count > maxProcessingTimeSamples {
+            processingTimes.removeFirst()
         }
+
+        logger.info("Activity fusion completed in \(String(format: "%.3f", duration))s - Category: \(activity.category), Confidence: \(String(format: "%.2f", activity.confidence))")
+
+        return activity
     }
 
     private func fuseActivityData(
@@ -460,7 +470,7 @@ class ActivityTap {
             metadata["word_count"] = AnyCodable(content.components(separatedBy: .whitespaces).filter { !$0.isEmpty }.count)
         }
 
-        if let ocrText = ocrResult?.text {
+        if ocrResult?.text != nil {
             metadata["ocr_confidence"] = AnyCodable(ocrResult?.confidence ?? 0)
             metadata["ocr_region_count"] = AnyCodable(ocrResult?.regions.count ?? 0)
         }
@@ -505,41 +515,80 @@ class ActivityTap {
 
     // MARK: - System Integration Methods
 
+    @MainActor
     private func getForegroundApplication() -> NSRunningApplication? {
+        // NSWorkspace.shared.frontmostApplication must be called on main thread
         return NSWorkspace.shared.frontmostApplication
     }
 
     private func getActiveWindow(for app: NSRunningApplication) -> NSWindow? {
         // This is a simplified version - in practice, you'd want to use more sophisticated window detection
+        // We don't actually create NSWindow here - just check if a window exists
+        // The actual window properties will be extracted from CGWindowListCopyWindowInfo
         if let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] {
             for windowInfo in windowList {
                 if let windowOwnerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
                    windowOwnerPID == app.processIdentifier,
                    let windowLayer = windowInfo[kCGWindowLayer as String] as? Int,
                    windowLayer == 0 { // Normal window layer
-                    // Create a basic NSWindow representation
-                    return NSWindow()
+                    // Return a placeholder - we'll extract window info from CGWindowListCopyWindowInfo instead
+                    // This avoids creating NSWindow on a background thread
+                    return nil // Changed: return nil but we'll check window existence differently
                 }
             }
         }
 
         return nil
     }
-
-    private func captureScreenshot(for window: NSWindow) async -> NSImage? {
-        return await withCheckedContinuation { continuation in
-            DispatchQueue.main.async {
-                let screenRect = NSScreen.main?.frame ?? CGRect.zero
-                let screenShot = CGDisplayCreateImage(CGMainDisplayID(), rect: screenRect)
-
-                if let imageRef = screenShot {
-                    let image = NSImage(cgImage: imageRef, size: screenRect.size)
-                    continuation.resume(returning: image)
-                } else {
-                    continuation.resume(returning: nil)
+    
+    @MainActor
+    private func getActiveWindowInfo(for app: NSRunningApplication) -> (title: String, frame: CGRect)? {
+        // Extract window info from CGWindowListCopyWindowInfo without creating NSWindow
+        // CGWindowListCopyWindowInfo should be called on main thread for reliability
+        if let windowList = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] {
+            for windowInfo in windowList {
+                if let windowOwnerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                   windowOwnerPID == app.processIdentifier,
+                   let windowLayer = windowInfo[kCGWindowLayer as String] as? Int,
+                   windowLayer == 0 { // Normal window layer
+                    let title = windowInfo[kCGWindowName as String] as? String ?? ""
+                    // CGWindowBounds is returned as a dictionary with X, Y, Width, Height keys
+                    var frame = CGRect.zero
+                    if let bounds = windowInfo[kCGWindowBounds as String] as? [String: Any] {
+                        let x = (bounds["X"] as? CGFloat) ?? (bounds["x"] as? CGFloat) ?? 0
+                        let y = (bounds["Y"] as? CGFloat) ?? (bounds["y"] as? CGFloat) ?? 0
+                        let width = (bounds["Width"] as? CGFloat) ?? (bounds["width"] as? CGFloat) ?? 0
+                        let height = (bounds["Height"] as? CGFloat) ?? (bounds["height"] as? CGFloat) ?? 0
+                        frame = CGRect(x: x, y: y, width: width, height: height)
+                    }
+                    return (title, frame)
                 }
             }
         }
+        return nil
+    }
+
+    @MainActor
+    private func captureScreenshot() async -> NSImage? {
+        // Already on main thread since called from @MainActor context
+        let screenRect = NSScreen.main?.frame ?? CGRect.zero
+        guard let screenShot = CGDisplayCreateImage(CGMainDisplayID(), rect: screenRect) else {
+            return nil
+        }
+        
+        // Create NSImage and copy the CGImage to avoid memory management issues
+        // NSImage takes ownership of the image data
+        let size = NSSize(width: screenShot.width, height: screenShot.height)
+        let image = NSImage(cgImage: screenShot, size: size)
+        
+        // CGDisplayCreateImage returns a +1 retained object, but NSImage(cgImage:) doesn't take ownership
+        // We need to explicitly copy the image data to NSImage's internal representation
+        // to avoid heap corruption when the CGImage is released
+        
+        // Force NSImage to copy the representation immediately
+        _ = image.tiffRepresentation
+        
+        return image
     }
 
     // MARK: - Public Utility Methods
@@ -651,12 +700,4 @@ struct ActivityStatistics {
     }
 }
 
-extension NSWindow {
-    var title: String? {
-        return title
-    }
-
-    var frame: CGRect {
-        return frame
-    }
-}
+// Extension removed - NSWindow already has title and frame properties

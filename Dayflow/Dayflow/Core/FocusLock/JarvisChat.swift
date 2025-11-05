@@ -22,10 +22,15 @@ class JarvisChat: ObservableObject {
     @Published var contextualInfo: [ContextualInfo] = []
 
     // MARK: - Private Properties
-    private let memoryStore: MemoryStore
     private let toolOrchestrator: ToolOrchestrator
     private let contextManager: ConversationContextManager
     private let llmService: LLMServicing
+    
+    // Second Brain Integration
+    private let coachPersona = JarvisCoachPersona.shared
+    private let proactiveEngine = ProactiveCoachEngine.shared
+    private let todoEngine = TodoExtractionEngine.shared
+    private let journalGenerator = EnhancedJournalGenerator.shared
 
     private var cancellables = Set<AnyCancellable>()
     private let logger = Logger(subsystem: "FocusLock", category: "JarvisChat")
@@ -37,7 +42,6 @@ class JarvisChat: ObservableObject {
 
     private init(llmService: LLMServicing = LLMService.shared) {
         // Initialize components
-        self.memoryStore = try! HybridMemoryStore.shared
         self.toolOrchestrator = ToolOrchestrator()
         self.contextManager = ConversationContextManager()
         self.llmService = llmService
@@ -113,11 +117,13 @@ class JarvisChat: ObservableObject {
     func startNewConversation() {
         var newConversation = Conversation(id: UUID(), messages: [], createdAt: Date())
 
-        // Add welcome message
+        // Generate welcome message with proactive insights
+        let welcomeContent = generateWelcomeMessage()
+        
         let welcomeMessage = ChatMessage(
             id: UUID(),
             role: .assistant,
-            content: "Hello! I'm Jarvis, your AI productivity assistant. I can help you with:\n\n• Searching your activity history and notes\n• Managing tasks and scheduling\n• Providing insights about your work patterns\n• Answering questions about your local data\n\nWhat can I help you with today?",
+            content: welcomeContent,
             timestamp: Date(),
             toolCalls: [],
             citations: []
@@ -132,7 +138,49 @@ class JarvisChat: ObservableObject {
             conversations = Array(conversations.prefix(maxConversationHistory))
         }
     }
+    
+    private func generateWelcomeMessage() -> String {
+        var message = "Hello! I'm Jarvis, your AI executive coach and second brain.\n\n"
+        
+        // Add proactive alerts if any
+        let alerts = proactiveEngine.getAlerts(severity: nil)
+        if !alerts.isEmpty {
+            message += "**⚠️ Coaching Alerts:**\n"
+            for alert in alerts.prefix(3) {
+                let emoji = alert.severity == .critical ? "🔴" : alert.severity == .warning ? "🟡" : "🔵"
+                message += "\(emoji) \(alert.message)\n"
+            }
+            message += "\n"
+        }
+        
+        // Add P0 tasks
+        let p0Tasks = todoEngine.getTodos(status: .pending, priority: .p0)
+        if !p0Tasks.isEmpty {
+            message += "**🎯 P0 Tasks Today (\(p0Tasks.count)):**\n"
+            for task in p0Tasks.prefix(3) {
+                message += "• \(task.title)\n"
+            }
+            if p0Tasks.count > 3 {
+                message += "...and \(p0Tasks.count - 3) more\n"
+            }
+            message += "\n"
+        }
+        
+        message += "I can help you:\n"
+        message += "• 📊 Generate your daily journal and execution score\n"
+        message += "• ✅ Manage and auto-extract todos from conversations\n"
+        message += "• 🧠 Recall anything from your activity history\n"
+        message += "• 🎯 Coach you on ROI and focus\n"
+        message += "• 📈 Track context switches and productivity patterns\n\n"
+        message += "What can I help you with today?"
+        
+        return message
+    }
 
+    func executeSuggestedAction(_ action: ChatAction) async {
+        await executeAction(action)
+    }
+    
     func executeAction(_ action: ChatAction) async {
         isProcessing = true
 
@@ -179,7 +227,7 @@ class JarvisChat: ObservableObject {
         var info: [ContextualInfo] = []
 
         // Current activity
-        if let activity = await ActivityTap.shared.getCurrentActivity() {
+        if let activity = ActivityTap.shared.currentActivity {
             info.append(ContextualInfo(
                 type: .currentActivity,
                 title: "Current Activity",
@@ -214,6 +262,13 @@ class JarvisChat: ObservableObject {
     // MARK: - Private Methods
 
     private func processUserMessage(_ message: String, in conversation: Conversation) async throws -> ChatResponse {
+        // Select appropriate coach mode based on query
+        let selectedMode = coachPersona.selectModeForQuery(message, context: coachPersona.coachingContext)
+        coachPersona.currentMode = selectedMode
+        
+        // Track task mentions for dropped ball detection
+        proactiveEngine.trackTaskMention(message)
+        
         // Analyze user intent
         let intent = try await analyzeUserIntent(message, context: conversation)
 
@@ -233,14 +288,23 @@ class JarvisChat: ObservableObject {
             citations = toolResults.flatMap { $0.citations }
         }
 
-        // Generate response
+        // Generate response with coach persona
         let response = try await generateResponse(
             message: message,
             intent: intent,
             context: context,
             toolCalls: toolCalls,
-            citations: citations
+            citations: citations,
+            coachMode: selectedMode
         )
+        
+        // Extract todos from this conversation turn
+        Task {
+            let messages = conversation.messages.suffix(2).map { $0 } // Last user + AI message
+            if let todos = try? await todoEngine.extractTodosFromConversation(messages) {
+                logger.info("Auto-extracted \(todos.count) todos from conversation")
+            }
+        }
 
         return response
     }
@@ -283,13 +347,13 @@ class JarvisChat: ObservableObject {
 
         // Add relevant memories based on intent
         if intent.primaryIntent == .search || intent.primaryIntent == .insight {
-            let searchResults = try await memoryStore.hybridSearch(message, limit: 5)
+            let searchResults = try await HybridMemoryStore.shared.hybridSearch(message, limit: 5)
             context.relevantMemories = searchResults.map { $0.item }
             context.memoryCitations = searchResults.map { Citation(source: "Memory", id: $0.id, content: String($0.item.content.prefix(200))) }
         }
 
         // Add current activity context
-        if let currentActivity = await ActivityTap.shared.getCurrentActivity() {
+        if let currentActivity = ActivityTap.shared.currentActivity {
             context.currentActivity = currentActivity
         }
 
@@ -312,7 +376,7 @@ class JarvisChat: ObservableObject {
             do {
                 let parameters = extractToolParameters(for: toolName, intent: intent, context: context)
                 let result = try await toolOrchestrator.executeTool(name: toolName, parameters: parameters)
-                let encodedParameters = encodeParameters(parameters)
+                _ = encodeParameters(parameters)
 
                 let parameterPayload = convertToAnyCodable(parameters)
 
@@ -339,8 +403,12 @@ class JarvisChat: ObservableObject {
         intent: UserIntent,
         context: ConversationContext,
         toolCalls: [ToolCall],
-        citations: [Citation]
+        citations: [Citation],
+        coachMode: JarvisMode
     ) async throws -> ChatResponse {
+        // Get system prompt from coach persona
+        let systemPrompt = coachPersona.getSystemPrompt(for: coachMode, context: coachPersona.coachingContext)
+        
         // Build response prompt
         let responsePrompt = buildResponsePrompt(
             message: message,
@@ -349,11 +417,10 @@ class JarvisChat: ObservableObject {
             toolCalls: toolCalls
         )
 
-        // Generate response
-        let responseContent = try await llmService.generateResponse(
+        // Generate response with coach persona
+        let responseContent = try await llmService.generateText(
             prompt: responsePrompt,
-            maxTokens: 500,
-            temperature: 0.7
+            systemPrompt: systemPrompt
         )
 
         return ChatResponse(
@@ -370,8 +437,6 @@ class JarvisChat: ObservableObject {
         toolCalls: [ToolCall]
     ) -> String {
         var prompt = """
-        You are Jarvis, a helpful AI productivity assistant. You have access to the user's local data and can help with various tasks.
-
         User message: "\(message)"
         Intent: \(intent.primaryIntent)
         """
@@ -703,8 +768,7 @@ class ToolOrchestrator {
 
     private func searchMemories(parameters: [String: AnyCodable]) async throws -> ToolResult {
         let query = parameters["query"]?.stringValue ?? ""
-        let memoryStore = try! HybridMemoryStore.shared
-        let results = try await memoryStore.hybridSearch(query, limit: 5)
+        let results = try await HybridMemoryStore.shared.hybridSearch(query, limit: 5)
 
         let content = results.map { "• \(String($0.item.content.prefix(200)))" }.joined(separator: "\n")
 
@@ -721,7 +785,7 @@ class ToolOrchestrator {
     private func getActivitySummary(parameters: [String: AnyCodable]) async throws -> ToolResult {
         let timeRange = parameters["timeRange"]?.stringValue ?? "24h"
         let dateRange = getDateRange(from: timeRange)
-        let summary = ActivityTap.shared.getActivitySummary(for: dateRange)
+        let summary = await ActivityTap.shared.getActivitySummary(for: dateRange)
 
         let content = """
         Activity Summary (\(timeRange)):
@@ -779,7 +843,7 @@ class ToolOrchestrator {
     }
 
     private func getProductivityInsights(parameters: [String: AnyCodable]) async throws -> ToolResult {
-        let stats = ActivityTap.shared.getActivityStatistics()
+        let stats = await ActivityTap.shared.getActivityStatistics()
 
         let content = """
         Productivity Insights:

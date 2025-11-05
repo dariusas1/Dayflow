@@ -18,7 +18,6 @@ class SuggestedTodosEngine: ObservableObject {
     private let logger = Logger(subsystem: "FocusLock", category: "SuggestedTodosEngine")
 
     // Dependencies
-    private let memoryStore = HybridMemoryStore.shared
     private let activityTap = ActivityTap.shared
     private let sessionManager = SessionManager.shared
 
@@ -32,6 +31,9 @@ class SuggestedTodosEngine: ObservableObject {
     private var nlpTagger: NLTagger?
     private var actionClassifier: NLModel?
 
+    // Published data for UI
+    @Published var currentSuggestions: [SuggestedTodo] = []
+
     // Learning data
     private var userPreferences = UserPreferenceProfile()
     private var suggestionHistory: [SuggestedTodo] = []
@@ -41,6 +43,9 @@ class SuggestedTodosEngine: ObservableObject {
     private var generationStats: GenerationStats
 
     private init() throws {
+        // Initialize performance stats
+        generationStats = GenerationStats()
+
         // Initialize database
         let dbPath = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -69,12 +74,17 @@ class SuggestedTodosEngine: ObservableObject {
 
         do {
             // Check if we should interrupt focus session
-            guard await shouldShowSuggestions() else {
+            guard shouldShowSuggestions() else {
                 logger.info("Skipping suggestions due to active focus session")
                 return []
             }
 
-            let sourceActivity = activity ?? await activityTap.getCurrentActivity()
+            let sourceActivity: Activity?
+            if let activity = activity {
+                sourceActivity = activity
+            } else {
+                sourceActivity = activityTap.currentActivity
+            }
             guard let currentActivity = sourceActivity else {
                 logger.warning("No activity data available for suggestion generation")
                 return []
@@ -104,6 +114,11 @@ class SuggestedTodosEngine: ObservableObject {
 
             logger.info("Generated \(finalSuggestions.count) task suggestions in \(String(format: "%.3f", duration))s")
 
+            // Update published property for UI
+            await MainActor.run {
+                self.currentSuggestions = finalSuggestions
+            }
+
             return finalSuggestions
 
         } catch {
@@ -132,8 +147,8 @@ class SuggestedTodosEngine: ObservableObject {
                     query += " ORDER BY urgency_score DESC, relevance_score DESC, created_at DESC LIMIT ?"
                     arguments += [limit]
 
-                    let rows = try Row.fetchAll(db, sql: query, arguments: StatementArguments(arguments))
-                    let suggestions = rows.compactMap { try parseSuggestedTodo(from: $0) }
+                    let rows = try Row.fetchAll(db, sql: query, arguments: arguments)
+                    let suggestions = rows.compactMap { try? parseSuggestedTodo(from: $0) }
 
                     continuation.resume(returning: suggestions)
                 }
@@ -145,36 +160,26 @@ class SuggestedTodosEngine: ObservableObject {
     }
 
     func recordUserFeedback(for suggestionId: UUID, feedback: UserFeedback, accept: Bool = false) async throws {
-        try databaseQueue.write { db in
+        try await databaseQueue.write { db in
             let dismissReason = accept ? nil : feedback.comment
-            let arguments: [DatabaseValueConvertible?] = [
+            let isDismissed = !accept && feedback.score < 0.5
+            let arguments = StatementArguments([
                 feedback.score,
                 feedback.timestamp,
-                feedback.comment,
+                feedback.comment as Any,
                 accept,
-                accept || feedback.score < 0.5,
-                dismissReason,
+                isDismissed,
+                dismissReason as Any,
                 0.0, // Will be updated by learning system
                 Date(),
                 suggestionId.uuidString
-            ]
-
+            ])
             try db.execute(sql: """
                 UPDATE suggested_todos
                 SET user_feedback_score = ?, user_feedback_timestamp = ?, user_feedback_comment = ?,
                     is_accepted = ?, is_dismissed = ?, dismiss_reason = ?, learning_score = ?, last_shown = ?
                 WHERE id = ?
-            """, arguments: StatementArguments([
-                feedback.score,
-                feedback.timestamp,
-                feedback.comment,
-                accept,
-                isDismissed,
-                dismissReason,
-                0.0, // Will be updated by learning system
-                Date(),
-                suggestionId.uuidString
-            ]))
+            """, arguments: arguments ?? StatementArguments())
         }
 
         // Update user preferences based on feedback
@@ -275,13 +280,9 @@ class SuggestedTodosEngine: ObservableObject {
 
     private func loadSuggestionHistory() {
         Task {
-            do {
-                let suggestions = try await getSuggestions(limit: 1000)
-                suggestionHistory = suggestions
-                logger.info("Loaded \(suggestions.count) suggestions from database")
-            } catch {
-                logger.error("Failed to load suggestion history: \(error.localizedDescription)")
-            }
+            let suggestions = await getSuggestions(limit: 1000)
+            suggestionHistory = suggestions
+            logger.info("Loaded \(suggestions.count) suggestions from database")
         }
     }
 
@@ -289,7 +290,7 @@ class SuggestedTodosEngine: ObservableObject {
         Task {
             do {
                 // Initialize NLTagger for NLP processing
-                nlpTagger = try NLTagger(tagSchemes: [.tokenType, .nameType, .lexicalClass])
+                nlpTagger = NLTagger(tagSchemes: [.tokenType, .nameType, .lexicalClass])
                 logger.info("Successfully initialized NLTagger")
 
                 // Initialize action classifier if available
@@ -460,7 +461,7 @@ class SuggestedTodosEngine: ObservableObject {
         return tasks.map { task in
             let taskText = task.pattern
             let originalText = task.context.isEmpty ? taskText : task.context
-            TaskSuggestion(
+            return TaskSuggestion(
                 originalText: originalText,
                 extractedTask: taskText,
                 confidence: task.confidence,
@@ -499,7 +500,7 @@ class SuggestedTodosEngine: ObservableObject {
                         if match.numberOfRanges > 1 {
                             let taskRange = Range(match.range(at: 1), in: trimmedSentence)
                             if let taskText = taskRange {
-                                let task = String(taskText)
+                                let task = String(trimmedSentence[taskText])
                                 let confidence = calculateConfidence(for: task, in: trimmedSentence, context: context)
 
                                 if confidence >= config.minConfidenceThreshold {
@@ -605,8 +606,6 @@ class SuggestedTodosEngine: ObservableObject {
 
     private func estimateDuration(for task: String) -> TimeInterval {
         let wordCount = task.components(separatedBy: .whitespaces).count
-        let lowercaseTask = task.lowercased()
-
         let lowercaseTask = task.lowercased()
 
         // Base estimation: 1 minute per word
@@ -738,12 +737,12 @@ class SuggestedTodosEngine: ObservableObject {
     }
 
     private func storeSuggestion(_ suggestion: SuggestedTodo) async throws {
-        try databaseQueue.write { db in
+        try await databaseQueue.write { db in
             let tagsData = try JSONEncoder().encode(suggestion.contextTags)
             let tagsString = String(data: tagsData, encoding: .utf8)
             let estimatedDuration = suggestion.estimatedDuration.map { Int64($0) }
 
-            let arguments: [DatabaseValueConvertible?] = [
+            let _: [DatabaseValueConvertible?] = [
                 suggestion.id.uuidString,
                 suggestion.title,
                 suggestion.description,
@@ -775,15 +774,15 @@ class SuggestedTodosEngine: ObservableObject {
                 suggestion.confidence,
                 suggestion.sourceContent,
                 suggestion.sourceType.rawValue,
-                suggestion.sourceActivityId?.uuidString,
-                tagsString,
-                suggestion.estimatedDuration.map { Int64($0) },
-                suggestion.deadline,
+                suggestion.sourceActivityId?.uuidString as Any,
+                tagsString as Any,
+                suggestion.estimatedDuration.map { Int64($0) } as Any,
+                suggestion.deadline as Any,
                 suggestion.createdAt,
                 suggestion.urgencyScore,
                 suggestion.relevanceScore,
                 suggestion.learningScore
-            ]))
+            ]) ?? StatementArguments())
         }
     }
 
@@ -799,13 +798,13 @@ class SuggestedTodosEngine: ObservableObject {
         let contextTagsString: String? = row["context_tags"]
         let estimatedDuration: Int64? = row["estimated_duration"]
         let deadline: Date? = row["deadline"]
-        let createdAt: Date = row["created_at"]
-        let urgencyScore: Double = row["urgency_score"]
-        let relevanceScore: Double = row["relevance_score"]
+        let _: Date = row["created_at"]
+        let _: Double = row["urgency_score"]
+        let _: Double = row["relevance_score"]
         let learningScore: Double = row["learning_score"]
-        let isDismissed: Bool = row["is_dismissed"]
+        let _: Bool = row["is_dismissed"]
 
-        guard let id = UUID(uuidString: idString),
+        guard let _ = UUID(uuidString: idString),
               let priority = SuggestionPriority(rawValue: priorityString),
               let sourceType = SuggestionSourceType(rawValue: sourceTypeString) else {
             throw DatabaseError.invalidData
@@ -869,23 +868,18 @@ class SuggestedTodosEngine: ObservableObject {
     private func updateLearningScores(for suggestion: SuggestedTodo, feedback: UserFeedback) async {
         // Update learning scores for similar suggestions
         do {
-            try databaseQueue.write { db in
+            try await databaseQueue.write { db in
                 let contextPattern = "%\(suggestion.contextTags.joined(separator: ","))%"
-                let arguments: [DatabaseValueConvertible?] = [
+                let arguments = StatementArguments([
                     feedback.score,
                     contextPattern,
                     suggestion.id.uuidString
-                ]
-
+                ])
                 try db.execute(sql: """
                     UPDATE suggested_todos
                     SET learning_score = learning_score * 0.9 + ? * 0.1
                     WHERE context_tags LIKE ? AND id != ?
-                """, arguments: StatementArguments([
-                    feedback.score,
-                    "%\(suggestion.contextTags.joined(separator: ","))%",
-                    suggestion.id.uuidString
-                ]))
+                """, arguments: arguments ?? StatementArguments())
             }
         } catch {
             logger.error("Failed to update learning scores: \(error.localizedDescription)")
@@ -895,7 +889,7 @@ class SuggestedTodosEngine: ObservableObject {
     private func updateLearningScores() async {
         // Decay learning scores over time
         do {
-            try databaseQueue.write { db in
+            try await databaseQueue.write { db in
                 try db.execute(sql: """
                     UPDATE suggested_todos
                     SET learning_score = learning_score * 0.99
@@ -911,13 +905,13 @@ class SuggestedTodosEngine: ObservableObject {
         let cutoffDate = Date().addingTimeInterval(-TimeInterval(config.contextRetentionDays * 24 * 60 * 60))
 
         do {
-            try databaseQueue.write { db in
+            try await databaseQueue.write { db in
                 try db.execute(
                     sql: "DELETE FROM suggested_todos WHERE created_at < ?",
-                    arguments: StatementArguments([cutoffDate])
+                    arguments: StatementArguments([cutoffDate]) ?? StatementArguments()
                 )
             }
-            logger.info("Cleaned up old suggestions older than \(config.contextRetentionDays) days")
+            logger.info("Cleaned up old suggestions older than \(self.config.contextRetentionDays) days")
         } catch {
             logger.error("Failed to cleanup old suggestions: \(error.localizedDescription)")
         }
@@ -925,11 +919,27 @@ class SuggestedTodosEngine: ObservableObject {
 
   
     private func parseDate(from dateString: String) -> Date? {
-        let formatters = [
-            DateFormatter().then { $0.dateFormat = "MM/dd/yyyy" },
-            DateFormatter().then { $0.dateFormat = "yyyy-MM-dd" },
-            DateFormatter().then { $0.dateFormat = "M/d/yyyy" },
-            DateFormatter().then { $0.dateFormat = "yyyy/MM/dd" }
+        let formatters: [DateFormatter] = [
+            {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "MM/dd/yyyy"
+                return formatter
+            }(),
+            {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy-MM-dd"
+                return formatter
+            }(),
+            {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "M/d/yyyy"
+                return formatter
+            }(),
+            {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy/MM/dd"
+                return formatter
+            }()
         ]
 
         for formatter in formatters {

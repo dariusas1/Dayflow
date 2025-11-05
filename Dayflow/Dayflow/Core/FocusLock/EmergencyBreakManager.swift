@@ -16,7 +16,7 @@ class EmergencyBreakManager: ObservableObject {
     static let shared = EmergencyBreakManager()
 
     private let logger = Logger(subsystem: "FocusLock", category: "EmergencyBreak")
-    private let settingsManager = SettingsManager.shared
+    private let settingsManager = FocusLockSettingsManager.shared
     private var cancellables = Set<AnyCancellable>()
 
     // Published state
@@ -74,7 +74,7 @@ class EmergencyBreakManager: ObservableObject {
     }
 
     func endEmergencyBreak(session: FocusSession) {
-        guard isActive, let currentBreak = currentBreak else {
+        guard isActive, currentBreak != nil else {
             logger.warning("No active emergency break to end")
             return
         }

@@ -11,14 +11,15 @@ import Foundation
 import AVFoundation
 import GRDB
 import Sentry
+import os.log
 
 
 protocol AnalysisManaging {
     func startAnalysisJob()
     func stopAnalysisJob()
     func triggerAnalysisNow()
-    func reprocessDay(_ day: String, progressHandler: @escaping (String) -> Void, completion: @escaping (Result<Void, Error>) -> Void)
-    func reprocessSpecificBatches(_ batchIds: [Int64], progressHandler: @escaping (String) -> Void, completion: @escaping (Result<Void, Error>) -> Void)
+    func reprocessDay(_ day: String, progressHandler: @escaping @Sendable (String) -> Void, completion: @escaping @Sendable (Result<Void, Error>) -> Void)
+    func reprocessSpecificBatches(_ batchIds: [Int64], progressHandler: @escaping @Sendable (String) -> Void, completion: @escaping @Sendable (Result<Void, Error>) -> Void)
 }
 
 
@@ -68,8 +69,8 @@ final class AnalysisManager: AnalysisManaging {
         queue.async { [weak self] in self?.processRecordings() }
     }
     
-    func reprocessDay(_ day: String, progressHandler: @escaping (String) -> Void, completion: @escaping (Result<Void, Error>) -> Void) {
-        queue.async { [weak self] in
+    func reprocessDay(_ day: String, progressHandler: @escaping @Sendable (String) -> Void, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        Task { [weak self] in
             guard let self = self else { 
                 completion(.failure(NSError(domain: "AnalysisManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Manager deallocated"])))
                 return 
@@ -127,14 +128,14 @@ final class AnalysisManager: AnalysisManaging {
                 }
                 
                 // Use a semaphore to wait for each batch to complete
-                let semaphore = DispatchSemaphore(value: 0)
+                _ = DispatchSemaphore(value: 0)
                 
                 self.queueGeminiRequest(batchId: batchId)
                 
-                // Wait for batch to complete (check status periodically)
+                // Wait for batch to complete (check status periodically using async/await)
                 var isCompleted = false
                 while !isCompleted && !hasError {
-                    Thread.sleep(forTimeInterval: 2.0) // Check every 2 seconds
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
                     
                     let currentBatches = self.store.fetchBatches(forDay: day)
                     if let batch = currentBatches.first(where: { $0.id == batchId }) {
@@ -147,14 +148,24 @@ final class AnalysisManager: AnalysisManaging {
                             DispatchQueue.main.async {
                                 progressHandler("✓ Batch \(index + 1) completed in \(self.formatDuration(batchDuration))")
                             }
-                        case "failed", "failed_empty", "skipped_short":
-                            // These are acceptable end states
+                        case "failed", "failed_empty":
+                            // These are error states - mark as error
+                            isCompleted = true
+                            hasError = true
+                            processedCount += 1
+                            let batchDuration = Date().timeIntervalSince(batchStartTime)
+                            batchTimings.append((batchId: batchId, duration: batchDuration))
+                            DispatchQueue.main.async {
+                                progressHandler("❌ Batch \(index + 1) failed with status '\(batch.status)' after \(self.formatDuration(batchDuration))")
+                            }
+                        case "skipped_short":
+                            // This is acceptable - skip short batches don't count as errors
                             isCompleted = true
                             processedCount += 1
                             let batchDuration = Date().timeIntervalSince(batchStartTime)
                             batchTimings.append((batchId: batchId, duration: batchDuration))
                             DispatchQueue.main.async {
-                                progressHandler("⚠️ Batch \(index + 1) ended with status '\(batch.status)' after \(self.formatDuration(batchDuration))")
+                                progressHandler("⚠️ Batch \(index + 1) skipped (too short) after \(self.formatDuration(batchDuration))")
                             }
                         case "processing":
                             // Still processing, continue waiting
@@ -197,8 +208,8 @@ final class AnalysisManager: AnalysisManaging {
         }
     }
     
-    func reprocessSpecificBatches(_ batchIds: [Int64], progressHandler: @escaping (String) -> Void, completion: @escaping (Result<Void, Error>) -> Void) {
-        queue.async { [weak self] in
+    func reprocessSpecificBatches(_ batchIds: [Int64], progressHandler: @escaping @Sendable (String) -> Void, completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        Task { [weak self] in
             guard let self = self else { 
                 completion(.failure(NSError(domain: "AnalysisManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Manager deallocated"])))
                 return 
@@ -259,10 +270,10 @@ final class AnalysisManager: AnalysisManaging {
                 
                 self.queueGeminiRequest(batchId: batchId)
                 
-                // Wait for batch to complete (check status periodically)
+                // Wait for batch to complete (check status periodically using async/await)
                 var isCompleted = false
                 while !isCompleted && !hasError {
-                    Thread.sleep(forTimeInterval: 2.0) // Check every 2 seconds
+                    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
                     
                     let allBatches = self.store.allBatches()
                     if let batch = allBatches.first(where: { $0.id == batchId }) {
@@ -275,14 +286,24 @@ final class AnalysisManager: AnalysisManaging {
                             DispatchQueue.main.async {
                                 progressHandler("✓ Batch \(index + 1) completed in \(self.formatDuration(batchDuration))")
                             }
-                        case "failed", "failed_empty", "skipped_short":
-                            // These are acceptable end states
+                        case "failed", "failed_empty":
+                            // These are error states - mark as error
+                            isCompleted = true
+                            hasError = true
+                            processedCount += 1
+                            let batchDuration = Date().timeIntervalSince(batchStartTime)
+                            batchTimings.append((batchId: batchId, duration: batchDuration))
+                            DispatchQueue.main.async {
+                                progressHandler("❌ Batch \(index + 1) failed with status '\(batch.status)' after \(self.formatDuration(batchDuration))")
+                            }
+                        case "skipped_short":
+                            // This is acceptable - skip short batches don't count as errors
                             isCompleted = true
                             processedCount += 1
                             let batchDuration = Date().timeIntervalSince(batchStartTime)
                             batchTimings.append((batchId: batchId, duration: batchDuration))
                             DispatchQueue.main.async {
-                                progressHandler("⚠️ Batch \(index + 1) ended with status '\(batch.status)' after \(self.formatDuration(batchDuration))")
+                                progressHandler("⚠️ Batch \(index + 1) skipped (too short) after \(self.formatDuration(batchDuration))")
                             }
                         case "processing":
                             // Still processing, continue waiting
@@ -300,15 +321,24 @@ final class AnalysisManager: AnalysisManaging {
             let avgDuration = batchTimings.isEmpty ? 0 : batchTimings.reduce(0) { $0 + $1.duration } / Double(batchTimings.count)
             
             DispatchQueue.main.async {
-                progressHandler("""
-                ✅ Reprocessing complete!
-                • Processed: \(processedCount) of \(batchesToProcess.count) batches
-                • Total time: \(self.formatDuration(totalDuration))
-                • Average time per batch: \(self.formatDuration(avgDuration))
-                """)
+                if hasError {
+                    progressHandler("""
+                    ⚠️ Reprocessing completed with errors!
+                    • Processed: \(processedCount) of \(batchesToProcess.count) batches
+                    • Total time: \(self.formatDuration(totalDuration))
+                    • Average time per batch: \(self.formatDuration(avgDuration))
+                    """)
+                    completion(.failure(NSError(domain: "AnalysisManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to reprocess some batches"])))
+                } else {
+                    progressHandler("""
+                    ✅ Reprocessing complete!
+                    • Processed: \(processedCount) of \(batchesToProcess.count) batches
+                    • Total time: \(self.formatDuration(totalDuration))
+                    • Average time per batch: \(self.formatDuration(avgDuration))
+                    """)
+                    completion(.success(()))
+                }
             }
-            
-            completion(.success(()))
         }
     }
 
@@ -333,8 +363,10 @@ final class AnalysisManager: AnalysisManaging {
     private func queueGeminiRequest(batchId: Int64) {
         let chunksInBatch = StorageManager.shared.chunksForBatch(batchId)
 
+        let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
+        
         if chunksInBatch.isEmpty {
-            print("Warning: Batch \(batchId) has no chunks. Marking as 'failed_empty'.")
+            logger.warning("Batch \(batchId) has no chunks. Marking as 'failed_empty'.")
             self.updateBatchStatus(batchId: batchId, status: "failed_empty")
             return
         }
@@ -347,7 +379,7 @@ final class AnalysisManager: AnalysisManaging {
         let minimumDurationSeconds: TimeInterval = 300.0 // 5 minutes
 
         if totalVideoDurationSeconds < minimumDurationSeconds {
-            print("Batch \(batchId) duration (\(totalVideoDurationSeconds)s) is less than \(minimumDurationSeconds)s. Marking as 'skipped_short'.")
+            logger.info("Batch \(batchId) duration (\(totalVideoDurationSeconds)s) is less than \(minimumDurationSeconds)s. Marking as 'skipped_short'.")
             self.updateBatchStatus(batchId: batchId, status: "skipped_short")
             return
         }
@@ -373,7 +405,7 @@ final class AnalysisManager: AnalysisManaging {
         updateBatchStatus(batchId: batchId, status: "processing")
 
         // Prepare file URLs for video processing
-        let chunkFileURLs: [URL] = chunksInBatch.compactMap { chunk in
+        let _: [URL] = chunksInBatch.compactMap { chunk in
             // Assuming chunk.fileUrl is a String path, convert to URL
             // Ensure this path is accessible. If it's a relative path, resolve it.
             // For now, assuming it's an absolute file path string.
@@ -386,35 +418,47 @@ final class AnalysisManager: AnalysisManaging {
             let now = Date()
             let currentDayInfo = now.getDayInfoFor4AMBoundary()
             let currentLogicalDayString = currentDayInfo.dayString
-            print("Processing batch \(batchId) for logical day: \(currentLogicalDayString)")
+            let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
+            
+            #if DEBUG
+            logger.debug("Processing batch \(batchId) for logical day: \(currentLogicalDayString)")
+            #endif
 
             switch result {
             case .success(let processedResult):
                 let activityCards = processedResult.cards
                 let cardIds = processedResult.cardIds
-                print("LLM succeeded for Batch \(batchId). Processing \(activityCards.count) activity cards for day \(currentLogicalDayString).")
+                logger.info("LLM succeeded for Batch \(batchId). Processing \(activityCards.count) activity cards for day \(currentLogicalDayString).")
 
                 // Finish performance transaction - LLM processing completed successfully
                 transaction.finish(status: .ok)
 
+                #if DEBUG
                 // Debug: Check for duplicate cards from LLM
-                print("\n🔍 DEBUG: Checking for duplicate cards from LLM:")
+                let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
+                logger.debug("Checking for duplicate cards from LLM")
                 for (i, card1) in activityCards.enumerated() {
                     for (j, card2) in activityCards.enumerated() where j > i {
                         if card1.startTime == card2.startTime && card1.endTime == card2.endTime && card1.title == card2.title {
-                            print("⚠️ DEBUG: Found duplicate cards at indices \(i) and \(j): '\(card1.title)' [\(card1.startTime) - \(card1.endTime)]")
+                            logger.warning("Found duplicate cards at indices \(i) and \(j): '\(card1.title)' [\(card1.startTime) - \(card1.endTime)]")
                         }
                     }
                 }
-                print("✅ DEBUG: Duplicate check complete\n")
+                logger.debug("Duplicate check complete")
+                #endif
                 
                 guard let firstChunk = chunksInBatch.first else {
-                    print("Error: No chunks found for batch \(batchId) during timestamp conversion")
+                    #if DEBUG
+                    let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
+                    logger.error("No chunks found for batch \(batchId) during timestamp conversion")
+                    #endif
                     self.markBatchFailed(batchId: batchId, reason: "No chunks found for timestamp conversion")
                     return
                 }
                 let firstChunkStartDate = Date(timeIntervalSince1970: TimeInterval(firstChunk.startTs))
-                print("First chunk starts at real time: \(firstChunkStartDate)")
+                #if DEBUG
+                logger.debug("First chunk starts at real time: \(firstChunkStartDate)")
+                #endif
 
                 // Mark batch as completed immediately
                 self.updateBatchStatus(batchId: batchId, status: "completed")
@@ -429,8 +473,9 @@ final class AnalysisManager: AnalysisManaging {
                         if index >= cardCount { continue }
 
                         // Fetch the saved timeline card to get Unix timestamps
+                        let timelapseLogger = Logger(subsystem: "Dayflow", category: "TimelapseGeneration")
                         guard let timelineCard = self.store.fetchTimelineCard(byId: cardId) else {
-                            print("Warning: Could not fetch timeline card \(cardId)")
+                            timelapseLogger.warning("Could not fetch timeline card \(cardId)")
                             continue
                         }
 
@@ -441,20 +486,24 @@ final class AnalysisManager: AnalysisManaging {
                         )
 
                         if chunks.isEmpty {
-                            print("No chunks found for timeline card \(cardId) [\(timelineCard.startTimestamp) - \(timelineCard.endTimestamp)]")
+                            timelapseLogger.warning("No chunks found for timeline card \(cardId) [\(timelineCard.startTimestamp) - \(timelineCard.endTimestamp)]")
                             continue
                         }
 
                         do {
-                            print("Generating timelapse for card \(cardId): '\(timelineCard.title)' [\(timelineCard.startTimestamp) - \(timelineCard.endTimestamp)]")
-                            print("  Found \(chunks.count) chunks in time range")
+                            #if DEBUG
+                            timelapseLogger.debug("Generating timelapse for card \(cardId): '\(timelineCard.title)' [\(timelineCard.startTimestamp) - \(timelineCard.endTimestamp)]")
+                            timelapseLogger.debug("Found \(chunks.count) chunks in time range")
+                            #endif
 
                             // Convert chunks to URLs
                             let chunkURLs = chunks.compactMap { URL(fileURLWithPath: $0.fileUrl) }
 
                             // Stitch chunks together
                             let stitchedVideo = try await self.videoProcessingService.prepareVideoForProcessing(urls: chunkURLs)
-                            print("  Stitched video prepared at: \(stitchedVideo.path)")
+                            #if DEBUG
+                            timelapseLogger.debug("Stitched video prepared at: \(stitchedVideo.path)")
+                            #endif
 
                             // Generate timelapse
                             let timelapseURL = await self.videoProcessingService.generatePersistentTimelapseURL(
@@ -474,19 +523,19 @@ final class AnalysisManager: AnalysisManaging {
                             DispatchQueue.global(qos: .utility).async { [store = self.store] in
                                 store.updateTimelineCardVideoURL(cardId: cardId, videoSummaryURL: videoPath)
                             }
-                            print("✅ Generated timelapse for card \(cardId): \(videoPath)")
+                            timelapseLogger.info("Generated timelapse for card \(cardId): \(videoPath)")
 
                             // Cleanup temp file
                             await self.videoProcessingService.cleanupTemporaryFile(at: stitchedVideo)
                         } catch {
-                            print("❌ Error generating timelapse for card \(cardId): \(error)")
+                            logger.error("Error generating timelapse for card \(cardId): \(error.localizedDescription)")
                         }
                     }
-                    print("✅ Timelapse generation complete for batch \(batchId)")
+                    logger.info("Timelapse generation complete for batch \(batchId)")
                 }
 
             case .failure(let err):
-                print("LLM failed for Batch \(batchId). Day \(currentLogicalDayString) may have been cleared. Error: \(err.localizedDescription)")
+                logger.error("LLM failed for Batch \(batchId). Day \(currentLogicalDayString) may have been cleared. Error: \(err.localizedDescription)")
 
                 // Finish performance transaction - LLM processing failed
                 transaction.finish(status: .internalError)

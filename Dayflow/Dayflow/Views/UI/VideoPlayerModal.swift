@@ -83,21 +83,46 @@ class VideoPlayerViewModel: ObservableObject {
         player = AVPlayer(url: url)
         
         // Get video duration and aspect
-        player?.currentItem?.asset.loadValuesAsynchronously(forKeys: ["duration", "tracks"]) { [weak self] in
-            guard let asset = self?.player?.currentItem?.asset else { return }
-            let duration = asset.duration
-            DispatchQueue.main.async {
-                self?.duration = CMTimeGetSeconds(duration)
-                if let track = asset.tracks(withMediaType: .video).first {
-                    let natural = track.naturalSize
-                    let transform = track.preferredTransform
-                    let transformed = natural.applying(transform)
-                    let w = abs(transformed.width) > 0 ? abs(transformed.width) : max(1, natural.width)
-                    let h = abs(transformed.height) > 0 ? abs(transformed.height) : max(1, natural.height)
-                    let aspect = max(0.1, CGFloat(w / h))
-                    self?.videoAspect = aspect
+        guard let asset = player?.currentItem?.asset else { return }
+        
+        Task {
+            do {
+                let duration = try await asset.load(.duration)
+                let tracks = try await asset.loadTracks(withMediaType: .video)
+                
+                await MainActor.run {
+                    self.duration = CMTimeGetSeconds(duration)
+                    if let track = tracks.first {
+                        Task {
+                            do {
+                                let natural = try await track.load(.naturalSize)
+                                let transform = try await track.load(.preferredTransform)
+                                let transformed = natural.applying(transform)
+                                let w = abs(transformed.width) > 0 ? abs(transformed.width) : max(1, natural.width)
+                                let h = abs(transformed.height) > 0 ? abs(transformed.height) : max(1, natural.height)
+                                let aspect = max(0.1, CGFloat(w / h))
+                                
+                                await MainActor.run {
+                                    self.videoAspect = aspect
+                                }
+                            } catch {
+                                // Fallback to natural size if transform fails
+                                if let natural = try? await track.load(.naturalSize) {
+                                    let aspect = max(0.1, CGFloat(natural.width / natural.height))
+                                    await MainActor.run {
+                                        self.videoAspect = aspect
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.loadSegments()
                 }
-                self?.loadSegments()
+            } catch {
+                // Fallback if async loading fails
+                await MainActor.run {
+                    self.loadSegments()
+                }
             }
         }
         
@@ -357,8 +382,8 @@ struct VideoPlayerModal: View {
                 "completion_pct_bucket": AnalyticsService.shared.pctBucket(pct)
             ])
         }
-        .onChange(of: viewModel.isPlaying) { playing in
-            if playing {
+        .onChange(of: viewModel.isPlaying) { oldValue, newValue in
+            if newValue {
                 if didStartPlay {
                     AnalyticsService.shared.capture("video_resumed")
                 } else {
@@ -373,7 +398,7 @@ struct VideoPlayerModal: View {
                 }
             }
         }
-        .onChange(of: viewModel.playbackSpeed) { _ in
+        .onChange(of: viewModel.playbackSpeed) { _, _ in
             if didStartPlay {
                 AnalyticsService.shared.capture("video_playback_speed_changed", ["speed": String(format: "%.1fx", viewModel.playbackSpeed)])
             }

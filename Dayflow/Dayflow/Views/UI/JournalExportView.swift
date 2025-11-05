@@ -89,9 +89,8 @@ struct JournalExportView: View {
                 .padding()
             }
             .navigationTitle("Export Journal")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     Button("Cancel") {
                         dismiss()
                     }

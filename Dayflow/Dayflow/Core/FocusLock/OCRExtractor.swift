@@ -6,12 +6,12 @@
 //
 
 import Foundation
-import Vision
+@preconcurrency import Vision
 import CoreImage
 import AppKit
 import os.log
 
-class OCRExtractor {
+final class OCRExtractor: @unchecked Sendable {
     static let shared = OCRExtractor()
 
     private let logger = Logger(subsystem: "FocusLock", category: "OCRExtractor")
@@ -106,7 +106,7 @@ class OCRExtractor {
     func extractDocuments(from image: NSImage, region: CGRect? = nil) async -> DocumentExtractionResult {
         let structuredResult = await extractStructuredText(from: image, region: region)
 
-        var documentResult = DocumentExtractionResult(
+        let documentResult = DocumentExtractionResult(
             title: extractDocumentTitle(from: structuredResult),
             headings: extractHeadings(from: structuredResult),
             paragraphs: structuredResult.paragraphs,
@@ -137,7 +137,10 @@ class OCRExtractor {
 
     private func processImageForOCR(_ image: NSImage, region: CGRect? = nil) async throws -> OCRResult {
         return try await withCheckedThrowingContinuation { continuation in
-            guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            // Create a copy of the image data to ensure it stays valid during async processing
+            guard let tiffData = image.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiffData),
+                  let cgImage = bitmap.cgImage else {
                 continuation.resume(throwing: OCRError.invalidImage)
                 return
             }
@@ -154,21 +157,24 @@ class OCRExtractor {
                 processedImage = cgImage
             }
 
-            // Create image request handler
+            // Create image request handler with the copied CGImage
             let requestHandler = VNImageRequestHandler(cgImage: processedImage, options: [:])
 
-            // Perform OCR
-            try? requestHandler.perform([ocrRequest])
-
-            // Process results
-            DispatchQueue.main.async {
-                self.processOCRResults()
-            }
-
-            // Simulate async processing (in practice, you'd use proper async Vision API)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                let results = self.processOCRResults()
-                continuation.resume(returning: results)
+            // Perform OCR on background queue
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try requestHandler.perform([self.ocrRequest])
+                    
+                    // Process results on main queue
+                    DispatchQueue.main.async {
+                        let results = self.processOCRResults()
+                        continuation.resume(returning: results)
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
         }
     }

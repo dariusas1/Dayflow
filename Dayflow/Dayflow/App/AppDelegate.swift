@@ -9,6 +9,7 @@ import ScreenCaptureKit
 import PostHog
 import Sentry
 import Combine
+import UserNotifications
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -29,6 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var backgroundMonitor: BackgroundMonitor?
     private var focusLockSettings: FocusLockSettingsManager?
     private var isAutostartMode: Bool = false
+    private var lastPermissionCheck: Date? // For debouncing permission checks
 
     override init() {
         UserDefaultsMigrator.migrateIfNeeded()
@@ -111,8 +113,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             AppState.shared.enablePersistence()
 
             // Try to start recording, but handle permission failures gracefully
+            // Add debouncing to prevent race conditions from rapid permission checks
+            let permissionCheckDebounceInterval: TimeInterval = 2.0 // 2 second debounce
+            
             Task { [weak self] in
                 guard let self else { return }
+                
+                // Debounce permission checks
+                let now = Date()
+                if let lastCheck = self.lastPermissionCheck, now.timeIntervalSince(lastCheck) < permissionCheckDebounceInterval {
+                    // Too soon after last check - skip
+                    print("Permission check debounced (last check was \(now.timeIntervalSince(lastCheck))s ago)")
+                    self.flushPendingDeepLinks()
+                    return
+                }
+                self.lastPermissionCheck = now
+                
                 do {
                     // Check if we have permission by trying to access content
                     _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -131,7 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     print("Screen recording permission not granted, skipping auto-start")
                 }
-                await self.flushPendingDeepLinks()
+                self.flushPendingDeepLinks()
             }
         } else {
             // Still in early onboarding, don't enable persistence yet
@@ -157,6 +173,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Initialize FocusLock components
         setupFocusLock()
+        
+        // Initialize MemoryStore asynchronously (lazy load)
+        Task {
+            await HybridMemoryStore.shared.completeInitialization()
+            print("AppDelegate: MemoryStore initialization complete")
+        }
 
         // Observe recording state
         analyticsSub = AppState.shared.$isRecording
@@ -174,7 +196,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { _ in
-            AppDelegate.allowTermination = true
+            Task { @MainActor in
+                AppDelegate.allowTermination = true
+            }
         }
 
     }
@@ -229,6 +253,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Refresh autostart status from system
         focusLockSettings?.refreshAutostartStatus()
+        
+        // Pre-initialize critical singletons to prevent lazy init during UI rendering
+        // This prevents priority inversion and memory corruption crashes
+        print("AppDelegate: FocusLock components initialized")
+        Task { @MainActor in
+            // Initialize ProactiveCoachEngine and load its data asynchronously
+            let proactiveEngine = ProactiveCoachEngine.shared
+            await proactiveEngine.loadDataAsync()
+            
+            // Initialize FocusSessionManager (which references ProactiveCoachEngine)
+            _ = FocusSessionManager.shared
+            
+            // Initialize TodoExtractionEngine
+            _ = TodoExtractionEngine.shared
+            
+            print("AppDelegate: Proactive engine and session manager ready")
+        }
 
         // Handle autostart mode
         if isAutostartMode {
@@ -264,11 +305,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Show notification if enabled
             if focusLockSettings?.enableNotifications == true {
-                let notification = NSUserNotification()
-                notification.title = "FocusLock Active"
-                notification.informativeText = "FocusLock is running in the background"
-                notification.soundName = nil // Quiet notification
-                NSUserNotificationCenter.default.deliver(notification)
+                let center = UNUserNotificationCenter.current()
+                let content = UNMutableNotificationContent()
+                content.title = "FocusLock Active"
+                content.body = "FocusLock is running in the background"
+                content.sound = nil // Quiet notification
+                let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+                center.add(request) { error in
+                    if let error = error {
+                        print("Failed to deliver notification: \(error.localizedDescription)")
+                    }
+                }
             }
         } else {
             print("AppDelegate: FocusLock autostart with UI")

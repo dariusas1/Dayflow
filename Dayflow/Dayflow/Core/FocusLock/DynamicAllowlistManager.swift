@@ -13,7 +13,7 @@ import os.log
 @MainActor
 class DynamicAllowlistManager: ObservableObject {
     private let logger = Logger(subsystem: "FocusLock", category: "DynamicAllowlist")
-    private let settingsManager = SettingsManager.shared
+    private let settingsManager = FocusLockSettingsManager.shared
     private var cancellables = Set<AnyCancellable>()
 
     // Published state
@@ -197,12 +197,8 @@ class DynamicAllowlistManager: ObservableObject {
         // Convert dictionary to proper structure
         var rules: [String: TaskRule] = [:]
         for (patternJSON, rule) in decoded {
-            do {
-                let pattern = patternJSON
-                rules[pattern] = rule
-            } catch {
-                logger.error("Failed to parse task rule pattern: \(patternJSON)")
-            }
+            let pattern = patternJSON
+            rules[pattern] = rule
         }
         taskRules = rules
     }
@@ -340,7 +336,7 @@ extension TaskRule {
         let blockedApps = try container.decodeIfPresent([String].self, forKey: .blockedApps) ?? []
         let priority = try container.decodeIfPresent(Int.self, forKey: .priority) ?? 5
         let description = try container.decodeIfPresent(String.self, forKey: .description) ?? ""
-        let createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        _ = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         let isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? true
 
         self.init(

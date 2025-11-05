@@ -8,8 +8,11 @@
 import SwiftUI
 import AppKit
 import CoreGraphics
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
+    @StateObject private var featureFlagManager = FeatureFlagManager.shared
+    
     private enum SettingsTab: String, CaseIterable, Identifiable {
         case storage
         case providers
@@ -86,6 +89,14 @@ struct SettingsView: View {
     @State private var timelapsesLimitIndex: Int = 0
     @State private var showLimitConfirmation = false
     @State private var pendingLimit: PendingLimit?
+    
+    // Data management state
+    @State private var showExportDialog = false
+    @State private var showClearConfirmation = false
+    @State private var showResetConfirmation = false
+    @State private var isExporting = false
+    @State private var exportError: String?
+    @State private var showExportError = false
 
     // Providers – debug log copy feedback
 
@@ -97,6 +108,148 @@ struct SettingsView: View {
     }()
 
     var body: some View {
+        contentWithLifecycle
+            .preferredColorScheme(.light)
+            .modifier(AlertsModifier(
+                showClearConfirmation: $showClearConfirmation,
+                showResetConfirmation: $showResetConfirmation,
+                showExportError: $showExportError,
+                exportError: exportError,
+                clearAnalytics: { Task { await clearAnalytics() } },
+                resetSettings: { Task { await resetSettings() } }
+            ))
+            .sheet(item: Binding(
+                get: { setupModalProvider.map { ProviderSetupWrapper(id: $0) } },
+                set: { setupModalProvider = $0?.id }
+            )) { wrapper in
+                LLMProviderSetupView(
+                    providerType: wrapper.id,
+                    onBack: { setupModalProvider = nil },
+                    onComplete: {
+                        completeProviderSwitch(wrapper.id)
+                        setupModalProvider = nil
+                    }
+                )
+                .frame(minWidth: 900, minHeight: 650)
+            }
+            .alert(isPresented: $showLimitConfirmation) {
+                if let pending = pendingLimit,
+                   Self.storageOptions.indices.contains(pending.index) {
+                    let option = Self.storageOptions[pending.index]
+                    let categoryName = pending.category.displayName
+                    return Alert(
+                        title: Text("Lower \(categoryName) limit?"),
+                        message: Text("Reducing the \(categoryName) limit to \(option.label) will immediately delete the oldest \(categoryName) data to stay under the new cap."),
+                        primaryButton: .destructive(Text("Confirm")) {
+                            applyLimit(for: pending.category, index: pending.index)
+                        },
+                        secondaryButton: .cancel {
+                            pendingLimit = nil
+                            showLimitConfirmation = false
+                        }
+                    )
+                } else {
+                    return Alert(title: Text("Adjust storage limit"), dismissButton: .default(Text("OK")))
+                }
+            }
+            .modifier(PromptChangeHandlersModifier(
+                useCustomGeminiTitlePrompt: $useCustomGeminiTitlePrompt,
+                useCustomGeminiSummaryPrompt: $useCustomGeminiSummaryPrompt,
+                useCustomGeminiDetailedPrompt: $useCustomGeminiDetailedPrompt,
+                geminiTitlePromptText: $geminiTitlePromptText,
+                geminiSummaryPromptText: $geminiSummaryPromptText,
+                geminiDetailedPromptText: $geminiDetailedPromptText,
+                useCustomOllamaTitlePrompt: $useCustomOllamaTitlePrompt,
+                useCustomOllamaSummaryPrompt: $useCustomOllamaSummaryPrompt,
+                ollamaTitlePromptText: $ollamaTitlePromptText,
+                ollamaSummaryPromptText: $ollamaSummaryPromptText,
+                persistGemini: { persistGeminiPromptOverridesIfReady() },
+                persistOllama: { persistOllamaPromptOverridesIfReady() }
+            ))
+    }
+    
+    private var contentWithLifecycle: some View {
+        mainContent
+            .onAppear(perform: handleAppear)
+            .onChange(of: analyticsEnabled) { oldValue, newValue in
+                AnalyticsService.shared.setOptIn(newValue)
+            }
+            .onChange(of: currentProvider) { oldValue, newValue in
+                handleProviderChange(newValue)
+            }
+            .onChange(of: selectedTab) { oldValue, newValue in
+                if newValue == .storage {
+                    refreshStorageIfNeeded()
+                }
+            }
+    }
+}
+
+// MARK: - Modifiers
+
+private struct AlertsModifier: ViewModifier {
+    @Binding var showClearConfirmation: Bool
+    @Binding var showResetConfirmation: Bool
+    @Binding var showExportError: Bool
+    let exportError: String?
+    let clearAnalytics: () -> Void
+    let resetSettings: () -> Void
+    
+    func body(content: Content) -> some View {
+        content
+            .alert("Clear Analytics Data", isPresented: $showClearConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Clear", role: .destructive, action: clearAnalytics)
+            } message: {
+                Text("This will permanently remove all analytics and usage statistics. This action cannot be undone.")
+            }
+            .alert("Reset Focus Settings", isPresented: $showResetConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Reset", role: .destructive, action: resetSettings)
+            } message: {
+                Text("This will reset all FocusLock settings to their default values. Your data will not be deleted, but all preferences will be restored to defaults.")
+            }
+            .alert("Export Error", isPresented: $showExportError) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                if let error = exportError {
+                    Text(error)
+                }
+            }
+    }
+}
+
+private struct PromptChangeHandlersModifier: ViewModifier {
+    @Binding var useCustomGeminiTitlePrompt: Bool
+    @Binding var useCustomGeminiSummaryPrompt: Bool
+    @Binding var useCustomGeminiDetailedPrompt: Bool
+    @Binding var geminiTitlePromptText: String
+    @Binding var geminiSummaryPromptText: String
+    @Binding var geminiDetailedPromptText: String
+    @Binding var useCustomOllamaTitlePrompt: Bool
+    @Binding var useCustomOllamaSummaryPrompt: Bool
+    @Binding var ollamaTitlePromptText: String
+    @Binding var ollamaSummaryPromptText: String
+    let persistGemini: () -> Void
+    let persistOllama: () -> Void
+    
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: useCustomGeminiTitlePrompt) { _, _ in persistGemini() }
+            .onChange(of: useCustomGeminiSummaryPrompt) { _, _ in persistGemini() }
+            .onChange(of: useCustomGeminiDetailedPrompt) { _, _ in persistGemini() }
+            .onChange(of: geminiTitlePromptText) { _, _ in persistGemini() }
+            .onChange(of: geminiSummaryPromptText) { _, _ in persistGemini() }
+            .onChange(of: geminiDetailedPromptText) { _, _ in persistGemini() }
+            .onChange(of: useCustomOllamaTitlePrompt) { _, _ in persistOllama() }
+            .onChange(of: useCustomOllamaSummaryPrompt) { _, _ in persistOllama() }
+            .onChange(of: ollamaTitlePromptText) { _, _ in persistOllama() }
+            .onChange(of: ollamaSummaryPromptText) { _, _ in persistOllama() }
+    }
+}
+
+extension SettingsView {
+    private var mainContent: some View {
         HStack(alignment: .top, spacing: 32) {
             sidebar
 
@@ -114,85 +267,33 @@ struct SettingsView: View {
         }
         .padding(.trailing, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            loadCurrentProvider()
-            analyticsEnabled = AnalyticsService.shared.isOptedIn
-            refreshStorageIfNeeded()
-            // Refresh cached local settings for provider test view
-            reloadLocalProviderSettings()
-            loadGeminiPromptOverridesIfNeeded()
-            loadOllamaPromptOverridesIfNeeded()
-            let recordingsLimit = StoragePreferences.recordingsLimitBytes
-            recordingsLimitBytes = recordingsLimit
-            recordingsLimitIndex = indexForLimit(recordingsLimit)
-            let timelapseLimit = StoragePreferences.timelapsesLimitBytes
-            timelapsesLimitBytes = timelapseLimit
-            timelapsesLimitIndex = indexForLimit(timelapseLimit)
-            AnalyticsService.shared.capture("settings_opened")
-        }
-        .onChange(of: analyticsEnabled) { enabled in
-            AnalyticsService.shared.setOptIn(enabled)
-        }
-        .onChange(of: currentProvider) { newProvider in
-            reloadLocalProviderSettings()
-            if newProvider == "gemini" {
-                loadGeminiPromptOverridesIfNeeded(force: true)
-            } else if newProvider == "ollama" {
-                loadOllamaPromptOverridesIfNeeded(force: true)
-            }
-        }
-        .onChange(of: selectedTab) { newValue in
-            if newValue == .storage {
-                refreshStorageIfNeeded()
-            }
-        }
-        .sheet(item: Binding(
-            get: { setupModalProvider.map { ProviderSetupWrapper(id: $0) } },
-            set: { setupModalProvider = $0?.id }
-        )) { wrapper in
-            LLMProviderSetupView(
-                providerType: wrapper.id,
-                onBack: { setupModalProvider = nil },
-                onComplete: {
-                    completeProviderSwitch(wrapper.id)
-                    setupModalProvider = nil
-                }
-            )
-            .frame(minWidth: 900, minHeight: 650)
-        }
-        .alert(isPresented: $showLimitConfirmation) {
-            guard let pending = pendingLimit,
-                  Self.storageOptions.indices.contains(pending.index) else {
-                return Alert(title: Text("Adjust storage limit"), dismissButton: .default(Text("OK")))
-            }
-
-            let option = Self.storageOptions[pending.index]
-            let categoryName = pending.category.displayName
-            return Alert(
-                title: Text("Lower \(categoryName) limit?"),
-                message: Text("Reducing the \(categoryName) limit to \(option.label) will immediately delete the oldest \(categoryName) data to stay under the new cap."),
-                primaryButton: .destructive(Text("Confirm")) {
-                    applyLimit(for: pending.category, index: pending.index)
-                },
-                secondaryButton: .cancel {
-                    pendingLimit = nil
-                    showLimitConfirmation = false
-                }
-            )
-        }
-        // The settings palette is tailored for light mode; keep it consistent even when the app runs in Dark Mode.
-        .preferredColorScheme(.light)
-        .onChange(of: useCustomGeminiTitlePrompt) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: useCustomGeminiSummaryPrompt) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: useCustomGeminiDetailedPrompt) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: geminiTitlePromptText) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: geminiSummaryPromptText) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: geminiDetailedPromptText) { _ in persistGeminiPromptOverridesIfReady() }
-        .onChange(of: useCustomOllamaTitlePrompt) { _ in persistOllamaPromptOverridesIfReady() }
-        .onChange(of: useCustomOllamaSummaryPrompt) { _ in persistOllamaPromptOverridesIfReady() }
-        .onChange(of: ollamaTitlePromptText) { _ in persistOllamaPromptOverridesIfReady() }
-        .onChange(of: ollamaSummaryPromptText) { _ in persistOllamaPromptOverridesIfReady() }
     }
+    
+    private func handleAppear() {
+        loadCurrentProvider()
+        analyticsEnabled = AnalyticsService.shared.isOptedIn
+        refreshStorageIfNeeded()
+        reloadLocalProviderSettings()
+        loadGeminiPromptOverridesIfNeeded()
+        loadOllamaPromptOverridesIfNeeded()
+        let recordingsLimit = StoragePreferences.recordingsLimitBytes
+        recordingsLimitBytes = recordingsLimit
+        recordingsLimitIndex = indexForLimit(recordingsLimit)
+        let timelapseLimit = StoragePreferences.timelapsesLimitBytes
+        timelapsesLimitBytes = timelapseLimit
+        timelapsesLimitIndex = indexForLimit(timelapseLimit)
+        AnalyticsService.shared.capture("settings_opened")
+    }
+    
+    private func handleProviderChange(_ newValue: String) {
+        reloadLocalProviderSettings()
+        if newValue == "gemini" {
+            loadGeminiPromptOverridesIfNeeded(force: true)
+        } else if newValue == "ollama" {
+            loadOllamaPromptOverridesIfNeeded(force: true)
+        }
+    }
+    
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -773,12 +874,6 @@ struct SettingsView: View {
                         .foregroundColor(.black.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
 
-                    // Feature flags integration
-                    FeatureFlagsSettingsView()
-                        .environmentObject(FeatureFlagManager.shared)
-
-                    Divider()
-
                     // Default Session Duration
                     HStack {
                         VStack(alignment: .leading) {
@@ -923,8 +1018,11 @@ struct SettingsView: View {
                         Spacer()
 
                         Button("Export") {
-                            // TODO: Implement export functionality
+                            Task {
+                                await performExport()
+                            }
                         }
+                        .disabled(isExporting)
                         .font(.custom("Nunito", size: 13))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
@@ -949,7 +1047,7 @@ struct SettingsView: View {
                         Spacer()
 
                         Button("Clear") {
-                            // TODO: Implement clear analytics functionality
+                            showClearConfirmation = true
                         }
                         .font(.custom("Nunito", size: 13))
                         .foregroundColor(.white)
@@ -975,7 +1073,7 @@ struct SettingsView: View {
                         Spacer()
 
                         Button("Reset") {
-                            // TODO: Implement reset functionality
+                            showResetConfirmation = true
                         }
                         .font(.custom("Nunito", size: 13))
                         .foregroundColor(.white)
@@ -1025,10 +1123,8 @@ struct SettingsView: View {
         Task.detached(priority: .utility) {
             let permission = CGPreflightScreenCaptureAccess()
             let recordingsURL = StorageManager.shared.recordingsRoot
-            let timelapseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Dayflow/timelapses", isDirectory: true)
 
-            let recordingsSize = SettingsView.directorySize(at: recordingsURL)
+            let recordingsSize = await MainActor.run { SettingsView.directorySize(at: recordingsURL) }
             let timelapseSize = TimelapseStorageManager.shared.currentUsageBytes()
 
             await MainActor.run {
@@ -1373,7 +1469,7 @@ struct SettingsView: View {
         GeminiModelPreference(primary: model).save()
 
         Task { @MainActor in
-            await AnalyticsService.shared.capture("gemini_model_selected", [
+            AnalyticsService.shared.capture("gemini_model_selected", [
                 "source": source,
                 "model": model.rawValue
             ])
@@ -1514,7 +1610,7 @@ private struct GeminiModelSettingsCard: View {
                 .font(.custom("Nunito", size: 11))
                 .foregroundColor(.black.opacity(0.45))
         }
-        .onChange(of: selectedModel) { newValue in
+        .onChange(of: selectedModel) { oldValue, newValue in
             onSelectionChanged(newValue)
         }
     }
@@ -1530,6 +1626,192 @@ private extension LocalEngine {
     }
 }
 
+private extension SettingsView {
+    // MARK: - Data Management Functions
+    
+    func performExport() async {
+        isExporting = true
+        exportError = nil
+        
+        do {
+            // Collect all data to export
+            let sessions = SessionLogger.shared.loadSessions()
+            
+            // Get planner data if available
+            var plannerData: DataExport? = nil
+            let plannerDataStore = PlannerDataStore()
+            plannerData = try? await plannerDataStore.exportData()
+            
+            // Get preferences
+            let _ = UserPreferencesManager.shared
+            
+            // Create comprehensive export structure
+            struct FocusLockExport: Codable {
+                let sessions: [FocusSession]
+                let plannerData: DataExport?
+                let preferences: [String: AnyCodable]
+                let exportDate: Date
+                let version: String
+                
+                enum CodingKeys: String, CodingKey {
+                    case sessions, plannerData, preferences, exportDate, version
+                }
+                
+                init(sessions: [FocusSession], plannerData: DataExport?, preferences: [String: AnyCodable], exportDate: Date, version: String) {
+                    self.sessions = sessions
+                    self.plannerData = plannerData
+                    self.preferences = preferences
+                    self.exportDate = exportDate
+                    self.version = version
+                }
+                
+                init(from decoder: Decoder) throws {
+                    let container = try decoder.container(keyedBy: CodingKeys.self)
+                    sessions = try container.decode([FocusSession].self, forKey: .sessions)
+                    plannerData = try container.decodeIfPresent(DataExport.self, forKey: .plannerData)
+                    preferences = try container.decode([String: AnyCodable].self, forKey: .preferences)
+                    exportDate = try container.decode(Date.self, forKey: .exportDate)
+                    version = try container.decode(String.self, forKey: .version)
+                }
+                
+                func encode(to encoder: Encoder) throws {
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode(sessions, forKey: .sessions)
+                    try container.encodeIfPresent(plannerData, forKey: .plannerData)
+                    try container.encode(preferences, forKey: .preferences)
+                    try container.encode(exportDate, forKey: .exportDate)
+                    try container.encode(version, forKey: .version)
+                }
+            }
+            
+            // Use NSSavePanel to get save location
+            await MainActor.run {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+                let savePanel = NSSavePanel()
+                savePanel.allowedContentTypes = [.json]
+                savePanel.nameFieldStringValue = "FocusLockExport_\(dateFormatter.string(from: Date()))"
+                savePanel.title = "Export FocusLock Data"
+                savePanel.prompt = "Export"
+                
+                savePanel.begin { response in
+                    Task {
+                        if response == .OK, let url = savePanel.url {
+                            do {
+                                let encoder = JSONEncoder()
+                                encoder.dateEncodingStrategy = .iso8601
+                                encoder.outputFormatting = .prettyPrinted
+                                
+                                // Create a simplified export structure
+                                struct SimpleExport: Codable {
+                                    let sessions: [FocusSession]
+                                    let plannerData: DataExport?
+                                    let exportDate: Date
+                                    let version: String
+                                }
+                                
+                                let simpleExport = SimpleExport(
+                                    sessions: sessions,
+                                    plannerData: plannerData,
+                                    exportDate: Date(),
+                                    version: "1.0.0"
+                                )
+                                
+                                let data = try encoder.encode(simpleExport)
+                                try data.write(to: url)
+                                
+                                AnalyticsService.shared.capture("data_exported", ["format": "json"])
+                            } catch {
+                                await MainActor.run {
+                                    exportError = "Failed to export data: \(error.localizedDescription)"
+                                    showExportError = true
+                                }
+                            }
+                        }
+                        
+                        await MainActor.run {
+                            isExporting = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    func clearAnalytics() async {
+        // Clear AnalyticsService
+        AnalyticsService.shared.setOptIn(false)
+        
+        // Clear session logs
+        let sessions: [FocusSession] = []
+        if let encoded = try? JSONEncoder().encode(sessions) {
+            UserDefaults.standard.set(encoded, forKey: "FocusLockSessions")
+        }
+        UserDefaults.standard.removeObject(forKey: "FocusLockLastSummary")
+        
+        // Clear analytics keys
+        let analyticsKeys = [
+            "FocusLockAnalytics",
+            "FocusLockUsageHistory",
+            "analyticsOptIn",
+            "analyticsDistinctId"
+        ]
+        
+        for key in analyticsKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        
+        // Clear Keychain analytics ID if possible
+        _ = KeychainManager.shared.delete(for: "analyticsDistinctId")
+        
+        AnalyticsService.shared.capture("analytics_cleared")
+        
+        await MainActor.run {
+            analyticsEnabled = false
+        }
+    }
+    
+    func resetSettings() async {
+        // Reset UserPreferencesManager
+        UserPreferencesManager.shared.resetToDefaults()
+        
+        // Clear FocusLock-specific UserDefaults
+        let focusLockKeys = [
+            "FocusLockSettings",
+            "FocusLockUserPreferences",
+            "llmLocalBaseURL",
+            "llmLocalModelId",
+            "llmLocalEngine",
+            "geminiPromptOverrides",
+            "ollamaPromptOverrides"
+        ]
+        
+        for key in focusLockKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        
+        // Reload settings in UI
+        await MainActor.run {
+            loadCurrentProvider()
+            reloadLocalProviderSettings()
+            loadGeminiPromptOverridesIfNeeded()
+            loadOllamaPromptOverridesIfNeeded()
+        }
+        
+        AnalyticsService.shared.capture("settings_reset")
+    }
+    
+    static let storageOptions: [StorageLimitOption] = [
+        StorageLimitOption(id: 0, label: "1 GB", bytes: 1_000_000_000),
+        StorageLimitOption(id: 1, label: "2 GB", bytes: 2_000_000_000),
+        StorageLimitOption(id: 2, label: "3 GB", bytes: 3_000_000_000),
+        StorageLimitOption(id: 3, label: "5 GB", bytes: 5_000_000_000),
+        StorageLimitOption(id: 4, label: "10 GB", bytes: 10_000_000_000),
+        StorageLimitOption(id: 5, label: "20 GB", bytes: 20_000_000_000),
+        StorageLimitOption(id: 6, label: "Unlimited", bytes: nil)
+    ]
+}
+
 private struct StorageLimitOption: Identifiable {
     let id: Int
     let label: String
@@ -1540,18 +1822,6 @@ private struct StorageLimitOption: Identifiable {
         if bytes == nil { return "∞" }
         return label.replacingOccurrences(of: " GB", with: "")
     }
-}
-
-private extension SettingsView {
-    static let storageOptions: [StorageLimitOption] = [
-        StorageLimitOption(id: 0, label: "1 GB", bytes: 1_000_000_000),
-        StorageLimitOption(id: 1, label: "2 GB", bytes: 2_000_000_000),
-        StorageLimitOption(id: 2, label: "3 GB", bytes: 3_000_000_000),
-        StorageLimitOption(id: 3, label: "5 GB", bytes: 5_000_000_000),
-        StorageLimitOption(id: 4, label: "10 GB", bytes: 10_000_000_000),
-        StorageLimitOption(id: 5, label: "20 GB", bytes: 20_000_000_000),
-        StorageLimitOption(id: 6, label: "Unlimited", bytes: nil)
-    ]
 }
 
 private enum StorageCategory {

@@ -37,15 +37,14 @@ struct JournalTemplateView: View {
                 .padding()
             }
             .navigationTitle("Choose Template")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     Button("Cancel") {
                         dismiss()
                     }
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         dismiss()
                     }
@@ -60,12 +59,12 @@ struct JournalTemplateView: View {
     private var headerSection: some View {
         VStack(spacing: 12) {
             Text("Select Your Journal Style")
-                .font(.title2)
-                .fontWeight(.semibold)
+                .font(.custom("InstrumentSerif-Regular", size: 24))
+                .foregroundColor(.black)
 
             Text("Choose a template that matches your reflection style and goals")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.custom("Nunito", size: 14))
+                .foregroundColor(.black.opacity(0.6))
                 .multilineTextAlignment(.center)
         }
     }
@@ -84,45 +83,58 @@ struct JournalTemplateView: View {
     }
 
     private func templateCard(_ template: JournalTemplate) -> some View {
-        VStack(spacing: 12) {
-            // Template Icon
-            Image(systemName: template.systemImage)
-                .font(.system(size: 32))
-                .foregroundColor(selectedTemplate == template ? .white : template.primaryColor)
-                .frame(width: 60, height: 60)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(selectedTemplate == template ? template.primaryColor : template.primaryColor.opacity(0.1))
-                )
-
-            // Template Name
-            Text(template.displayName)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(selectedTemplate == template ? .white : .primary)
-
-            // Template Description
-            Text(template.description)
-                .font(.caption)
-                .foregroundColor(selectedTemplate == template ? .white.opacity(0.9) : .secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
+        let isSelected = selectedTemplate == template
+        
+        return VStack(spacing: 12) {
+            templateIcon(template, isSelected: isSelected)
+            templateName(template, isSelected: isSelected)
+            templateDescription(template, isSelected: isSelected)
         }
         .padding(16)
         .frame(height: 180)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(selectedTemplate == template ? template.primaryColor : Color.gray.opacity(0.05))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(selectedTemplate == template ? template.primaryColor : Color.clear, lineWidth: 2)
-        )
-        .scaleEffect(selectedTemplate == template ? 1.05 : 1.0)
+        .background(cardBackground(template, isSelected: isSelected))
+        .overlay(cardBorder(template, isSelected: isSelected))
+        .scaleEffect(isSelected ? 1.05 : 1.0)
         .animation(.spring(response: 0.3), value: selectedTemplate)
         .onTapGesture {
             selectedTemplate = template
         }
+    }
+    
+    private func templateIcon(_ template: JournalTemplate, isSelected: Bool) -> some View {
+        Image(systemName: template.icon)
+            .font(.system(size: 32))
+            .foregroundColor(isSelected ? .white : template.primaryColor)
+            .frame(width: 60, height: 60)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(isSelected ? template.primaryColor : template.primaryColor.opacity(0.1))
+            )
+    }
+    
+    private func templateName(_ template: JournalTemplate, isSelected: Bool) -> some View {
+        Text(template.displayName)
+            .font(.custom("Nunito", size: 16))
+            .fontWeight(.semibold)
+            .foregroundColor(isSelected ? .white : .black)
+    }
+    
+    private func templateDescription(_ template: JournalTemplate, isSelected: Bool) -> some View {
+        Text(template.templateDescription)
+            .font(.custom("Nunito", size: 11))
+            .foregroundColor(isSelected ? .white.opacity(0.9) : .black.opacity(0.6))
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+    }
+    
+    private func cardBackground(_ template: JournalTemplate, isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 16)
+            .fill(isSelected ? template.primaryColor : Color.gray.opacity(0.05))
+    }
+    
+    private func cardBorder(_ template: JournalTemplate, isSelected: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 16)
+            .stroke(isSelected ? template.primaryColor : Color.clear, lineWidth: 2)
     }
 
     // MARK: - Template Details Section
@@ -130,8 +142,9 @@ struct JournalTemplateView: View {
     private var templateDetailsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("About This Template")
-                .font(.headline)
+                .font(.custom("Nunito", size: 16))
                 .fontWeight(.semibold)
+                .foregroundColor(.black)
 
             VStack(alignment: .leading, spacing: 12) {
                 detailRow(
@@ -153,26 +166,28 @@ struct JournalTemplateView: View {
                 )
             }
         }
-        .padding()
-        .background(Color.gray.opacity(0.05))
+        .padding(20)
+        .background(Color.white)
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func detailRow(icon: String, title: String, description: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
-                .font(.subheadline)
-                .foregroundColor(selectedTemplate.primaryColor)
+                .font(.custom("Nunito", size: 14))
+                .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.custom("Nunito", size: 14))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black)
 
                 Text(description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.6))
             }
 
             Spacer()
@@ -234,7 +249,9 @@ struct JournalTemplateView: View {
     }
 
     private func lengthButton(_ length: JournalLength) -> some View {
-        Button(action: { preferences.length = length }) {
+        Button {
+            preferences.lengthPreference = length
+        } label: {
             Text(length.displayName)
                 .font(.caption)
                 .fontWeight(.medium)
@@ -242,9 +259,9 @@ struct JournalTemplateView: View {
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(preferences.length == length ? selectedTemplate.primaryColor : Color.gray.opacity(0.1))
+                        .fill(preferences.lengthPreference == length ? selectedTemplate.primaryColor : Color.gray.opacity(0.1))
                 )
-                .foregroundColor(preferences.length == length ? .white : .primary)
+                .foregroundColor(preferences.lengthPreference == length ? .white : .primary)
         }
     }
 
@@ -265,17 +282,19 @@ struct JournalTemplateView: View {
     }
 
     private func toneButton(_ tone: JournalTone) -> some View {
-        Button(action: { preferences.tone = tone }) {
-            Text(tone.displayName)
+        Button {
+            preferences.tonePreference = tone
+        } label: {
+            Text(tone.description)
                 .font(.caption)
                 .fontWeight(.medium)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(preferences.tone == tone ? selectedTemplate.primaryColor : Color.gray.opacity(0.1))
+                        .fill(preferences.tonePreference == tone ? selectedTemplate.primaryColor : Color.gray.opacity(0.1))
                 )
-                .foregroundColor(preferences.tone == tone ? .white : .primary)
+                .foregroundColor(preferences.tonePreference == tone ? .white : .primary)
         }
     }
 
@@ -292,14 +311,14 @@ struct JournalTemplateView: View {
                 GridItem(.flexible()),
                 GridItem(.flexible())
             ], spacing: 8) {
-                ForEach(FocusArea.allCases, id: \.self) { area in
+                ForEach(JournalFocusArea.allCases, id: \.self) { area in
                     focusAreaButton(area)
                 }
             }
         }
     }
 
-    private func focusAreaButton(_ area: FocusArea) -> some View {
+    private func focusAreaButton(_ area: JournalFocusArea) -> some View {
         Button(action: {
             if preferences.focusAreas.contains(area) {
                 preferences.focusAreas.removeAll { $0 == area }
@@ -374,35 +393,52 @@ struct JournalTemplateView: View {
             Button(action: {
                 showingPreview = true
             }) {
-                HStack {
+                HStack(spacing: 8) {
                     Image(systemName: "eye")
                     Text("Preview Template")
                         .fontWeight(.semibold)
                 }
-                .font(.headline)
-                .foregroundColor(selectedTemplate.primaryColor)
+                .font(.custom("Nunito", size: 16))
+                .foregroundColor(.black)
                 .frame(maxWidth: .infinity)
-                .padding()
-                .background(selectedTemplate.primaryColor.opacity(0.1))
+                .frame(height: 56)
+                .background(
+                    ZStack {
+                        Color.white.opacity(0.69)
+                        LinearGradient(
+                            stops: [
+                                Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
+                                Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                            ],
+                            startPoint: UnitPoint(x: 1.15, y: 3.61),
+                            endPoint: UnitPoint(x: 0.02, y: 0)
+                        )
+                    }
+                )
                 .cornerRadius(12)
+                .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: 1)
             }
+            .buttonStyle(PlainButtonStyle())
 
             Button(action: {
                 // Save preferences and dismiss
                 dismiss()
             }) {
-                HStack {
+                HStack(spacing: 8) {
                     Image(systemName: "checkmark")
                     Text("Apply Template")
                         .fontWeight(.semibold)
                 }
-                .font(.headline)
+                .font(.custom("Nunito", size: 16))
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
-                .padding()
-                .background(selectedTemplate.primaryColor)
+                .frame(height: 56)
+                .background(Color(red: 1, green: 0.42, blue: 0.02))
                 .cornerRadius(12)
+                .shadow(color: .black.opacity(0.25), radius: 0.5, x: 0, y: 0.5)
+                .shadow(color: .black.opacity(0.16), radius: 1, x: 0, y: 1)
             }
+            .buttonStyle(PlainButtonStyle())
         }
     }
 }
@@ -412,34 +448,23 @@ struct JournalTemplateView: View {
 extension JournalTemplate {
     var primaryColor: Color {
         switch self {
-        case .reflective: return .blue
-        case .achievement: return .yellow
-        case .gratitude: return .pink
-        case .growth: return .green
-        case .comprehensive: return .purple
-        case .custom: return .orange
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .reflective:
-            return "Deep introspection and personal insights through thoughtful reflection on daily experiences."
-        case .achievement:
-            return "Celebrate wins and track progress with focus on accomplishments and positive outcomes."
-        case .gratitude:
-            return "Cultivate appreciation by focusing on positive aspects and moments of thankfulness."
-        case .growth:
-            return "Emphasize learning, development, and personal growth through challenges and insights."
-        case .comprehensive:
-            return "Balanced overview covering achievements, challenges, learning, and emotional insights."
-        case .custom:
-            return "Tailored journal experience based on your unique preferences and goals."
+        case .concise: return Color(red: 0.62, green: 0.44, blue: 0.36)
+        case .balanced: return Color(red: 1, green: 0.42, blue: 0.02)
+        case .detailed: return Color(red: 0.62, green: 0.44, blue: 0.36)
+        case .reflective: return Color(red: 1, green: 0.42, blue: 0.02)
+        case .achievement: return Color(red: 1, green: 0.77, blue: 0.34)
+        case .gratitude: return Color(red: 0.62, green: 0.44, blue: 0.36)
+        case .growth: return Color(red: 1, green: 0.42, blue: 0.02)
+        case .comprehensive: return Color(red: 0.62, green: 0.44, blue: 0.36)
+        case .custom: return Color(red: 1, green: 0.42, blue: 0.02)
         }
     }
 
     var focus: String {
         switch self {
+        case .concise: return "Quick summary"
+        case .balanced: return "Balanced overview"
+        case .detailed: return "Comprehensive details"
         case .reflective: return "Self-discovery and insight"
         case .achievement: return "Successes and accomplishments"
         case .gratitude: return "Appreciation and positivity"
@@ -451,6 +476,9 @@ extension JournalTemplate {
 
     var bestFor: String {
         switch self {
+        case .concise: return "Quick daily check-ins"
+        case .balanced: return "Balanced daily reflection"
+        case .detailed: return "Thorough life documentation"
         case .reflective: return "Deep thinkers and introspective users"
         case .achievement: return "Goal-oriented and motivated individuals"
         case .gratitude: return "Those seeking positive mindset"
@@ -462,6 +490,12 @@ extension JournalTemplate {
 
     var keyFeatures: [String] {
         switch self {
+        case .concise:
+            return ["Brief summary", "Key highlights only", "Quick capture"]
+        case .balanced:
+            return ["Balanced perspective", "Key moments", "Moderate detail"]
+        case .detailed:
+            return ["Comprehensive review", "Detailed analysis", "Full documentation"]
         case .reflective:
             return ["Thoughtful questions", "Pattern recognition", "Self-discovery prompts"]
         case .achievement:

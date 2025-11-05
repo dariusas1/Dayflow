@@ -7,7 +7,7 @@
 //
 
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 import AppKit
 
 final class FilmstripGenerator {
@@ -49,7 +49,7 @@ final class FilmstripGenerator {
 
         guard shouldStart else { return }
 
-        queue.addOperation { [weak self] in
+        queue.addOperation(BlockOperation { [weak self] in
             guard let self = self else { return }
             let asset = AVAsset(url: url)
 
@@ -65,7 +65,7 @@ final class FilmstripGenerator {
                     }
 
                     let duration = try await asset.load(.duration)
-                    if duration.isNaN || duration.isInfinite || duration <= 0 {
+                    if !CMTIME_IS_VALID(duration) || CMTimeGetSeconds(duration) <= 0 {
                         await MainActor.run {
                             self.finish(key: key, frameCount: frameCount, images: [])
                         }
@@ -82,8 +82,8 @@ final class FilmstripGenerator {
                     }
                 }
         }
-    }
-  }
+    })
+}
 
     private func generateFrames(asset: AVAsset, key: String, frameCount: Int, targetHeight: Double) {
         Task {
@@ -271,7 +271,7 @@ struct ScrubberView: View {
                     }
                     .frame(width: stripWidth, alignment: .leading)
                     .clipped() // cut last thumbnail at bounds
-                    .onChange(of: columnsNeeded) { newValue in
+                    .onChange(of: columnsNeeded) { _, newValue in
                         generateFilmstripIfNeeded(count: newValue)
                     }
                     .onAppear { generateFilmstripIfNeeded(count: columnsNeeded) }

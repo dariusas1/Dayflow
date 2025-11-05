@@ -86,9 +86,11 @@ public struct PerformanceTestResult: Codable {
     }
 }
 
+extension PerformanceTestResult: @unchecked Sendable {}
+
 // MARK: - Performance Test Report
 
-public struct PerformanceTestReport: Codable {
+public struct PerformanceTestReport: Codable, Sendable {
     public let timestamp: Date
     public let passRate: Double
     public let totalTests: Int

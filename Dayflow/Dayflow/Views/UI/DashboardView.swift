@@ -54,113 +54,118 @@ struct DashboardView: View {
     )
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // Header
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Dashboard")
-                            .font(.custom("InstrumentSerif-Regular", size: 42))
-                            .foregroundColor(.black)
+        VStack(spacing: 0) {
+            // Header - matching MainView style
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    Text("Dashboard")
+                        .font(.custom("InstrumentSerif-Regular", size: 36))
+                        .foregroundColor(.black)
 
-                        Spacer()
+                    Spacer()
 
-                        HStack(spacing: 12) {
-                            // Customization button
-                            Button(action: { showingCustomization = true }) {
-                                Image(systemName: "slider.horizontal.3")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(.black)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .help("Customize Dashboard")
-
-                            // Refresh button
-                            Button(action: refreshData) {
-                                Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundColor(.gray)
-                                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                                    .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .help("Refresh Data")
+                    HStack(spacing: 12) {
+                        // Customization button
+                        Button(action: { showingCustomization = true }) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.black)
                         }
+                        .buttonStyle(PlainButtonStyle())
+                        .help("Customize Dashboard")
+
+                        // Refresh button
+                        Button(action: refreshData) {
+                            Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.gray)
+                                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                                .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .help("Refresh Data")
                     }
+                }
 
-                    // Search bar
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
-                            .font(.system(size: 14))
+                // Search bar - matching MainView input style
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                        .font(.system(size: 14))
 
-                        TextField("Ask about your productivity...", text: $searchText)
-                            .textFieldStyle(PlainTextFieldStyle())
-                            .font(.custom("Nunito", size: 14))
-                            .onSubmit {
-                                handleSearch()
-                            }
-
-                        if !searchText.isEmpty {
-                            Button(action: { searchText = "" }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.gray)
-                                    .font(.system(size: 14))
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                    TextField("Ask about your productivity...", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .font(.custom("Nunito", size: 14))
+                        .onSubmit {
+                            handleSearch()
                         }
+
+                    if !searchText.isEmpty {
+                        Button(action: { searchText = "" }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                                .font(.system(size: 14))
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color.white)
-                    .cornerRadius(10)
-                    .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
                 }
-                .padding(.horizontal)
-                .padding(.top, 12)
-
-                // Tab selector
-                DashboardTabSelector(selectedTab: $selectedTab)
-
-                // Content based on selected tab
-                TabView(selection: $selectedTab) {
-                    // Overview Tab
-                    DashboardOverviewView(
-                        engine: dashboardEngine,
-                        configuration: $configuration,
-                        onInsightTap: { insight in
-                            showingInsightDetail = insight
-                        }
-                    )
-                    .tag(DashboardTab.overview)
-
-                    // Charts Tab
-                    DashboardChartsView(
-                        engine: dashboardEngine,
-                        configuration: configuration
-                    )
-                    .tag(DashboardTab.charts)
-
-                    // Insights Tab
-                    DashboardInsightsView(
-                        engine: dashboardEngine,
-                        onInsightTap: { insight in
-                            showingInsightDetail = insight
-                        }
-                    )
-                    .tag(DashboardTab.insights)
-
-                    // Trends Tab
-                    DashboardTrendsView(
-                        engine: dashboardEngine,
-                        configuration: configuration
-                    )
-                    .tag(DashboardTab.trends)
-                }
-                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white)
+                .cornerRadius(10)
+                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
             }
-            .background(Color(.systemGroupedBackground))
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            // Tab selector
+            DashboardTabSelector(selectedTab: $selectedTab)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+
+            // Content based on selected tab with smooth transitions
+            ZStack {
+                Group {
+                    if selectedTab == .overview {
+                        DashboardOverviewView(
+                            engine: dashboardEngine,
+                            configuration: $configuration,
+                            onInsightTap: { insight in
+                                showingInsightDetail = insight
+                            }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    } else if selectedTab == .charts {
+                        DashboardChartsView(
+                            engine: dashboardEngine,
+                            configuration: configuration
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    } else if selectedTab == .insights {
+                        DashboardInsightsView(
+                            engine: dashboardEngine,
+                            onInsightTap: { insight in
+                                showingInsightDetail = insight
+                            }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    } else if selectedTab == .trends {
+                        DashboardTrendsView(
+                            engine: dashboardEngine,
+                            configuration: configuration
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    }
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: selectedTab)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             dashboardEngine.startAutoRefresh()
             initializeAvailableWidgets()
@@ -354,27 +359,42 @@ struct DashboardTabSelector: View {
     @Binding var selectedTab: DashboardTab
 
     var body: some View {
+        tabSelectorContent
+    }
+    
+    private var tabSelectorContent: some View {
         HStack(spacing: 0) {
             ForEach(DashboardTab.allCases, id: \.self) { tab in
-                Button(action: { selectedTab = tab }) {
-                    VStack(spacing: 6) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
-                            .foregroundColor(selectedTab == tab ? .black : .gray)
-
-                        Text(tab.rawValue)
-                            .font(.custom("Nunito", size: 12, weight: selectedTab == tab ? .semibold : .regular))
-                            .foregroundColor(selectedTab == tab ? .black : .gray)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-                .buttonStyle(PlainButtonStyle())
+                tabButton(for: tab)
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 12)
         .background(Color.white)
-        .shadow(color: .black.opacity(0.05), radius: 1, x: 0, y: 1)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    private func tabButton(for tab: DashboardTab) -> some View {
+        Button(action: { 
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedTab = tab
+            }
+        }) {
+            VStack(spacing: 6) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
+                    .foregroundColor(selectedTab == tab ? Color(red: 0.62, green: 0.44, blue: 0.36) : .gray)
+
+                Text(tab.rawValue)
+                    .font(.custom("Nunito", size: 12))
+                    .fontWeight(selectedTab == tab ? .semibold : .regular)
+                    .foregroundColor(selectedTab == tab ? Color(red: 0.62, green: 0.44, blue: 0.36) : .gray)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(selectedTab == tab ? Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
@@ -387,8 +407,8 @@ struct DashboardOverviewView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 20) {
-                // Customizable widget grid
+            LazyVStack(spacing: 18) {
+                // Customizable widget grid with staggered animations
                 CustomizableWidgetGrid(
                     widgets: configuration.widgets,
                     engine: engine,
@@ -413,8 +433,11 @@ struct DashboardOverviewView: View {
                     recommendations: engine.recommendations
                 )
             }
-            .padding()
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -440,13 +463,8 @@ struct DashboardInsightsView: View {
                 insights: engine.insights,
                 recommendations: engine.recommendations,
                 trends: engine.trends,
-                configuration: DashboardConfiguration(
-                widgets: [],
-                theme: .default,
-                layout: .default,
-                preferences: .default.updating(timeRange: .week, showDetailedAnalysis: true)
+                showDetailedAnalysis: true
             )
-        )
     }
 }
 
@@ -478,14 +496,33 @@ struct DashboardTrendsView: View {
 
 struct KeyMetricsRow: View {
     @ObservedObject var engine: DashboardEngine
+    @State private var windowWidth: CGFloat = 1200
 
     var body: some View {
-        LazyVGrid(columns: [
-            GridItem(.flexible()),
-            GridItem(.flexible()),
-            GridItem(.flexible()),
-            GridItem(.flexible())
-        ], spacing: 12) {
+        GeometryReader { geometry in
+            let columns: [GridItem] = {
+                if geometry.size.width > 1200 {
+                    return [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ]
+                } else if geometry.size.width > 800 {
+                    return [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ]
+                } else {
+                    return [
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ]
+                }
+            }()
+            
+            LazyVGrid(columns: columns, spacing: geometry.size.width > 800 ? 16 : 12) {
             MetricCard(
                 title: "Focus Time",
                 value: formatFocusTime(engine.metrics.filter { $0.category == .focusTime }.reduce(0, { $0 + $1.value })),
@@ -515,8 +552,15 @@ struct KeyMetricsRow: View {
                 value: "\(engine.insights.count)",
                 icon: "lightbulb.fill",
                 color: .purple,
-                trend: .neutral
+                trend: .stable
             )
+            }
+            .onAppear {
+                windowWidth = geometry.size.width
+            }
+            .onChange(of: geometry.size.width) { oldValue, newValue in
+                windowWidth = newValue
+            }
         }
     }
 
@@ -530,8 +574,17 @@ struct KeyMetricsRow: View {
         return String(format: "%.0f%%", value * 100)
     }
 
-    private func getTrendForMetric(_ category: MetricCategory, trends: [TrendData]) -> TrendDirection {
-        return trends.first { $0.metricName.contains(category.rawValue) }?.trendDirection ?? .neutral
+    private func getTrendForMetric(_ category: ProductivityMetric.MetricCategory, trends: [TrendData]) -> TrendData.TrendDirection {
+        return trends.first { $0.metricName.contains(category.rawValue) }?.trendDirection ?? .stable
+    }
+    
+    private func convertPriority(_ priority: PlannerPriority) -> Recommendation.Priority {
+        switch priority {
+        case .low: return .low
+        case .medium: return .medium
+        case .high: return .high
+        case .critical: return .urgent
+        }
     }
 }
 
@@ -540,59 +593,73 @@ struct MetricCard: View {
     let value: String
     let icon: String
     let color: Color
-    let trend: TrendDirection
+    let trend: TrendData.TrendDirection
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundColor(color)
+        UnifiedCard(padding: 16, cornerRadius: 12) {
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: icon)
+                        .font(.system(size: 16))
+                        .foregroundColor(color)
 
-                Spacer()
+                    Spacer()
 
-                HStack(spacing: 2) {
-                    Image(systemName: trend.arrow)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(trend.color)
+                    HStack(spacing: 2) {
+                        Image(systemName: trend.arrow)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(trend.color)
+                    }
                 }
+
+                Text(value)
+                    .font(.custom("Nunito", size: 20))
+                    .fontWeight(.bold)
+                    .foregroundColor(.black)
+
+                Text(title)
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.gray)
             }
-
-            Text(value)
-                .font(.custom("Nunito", size: 20))
-                .fontWeight(.bold)
-                .foregroundColor(.black)
-
-            Text(title)
-                .font(.custom("Nunito", size: 12))
-                .foregroundColor(.gray)
         }
-        .padding(12)
-        .background(Color.white)
-        .cornerRadius(10)
-        .shadow(color: .black.opacity(0.05), radius: 3, x: 0, y: 1)
     }
 }
 
 struct QuickInsightsSection: View {
     let insights: [ProductivityInsight]
     let onInsightTap: (ProductivityInsight) -> Void
+    
+    @State private var windowWidth: CGFloat = 1200
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Insights")
-                .font(.custom("InstrumentSerif-Regular", size: 24))
-                .foregroundColor(.black)
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: 12) {
+                UnifiedSectionHeader(title: "Quick Insights", fontSize: 24)
 
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 12) {
-                ForEach(insights.prefix(4), id: \.id) { insight in
-                    MiniInsightCard(insight: insight, onTap: { onInsightTap(insight) })
+                LazyVGrid(
+                    columns: windowWidth > 800 ? [
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ] : [
+                        GridItem(.flexible())
+                    ],
+                    spacing: windowWidth > 800 ? 16 : 12
+                ) {
+                    ForEach(Array(insights.prefix(4).enumerated()), id: \.element.id) { index, insight in
+                        AnimatedCard(index: index, animationDelay: 0.1) {
+                            MiniInsightCard(insight: insight, onTap: { onInsightTap(insight) })
+                        }
+                    }
                 }
             }
+            .onAppear {
+                windowWidth = geometry.size.width
+            }
+            .onChange(of: geometry.size.width) { oldValue, newValue in
+                windowWidth = newValue
+            }
         }
+        .frame(height: nil)
     }
 }
 
@@ -601,32 +668,30 @@ struct MiniInsightCard: View {
     let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: insight.icon)
-                .font(.system(size: 16))
-                .foregroundColor(insight.color)
+        UnifiedCard(padding: 12, cornerRadius: 10, hoverEnabled: true) {
+            HStack(spacing: 8) {
+                Image(systemName: insight.icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(insight.color)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(insight.title)
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.medium)
-                    .foregroundColor(.black)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(insight.title)
+                        .font(.custom("Nunito", size: 14))
+                        .fontWeight(.medium)
+                        .foregroundColor(.black)
+                        .lineLimit(1)
 
-                Text(insight.description)
-                    .font(.custom("Nunito", size: 11))
-                    .foregroundColor(.gray)
-                    .lineLimit(2)
+                    Text(insight.description)
+                        .font(.custom("Nunito", size: 11))
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                PriorityIndicator(priority: insight.recommendationPriority)
             }
-
-            Spacer()
-
-            PriorityIndicator(priority: insight.priority)
         }
-        .padding(12)
-        .background(Color.white)
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .onTapGesture {
             onTap()
         }
@@ -638,9 +703,7 @@ struct RecentTrendsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Recent Trends")
-                .font(.custom("InstrumentSerif-Regular", size: 24))
-                .foregroundColor(.black)
+            UnifiedSectionHeader(title: "Recent Trends", fontSize: 24)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
@@ -659,9 +722,7 @@ struct TopRecommendationsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Top Recommendations")
-                .font(.custom("InstrumentSerif-Regular", size: 24))
-                .foregroundColor(.black)
+            UnifiedSectionHeader(title: "Top Recommendations", fontSize: 24)
 
             VStack(spacing: 8) {
                 ForEach(recommendations.prefix(3), id: \.id) { recommendation in
@@ -676,32 +737,39 @@ struct MiniRecommendationCard: View {
     let recommendation: Recommendation
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: recommendation.icon)
-                .font(.system(size: 16))
-                .foregroundColor(recommendation.color)
+        UnifiedCard(padding: 12, cornerRadius: 10, hoverEnabled: true) {
+            HStack(spacing: 10) {
+                Image(systemName: recommendation.category.icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(recommendation.category.color)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(recommendation.title)
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.medium)
-                    .foregroundColor(.black)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(recommendation.title)
+                        .font(.custom("Nunito", size: 14))
+                        .fontWeight(.medium)
+                        .foregroundColor(.black)
+                        .lineLimit(1)
 
-                Text(recommendation.description)
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(.gray)
-                    .lineLimit(1)
+                    Text(recommendation.description)
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.gray)
+                        .lineLimit(1)
+                }
+
+                Spacer()
+
+                PriorityIndicator(priority: MiniRecommendationCard.convertPriority(recommendation.priority))
             }
-
-            Spacer()
-
-            PriorityIndicator(priority: recommendation.priority)
         }
-        .padding(12)
-        .background(Color.white)
-        .cornerRadius(8)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+    }
+    
+    static func convertPriority(_ priority: PlannerPriority) -> Recommendation.Priority {
+        switch priority {
+        case .low: return .low
+        case .medium: return .medium
+        case .high: return .high
+        case .critical: return .urgent
+        }
     }
 }
 
@@ -711,9 +779,7 @@ struct MiniChartsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Productivity Overview")
-                .font(.custom("InstrumentSerif-Regular", size: 24))
-                .foregroundColor(.black)
+            UnifiedSectionHeader(title: "Productivity Overview", fontSize: 24)
 
             LazyVGrid(columns: [
                 GridItem(.flexible()),
@@ -735,22 +801,37 @@ struct MiniChartsSection: View {
 
 struct TrendSummarySection: View {
     let trends: [TrendData]
+    @State private var windowWidth: CGFloat = 1200
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Trend Summary")
-                .font(.custom("InstrumentSerif-Regular", size: 28))
-                .foregroundColor(.black)
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: windowWidth > 800 ? 18 : 16) {
+                UnifiedSectionHeader(title: "Trend Summary", fontSize: windowWidth > 800 ? 28 : 24)
 
-            LazyVGrid(columns: [
-                GridItem(.flexible()),
-                GridItem(.flexible())
-            ], spacing: 16) {
-                ForEach(trends, id: \.id) { trend in
-                    TrendSummaryCard(trend: trend)
+                LazyVGrid(
+                    columns: windowWidth > 800 ? [
+                        GridItem(.flexible()),
+                        GridItem(.flexible())
+                    ] : [
+                        GridItem(.flexible())
+                    ],
+                    spacing: windowWidth > 800 ? 16 : 12
+                ) {
+                    ForEach(Array(trends.enumerated()), id: \.element.id) { index, trend in
+                        AnimatedCard(index: index, animationDelay: 0.1) {
+                            TrendSummaryCard(trend: trend)
+                        }
+                    }
                 }
             }
+            .onAppear {
+                windowWidth = geometry.size.width
+            }
+            .onChange(of: geometry.size.width) { oldValue, newValue in
+                windowWidth = newValue
+            }
         }
+        .frame(height: nil)
     }
 }
 
@@ -777,7 +858,7 @@ struct TrendSummaryCard: View {
                 }
             }
 
-            Text(trend.period)
+            Text(trend.metricName)
                 .font(.custom("Nunito", size: 14))
                 .foregroundColor(.gray)
 
@@ -792,13 +873,13 @@ struct TrendSummaryCard: View {
                         .fontWeight(.medium)
                         .foregroundColor(.black)
 
-                    ForEach(trend.insights.prefix(2), id: \.self) { insight in
+                    ForEach(trend.insights.prefix(2), id: \.id) { insight in
                         HStack {
                             Circle()
                                 .fill(trend.trendDirection.color)
                                 .frame(width: 4, height: 4)
 
-                            Text(insight)
+                            Text(insight.description)
                                 .font(.custom("Nunito", size: 12))
                                 .foregroundColor(.gray)
                                 .lineLimit(2)
@@ -809,10 +890,7 @@ struct TrendSummaryCard: View {
                 }
             }
         }
-        .padding(16)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 4, x: 0, y: 2)
+        .unifiedCardStyle()
     }
 }
 
@@ -870,7 +948,7 @@ private struct InfiniteScrollingBanner: View {
 
     var body: some View {
         GeometryReader { geo in
-            TimelineView(.animation) { timeline in
+            SwiftUI.TimelineView(.animation) { timeline in
                 let now = timeline.date.timeIntervalSinceReferenceDate
                 let elapsed = max(0, now - startTime)
 
@@ -917,22 +995,42 @@ struct CustomizableWidgetGrid: View {
     let widgets: [DashboardWidget]
     @ObservedObject var engine: DashboardEngine
     let onInsightTap: (ProductivityInsight) -> Void
-
-    private let columns = [
-        GridItem(.adaptive(minimum: 300), spacing: 16)
-    ]
+    
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @State private var windowWidth: CGFloat = 1200
+    
+    private var columns: [GridItem] {
+        // Responsive breakpoints
+        if windowWidth > 1400 {
+            return [GridItem(.adaptive(minimum: 350), spacing: 18)]
+        } else if windowWidth > 1000 {
+            return [GridItem(.adaptive(minimum: 300), spacing: 16)]
+        } else {
+            return [GridItem(.flexible(), spacing: 12)]
+        }
+    }
 
     var body: some View {
-        if widgets.isEmpty {
-            EmptyWidgetsView()
-        } else {
-            LazyVGrid(columns: columns, spacing: 16) {
-                ForEach(widgets) { widget in
-                    DashboardWidgetView(
-                        widget: widget,
-                        engine: engine,
-                        onInsightTap: onInsightTap
-                    )
+        GeometryReader { geometry in
+            if widgets.isEmpty {
+                EmptyWidgetsView()
+            } else {
+                LazyVGrid(columns: columns, spacing: windowWidth > 1000 ? 16 : 12) {
+                    ForEach(Array(widgets.enumerated()), id: \.element.id) { index, widget in
+                        AnimatedCard(index: index, animationDelay: 0.1) {
+                            DashboardWidgetView(
+                                widget: widget,
+                                engine: engine,
+                                onInsightTap: onInsightTap
+                            )
+                        }
+                    }
+                }
+                .onAppear {
+                    windowWidth = geometry.size.width
+                }
+                .onChange(of: geometry.size.width) { oldValue, newValue in
+                    windowWidth = newValue
                 }
             }
         }
@@ -1012,11 +1110,8 @@ struct DashboardWidgetView: View {
                 }
             }
         }
-        .padding(20)
+        .unifiedCardStyle(padding: 20, cornerRadius: 16, shadowRadius: 4, shadowOffset: CGSize(width: 0, height: 4))
         .frame(maxWidth: .infinity, minHeight: widget.size.height)
-        .background(Color.white)
-        .cornerRadius(16)
-        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
 }
 

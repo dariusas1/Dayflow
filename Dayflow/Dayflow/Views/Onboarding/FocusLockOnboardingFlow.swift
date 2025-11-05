@@ -12,6 +12,7 @@ struct FocusLockOnboardingFlow: View {
     @AppStorage("focusLockOnboardingStep") private var currentStepRawValue = 0
     @State private var currentStep: Step = .welcome
     @EnvironmentObject private var featureFlagManager: FeatureFlagManager
+    @Environment(\.dismiss) private var dismiss
 
     @ViewBuilder
     var body: some View {
@@ -89,6 +90,7 @@ struct FocusLockOnboardingFlow: View {
     private func completeOnboarding() {
         onboardingCompleted = true
         currentStepRawValue = 0
+        dismiss()
     }
 }
 

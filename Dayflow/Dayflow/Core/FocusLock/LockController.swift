@@ -23,8 +23,15 @@ public final class LockController: ObservableObject {
 
     // MARK: - Initialization
     private init() {
-        // ManagedSettings is iOS-only, so we skip authorization on macOS
+        // ⚠️ IMPORTANT: ManagedSettings framework is iOS-only
+        // On macOS, actual app blocking is not available through ManagedSettings.
+        // This implementation only tracks blocking state but does not enforce it.
+        // For macOS app blocking, alternative approaches would be needed:
+        // - Parental Controls API (requires admin privileges)
+        // - AppleScript/System Events (limited effectiveness)
+        // - Third-party blocking solutions integration
         print("[LockController] Initialized with simplified blocking (macOS compatible)")
+        print("[LockController] ⚠️ NOTE: App blocking is not functional on macOS - state tracking only")
     }
 
     // MARK: - Public Methods
@@ -35,7 +42,10 @@ public final class LockController: ObservableObject {
         blockingActive = true
 
         // Simplified blocking using NSWorkspace
+        // ⚠️ LIMITATION: On macOS, this only tracks state but doesn't actually block apps
+        // ManagedSettings framework is iOS-only, so actual blocking enforcement is not available
         print("[LockController] Simplified blocking applied for \(allowedApps.count) allowed apps")
+        print("[LockController] ⚠️ WARNING: Actual app blocking is not functional on macOS")
         print("[LockController] Note: Full app blocking requires ManagedSettings framework which is iOS-only")
     }
 

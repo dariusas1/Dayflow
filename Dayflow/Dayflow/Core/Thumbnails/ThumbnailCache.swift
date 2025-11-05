@@ -56,22 +56,24 @@ final class ThumbnailCache {
 
         queue.addOperation { [weak self] in
             guard let self = self else { return }
-            let t0 = CFAbsoluteTimeGetCurrent()
-            let image = self.generateThumbnail(urlString: normalizedURL, targetSize: targetSize)
+            Task {
+                _ = CFAbsoluteTimeGetCurrent()
+                let image = await self.generateThumbnail(urlString: normalizedURL, targetSize: targetSize)
 
-            if let image = image {
-                let cost = Int(max(1, image.size.width * image.size.height))
-                self.cache.setObject(image, forKey: key as NSString, cost: cost)
-            }
+                if let image = image {
+                    let cost = Int(max(1, image.size.width * image.size.height))
+                    self.cache.setObject(image, forKey: key as NSString, cost: cost)
+                }
 
-            var callbacks: [(NSImage?) -> Void] = []
-            self.syncQueue.sync {
-                callbacks = self.inflight[key] ?? []
-                self.inflight.removeValue(forKey: key)
-            }
+                var callbacks: [(NSImage?) -> Void] = []
+                self.syncQueue.sync {
+                    callbacks = self.inflight[key] ?? []
+                    self.inflight.removeValue(forKey: key)
+                }
 
-            DispatchQueue.main.async {
-                callbacks.forEach { $0(image) }
+                DispatchQueue.main.async {
+                    callbacks.forEach { $0(image) }
+                }
             }
         }
     }
@@ -105,7 +107,7 @@ final class ThumbnailCache {
         return (processed, nil)
     }
 
-    private func generateThumbnail(urlString: String, targetSize: CGSize) -> NSImage? {
+    private func generateThumbnail(urlString: String, targetSize: CGSize) async -> NSImage? {
         let url: URL
         if urlString.hasPrefix("file://") {
             // Build a proper file URL that tolerates spaces/special chars
@@ -132,7 +134,8 @@ final class ThumbnailCache {
         }
 
         // Prefer a representative mid-point (bounded) to avoid identical first frames
-        let durationSec = CMTimeGetSeconds(asset.duration)
+        let duration = try? await asset.load(.duration)
+        let durationSec = duration.map { CMTimeGetSeconds($0) } ?? 0
         let mid = max(0.5, min(5.0, durationSec / 2.0))
         let times: [CMTime] = [CMTime(seconds: mid, preferredTimescale: 600), CMTime(seconds: 1, preferredTimescale: 600), .zero]
         for t in times {

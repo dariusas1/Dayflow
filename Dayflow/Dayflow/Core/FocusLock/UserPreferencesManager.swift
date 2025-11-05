@@ -218,7 +218,7 @@ class UserPreferencesManager: ObservableObject {
 
     private func validateImportedPreferences(_ preferences: UserPreferences) -> Bool {
         // Validate that imported preferences are safe and compatible
-        return preferences.general.firstLaunchDate != nil &&
+        return preferences.general.firstLaunchDate.timeIntervalSince1970 > 0 &&
                preferences.focus.defaultSessionDuration > 0 &&
                preferences.focus.defaultSessionDuration <= 8 * 3600 // Max 8 hours
     }

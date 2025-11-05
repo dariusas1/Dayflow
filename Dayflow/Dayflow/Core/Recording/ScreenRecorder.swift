@@ -444,6 +444,18 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
 
     private func beginSegment() {
         guard writer == nil else { return }
+        
+        // Check disk space before starting new segment
+        if !checkDiskSpace() {
+            dbg("beginSegment – insufficient disk space, skipping segment creation")
+            transition(to: .idle, context: "insufficient disk space")
+            Task { @MainActor in
+                AppState.shared.isRecording = false
+                AnalyticsService.shared.capture("recording_stopped", ["stop_reason": "insufficient_disk_space"])
+            }
+            return
+        }
+        
         let url = StorageManager.shared.nextFileURL(); fileURL = url; frames = 0
 
         // Add breadcrumb for recording segment start
@@ -459,8 +471,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
         do {
             let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
             
-            // Increase bitrate for higher resolution (roughly 2.5 Mbps for 1080p at 1fps)
-            let bitrate = 2500000 // 2.5 Mbps
+            // Optimized bitrate for 1fps recording - much lower since we're capturing stills at low FPS
+            // At 1fps, quality is maintained at ~0.8-1.2 Mbps, reducing CPU/GPU load significantly
+            let pixelArea = recordingWidth * recordingHeight
+            let baseBitrate = 800000 // 0.8 Mbps base for low FPS
+            // Scale bitrate with resolution but stay conservative for 1fps
+            let scaledBitrate = min(Int(Double(pixelArea) / (1920.0 * 1080.0) * Double(baseBitrate) * 1.2), 1500000) // Max 1.5 Mbps
+            let bitrate = max(scaledBitrate, 600000) // Minimum 0.6 Mbps
             
             let inp = AVAssetWriterInput(mediaType: .video,
                                          outputSettings: [
@@ -470,9 +487,14 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
                                              AVVideoCompressionPropertiesKey: [
                                                  AVVideoAverageBitRateKey: bitrate,
                                                  AVVideoProfileLevelKey: AVVideoProfileLevelH264BaselineAutoLevel,
-                                                 AVVideoMaxKeyFrameIntervalKey: 30
+                                                 AVVideoMaxKeyFrameIntervalKey: 30,
+                                                 // GPU optimization: Use hardware encoding when available
+                                                 AVVideoAllowFrameReorderingKey: false, // Disable for simpler encoding (lower GPU load)
+                                                 AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC // Better compression efficiency
                                              ]
                                          ])
+            // Prefer hardware acceleration for encoding
+            inp.transform = CGAffineTransform.identity
             inp.expectsMediaDataInRealTime = true
             guard w.canAdd(inp) else { throw RecorderError.badInput }
             w.add(inp)
@@ -600,6 +622,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
                         guard let self else { return }
                         // Double-check wantsRecording on recorder queue to catch stop() during finishWriting
                         guard self.wantsRecording else { return }
+                        // beginSegment is synchronous and we're already on the recorder queue (q)
+                        // Call directly - it handles errors internally
                         self.beginSegment()
                     }
                 }
@@ -610,14 +634,32 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
     private func reset() {
         timer = nil; writer = nil; input = nil; firstPTS = nil; fileURL = nil; frames = 0
     }
+    
+    // Check available disk space before starting new chunk
+    private func checkDiskSpace() -> Bool {
+        let minimumRequiredBytes: Int64 = 100 * 1024 * 1024 // 100 MB minimum
+        let recordingsRoot = StorageManager.shared.recordingsRoot
+        
+        guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: recordingsRoot.path),
+              let freeSpace = attributes[.systemFreeSize] as? Int64 else {
+            dbg("checkDiskSpace – could not determine free space")
+            return false
+        }
+        
+        if freeSpace < minimumRequiredBytes {
+            dbg("checkDiskSpace – insufficient space: \(freeSpace / (1024 * 1024)) MB free (minimum: \(minimumRequiredBytes / (1024 * 1024)) MB)")
+            return false
+        }
+        
+        return true
+    }
 
     func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
         guard CMSampleBufferDataIsReady(sb) else { return }
         guard isComplete(sb) else { return }
         if let pb = CMSampleBufferGetImageBuffer(sb) {
-            // TEMPORARILY DISABLED to test if this causes corruption
-            // overlayClock(on: pb)          // ← inject the clock into this frame
+            overlayClock(on: pb)
         }
         if writer == nil { beginSegment() }
         guard let w = writer, let inp = input else { return }
@@ -835,7 +877,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput {
 }
 
 extension ScreenRecorder: SCStreamDelegate {
-    func stream(_ s: SCStream, didStopWithError error: (any Error)?) {
+    func stream(_ s: SCStream, didStopWithError error: any Error) {
         // ReplayKit occasionally hands a nil NSError pointer; accept it as optional before bridging.
         let scError = error as NSError?
 

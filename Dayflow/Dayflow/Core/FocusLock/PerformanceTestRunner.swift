@@ -8,6 +8,7 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 class PerformanceTestRunner: ObservableObject {
     static let shared = PerformanceTestRunner()
 
@@ -37,43 +38,37 @@ class PerformanceTestRunner: ObservableObject {
 
         let startTime = Date()
 
-        do {
-            // Run the validation
-            let report = await validator.runComprehensivePerformanceTests()
+        // Run the validation
+        let report = await validator.runComprehensivePerformanceTests()
 
-            // Update UI
-            currentTest = "Generating report..."
-            progress = 0.9
+        // Update UI
+        currentTest = "Generating report..."
+        progress = 0.9
 
-            // Simulate some reporting time
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        // Simulate some reporting time
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-            lastReport = report
-            currentTest = "\(name) completed"
-            progress = 1.0
+        lastReport = report
+        currentTest = "\(name) completed"
+        progress = 1.0
 
-            let durationTaken = Date().timeIntervalSince(startTime)
-            print("🚀 \(name) completed in \(String(format: "%.1f", durationTaken))s")
-            print("📊 Results: \(report.passedTests)/\(report.totalTests) tests passed")
-            print("💯 Pass rate: \(String(format: "%.1f", report.passRate * 100))%")
+        let durationTaken = Date().timeIntervalSince(startTime)
+        print("🚀 \(name) completed in \(String(format: "%.1f", durationTaken))s")
+        print("📊 Results: \(report.passedTests)/\(report.totalTests) tests passed")
+        print("💯 Pass rate: \(String(format: "%.1f", report.passRate * 100))%")
 
-            if !report.isHealthy {
-                print("⚠️  Critical failures detected:")
-                for failure in report.criticalFailures {
-                    print("   ❌ \(failure.testName): \(failure.error ?? "Performance threshold exceeded")")
-                }
+        if !report.isHealthy {
+            print("⚠️  Critical failures detected:")
+            for failure in report.criticalFailures {
+                print("   ❌ \(failure.testName): \(failure.error ?? "Performance threshold exceeded")")
             }
+        }
 
-            if !report.recommendations.isEmpty {
-                print("💡 Recommendations:")
-                for recommendation in report.recommendations.prefix(5) {
-                    print("   • \(recommendation)")
-                }
+        if !report.recommendations.isEmpty {
+            print("💡 Recommendations:")
+            for recommendation in report.recommendations.prefix(5) {
+                print("   • \(recommendation)")
             }
-
-        } catch {
-            currentTest = "Failed: \(error)"
-            print("❌ Performance validation failed: \(error)")
         }
 
         isRunning = false

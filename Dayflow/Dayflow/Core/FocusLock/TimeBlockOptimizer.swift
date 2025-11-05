@@ -98,37 +98,31 @@ class TimeBlockOptimizer: ObservableObject {
 
         logger.info("Starting time block optimization for \(tasks.count) tasks on \(date)")
 
-        do {
-            // Step 1: Analyze task constraints and dependencies
-            let taskAnalysis = analyzeTaskConstraints(tasks: tasks)
+        // Step 1: Analyze task constraints and dependencies
+        let taskAnalysis = analyzeTaskConstraints(tasks: tasks)
 
-            // Step 2: Generate initial time blocks based on energy patterns
-            var timeBlocks = generateInitialTimeBlocks(tasks: tasks, analysis: taskAnalysis, date: date, existingBlocks: existingBlocks)
+        // Step 2: Generate initial time blocks based on energy patterns
+        var timeBlocks = generateInitialTimeBlocks(tasks: tasks, analysis: taskAnalysis, date: date, existingBlocks: existingBlocks)
 
-            // Step 3: Apply constraint satisfaction
-            timeBlocks = await constraintSolver.solveConstraints(for: timeBlocks, tasks: tasks, date: date)
+        // Step 3: Apply constraint satisfaction
+        timeBlocks = await constraintSolver.solveConstraints(for: timeBlocks, tasks: tasks, date: date)
 
-            // Step 4: Optimize using energy patterns and historical data
-            timeBlocks = await optimizeWithEnergyPatterns(blocks: timeBlocks, tasks: tasks)
+        // Step 4: Optimize using energy patterns and historical data
+        timeBlocks = await optimizeWithEnergyPatterns(blocks: timeBlocks, tasks: tasks)
 
-            // Step 5: Apply adaptive learning from historical performance
-            timeBlocks = applyAdaptiveLearning(blocks: timeBlocks, tasks: tasks)
+        // Step 5: Apply adaptive learning from historical performance
+        timeBlocks = applyAdaptiveLearning(blocks: timeBlocks, tasks: tasks)
 
-            // Step 6: Apply productivity analysis insights
-            timeBlocks = applyProductivityInsights(blocks: timeBlocks, tasks: tasks)
+        // Step 6: Apply productivity analysis insights
+        timeBlocks = applyProductivityInsights(blocks: timeBlocks, tasks: tasks)
 
-            // Step 7: Validate and score the optimization
-            let score = calculateOptimizationScore(blocks: timeBlocks, tasks: tasks)
-            optimizationScore = score
-            lastOptimizationDate = Date()
+        // Step 7: Validate and score the optimization
+        let score = calculateOptimizationScore(blocks: timeBlocks, tasks: tasks)
+        optimizationScore = score
+        lastOptimizationDate = Date()
 
-            logger.info("Optimization completed with score: \(score)")
-            return timeBlocks
-
-        } catch {
-            logger.error("Optimization failed: \(error.localizedDescription)")
-            return existingBlocks
-        }
+        logger.info("Optimization completed with score: \(score)")
+        return timeBlocks
     }
 
     /// Update energy patterns based on new session data
@@ -309,8 +303,8 @@ class TimeBlockOptimizer: ObservableObject {
             // Then by deadline
             switch (task1.deadline, task2.deadline) {
             case (let d1?, let d2?): return d1 < d2
-            case (let d1?, nil): return true
-            case (nil, let d2?): return false
+            case (_?, nil): return true
+            case (nil, _?): return false
             case (nil, nil): break
             }
 
@@ -366,7 +360,6 @@ class TimeBlockOptimizer: ObservableObject {
     }
 
     private func findNextAvailableTime(from startTime: Date, duration: TimeInterval, existingBlocks: [TimeBlock]) -> Date {
-        let calendar = Calendar.current
         var candidateTime = startTime
 
         while true {
@@ -395,7 +388,6 @@ class TimeBlockOptimizer: ObservableObject {
     }
 
     private func isTimeSlotAvailable(_ startTime: Date, duration: TimeInterval) -> Bool {
-        let endTime = startTime.addingTimeInterval(duration)
         let calendar = Calendar.current
 
         // Check if within working hours (8 AM - 8 PM)
@@ -535,7 +527,7 @@ class TimeBlockOptimizer: ObservableObject {
 
         for (index, block) in adaptedBlocks.enumerated() {
             guard let taskID = block.taskID,
-                  let task = tasks.first(where: { $0.id == taskID }) else { continue }
+                  let _ = tasks.first(where: { $0.id == taskID }) else { continue }
 
             // Get relevant historical feedback
             let relevantFeedback = historicalPerformanceData.filter { feedback in
@@ -673,7 +665,7 @@ class TimeBlockOptimizer: ObservableObject {
         // Use neural network to predict optimal scheduling
         for (index, block) in optimizedBlocks.enumerated() {
             guard let taskID = block.taskID,
-                  let task = tasks.first(where: { $0.id == taskID }) else { continue }
+                  let _ = tasks.first(where: { $0.id == taskID }) else { continue }
 
             // Get neural network prediction for this task-time combination
             // Simplified prediction without neural network dependency
@@ -688,14 +680,15 @@ class TimeBlockOptimizer: ObservableObject {
                 var newBlock = block
 
                 // Adjust timing based on neural prediction
-                if let suggestedTime = prediction.optimalStartTime,
-                   prediction.confidence > 0.8 {
+                if prediction.confidence > 0.8 {
+                    let suggestedTime = prediction.optimalStartTime
                     newBlock.startTime = suggestedTime
                     newBlock.endTime = suggestedTime.addingTimeInterval(block.duration)
                 }
 
                 // Adjust duration based on predicted completion
-                if let predictedDuration = prediction.predictedDuration,
+                let predictedDuration = prediction.predictedDuration
+                if
                    abs(predictedDuration - block.duration) > (block.duration * 0.2) { // 20% difference
                     newBlock.endTime = newBlock.startTime.addingTimeInterval(predictedDuration)
                 }
@@ -997,7 +990,7 @@ class ConstraintSolver {
                 // If task starts before dependencies complete, reschedule it
                 if taskBlock.startTime < latestDependencyTime {
                     var newBlock = taskBlock
-                    let timeGap = latestDependencyTime.timeIntervalSince(taskBlock.startTime)
+                    let _ = latestDependencyTime.timeIntervalSince(taskBlock.startTime)
                     newBlock.startTime = latestDependencyTime.addingTimeInterval(300) // 5 min buffer
                     newBlock.endTime = newBlock.startTime.addingTimeInterval(taskBlock.duration)
                     resolvedBlocks[taskBlockIndex] = newBlock
@@ -1147,13 +1140,14 @@ struct ProductivityInsights {
     let optimalSequences: [[UUID]]
 
     func getOptimalTaskOrder(for time: Date) -> [UUID]? {
-        let hour = Calendar.current.component(.hour, from: time)
+        _ = Calendar.current.component(.hour, from: time)
         // Return sequence for current hour (simplified)
         return optimalSequences.first ?? nil
     }
 
     func calculateOptimalBuffer(for task: PlannerTask, at time: Date) -> TimeInterval {
         let hour = Calendar.current.component(.hour, from: time)
+        let _ = hour
         let productivity = productivityPatterns[hour] ?? 0.5
 
         if task.isFocusSessionProtected {

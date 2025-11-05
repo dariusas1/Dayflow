@@ -48,7 +48,7 @@ struct CanvasTimelineDataView: View {
             }
             .background(Color.clear)
             // Respond to external scroll nudges (initial or idle-triggered)
-            .onChange(of: scrollToNowTick) { _ in
+            .onChange(of: scrollToNowTick) { _, _ in
                 // Calculate which hour to scroll to for 80% positioning
                 let currentHour = Calendar.current.component(.hour, from: Date())
                 let hoursSince4AM = currentHour >= 4 ? currentHour - 4 : (24 - 4) + currentHour
@@ -58,7 +58,7 @@ struct CanvasTimelineDataView: View {
                 proxy.scrollTo("hour-\(targetHourIndex)", anchor: UnitPoint(x: 0, y: 0.25))
             }
             // Scroll once right after activities are first loaded and laid out
-            .onChange(of: positionedActivities.count) { _ in
+            .onChange(of: positionedActivities.count) { _, _ in
                 guard !didInitialScrollInView, timelineIsToday(selectedDate) else { return }
                 didInitialScrollInView = true
                 
@@ -85,7 +85,7 @@ struct CanvasTimelineDataView: View {
                 }
             }
             // When the selected date changes back to Today (e.g., after idle), also scroll
-            .onChange(of: selectedDate) { newDate in
+            .onChange(of: selectedDate) { _, newDate in
                 if timelineIsToday(newDate) {
                     didInitialScrollInView = false // allow the data-ready scroll to fire again
                     // Give the layout a moment to update before scrolling
@@ -112,7 +112,7 @@ struct CanvasTimelineDataView: View {
             loadTask?.cancel()
             loadTask = nil
         }
-        .onChange(of: selectedDate) { _ in
+        .onChange(of: selectedDate) { _, _ in
             loadActivities()
         }
     }
@@ -256,7 +256,7 @@ struct CanvasTimelineDataView: View {
                 .onAppear {
                     isBreathing = appState.isRecording
                 }
-                .onChange(of: appState.isRecording) { newValue in
+                .onChange(of: appState.isRecording) { _, newValue in
                     isBreathing = newValue
                 }
 
@@ -297,7 +297,7 @@ struct CanvasTimelineDataView: View {
             // Check for cancellation before expensive database read
             guard !Task.isCancelled else { return }
 
-            let timelineCards = await self.storageManager.fetchTimelineCards(forDay: dayString)
+            let timelineCards = self.storageManager.fetchTimelineCards(forDay: dayString)
             let activities = await self.processTimelineCards(timelineCards, for: timelineDate)
 
             // Check for cancellation before expensive processing
@@ -308,28 +308,31 @@ struct CanvasTimelineDataView: View {
             // upstream card-generation overlap bugs without touching stored data.
             let segments = await self.resolveOverlapsForDisplay(activities)
 
-            let positioned = await segments.map { seg -> CanvasPositionedActivity in
-                let y = self.calculateYPosition(for: seg.start)
-                // Card spacing: -2 total (1px top + 1px bottom)
-                let durationMinutes = max(0, seg.end.timeIntervalSince(seg.start) / 60)
-                let rawHeight = CGFloat(durationMinutes) * CanvasConfig.pixelsPerMinute
-                let height = max(10, rawHeight - 2)
-                let primaryHost = self.normalizeHost(seg.activity.appSites?.primary)
-                let secondaryHost = self.normalizeHost(seg.activity.appSites?.secondary)
+            // Compute main actor-isolated values before mapping
+            let positioned = await Task { @MainActor in
+                segments.map { seg -> CanvasPositionedActivity in
+                    let y = self.calculateYPosition(for: seg.start)
+                    // Card spacing: -2 total (1px top + 1px bottom)
+                    let durationMinutes = max(0, seg.end.timeIntervalSince(seg.start) / 60)
+                    let rawHeight = CGFloat(durationMinutes) * CanvasConfig.pixelsPerMinute
+                    let height = max(10, rawHeight - 2)
+                    let primaryHost = self.normalizeHost(seg.activity.appSites?.primary)
+                    let secondaryHost = self.normalizeHost(seg.activity.appSites?.secondary)
 
-                return CanvasPositionedActivity(
-                    id: seg.activity.id,
-                    activity: seg.activity,
-                    yPosition: y + 1, // 1px top spacing
-                    height: height,
-                    durationMinutes: durationMinutes,
-                    title: seg.activity.title,
-                    timeLabel: self.formatRange(start: seg.start, end: seg.end),
-                    categoryName: seg.activity.category,
-                    faviconPrimaryHost: primaryHost,
-                    faviconSecondaryHost: secondaryHost
-                )
-            }
+                    return CanvasPositionedActivity.init(
+                        id: seg.activity.id,
+                        activity: seg.activity,
+                        yPosition: y + 1, // 1px top spacing
+                        height: height,
+                        durationMinutes: durationMinutes,
+                        title: seg.activity.title,
+                        timeLabel: self.formatRange(start: seg.start, end: seg.end),
+                        categoryName: seg.activity.category,
+                        faviconPrimaryHost: primaryHost,
+                        faviconSecondaryHost: secondaryHost
+                    )
+                }
+            }.value
 
             // Final cancellation check before updating UI
             guard !Task.isCancelled else { return }
@@ -681,13 +684,13 @@ struct CanvasActivityCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, isFailedCard ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-        .background(isFailedCard ? Color(hex: "FFECE4") ?? Color.white : (Color(hex: "FFFBF8") ?? Color.white))
+        .background(isFailedCard ? Color(hex: "FFECE4") : Color(hex: "FFFBF8"))
         .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .inset(by: 0.25)
                 .stroke(
-                    isFailedCard ? Color(red: 1, green: 0.16, blue: 0.11) : (Color(hex: "E8E8E8") ?? Color.gray),
+                    isFailedCard ? Color(red: 1, green: 0.16, blue: 0.11) : Color(hex: "E8E8E8"),
                     style: isFailedCard ? StrokeStyle(lineWidth: 0.5, dash: [2.5, 2.5]) : StrokeStyle(lineWidth: 0.25)
                 )
         )

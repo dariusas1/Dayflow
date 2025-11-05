@@ -11,7 +11,7 @@ import SwiftUI
 import Combine
 import os.log
 
-enum JournalGenerationError: LocalizedError {
+private enum DailyJournalGenerationError: LocalizedError {
     case failedToGenerateResponse
     case contextDataUnavailable
     case templateError
@@ -41,14 +41,17 @@ class DailyJournalGenerator: ObservableObject {
 
     // MARK: - Dependencies
     private let jarvisChat = JarvisChat.shared
-    private let memoryStore = HybridMemoryStore.shared
     private let sessionManager = SessionManager.shared
-    private let settingsManager = SettingsManager.shared
+    private let settingsManager = FocusLockSettingsManager.shared
     private let logger = Logger(subsystem: "FocusLock", category: "DailyJournalGenerator")
 
     // MARK: - User Learning
     private var userLearningData: UserLearningData = UserLearningData()
     private var lastGenerationDate: Date?
+    
+    // MARK: - Automatic Generation
+    private var midnightTimer: Timer?
+    private var lastAutoGenerationDate: Date?
 
     // MARK: - Templates and Prompts
     private let templatePrompts: [JournalTemplate: String] = [
@@ -86,6 +89,12 @@ class DailyJournalGenerator: ObservableObject {
     // MARK: - Initialization
     private init() {
         loadUserLearningData()
+        startMidnightTimer()
+    }
+    
+    deinit {
+        midnightTimer?.invalidate()
+        midnightTimer = nil
     }
 
     // MARK: - Public Methods
@@ -396,7 +405,7 @@ class DailyJournalGenerator: ObservableObject {
         // Get the last message from current conversation
         guard let lastMessage = jarvisChat.currentConversation?.messages.last,
               lastMessage.role == .assistant else {
-            throw JournalGenerationError.failedToGenerateResponse
+            throw DailyJournalGenerationError.failedToGenerateResponse
         }
 
         return lastMessage.content
@@ -480,26 +489,75 @@ class DailyJournalGenerator: ObservableObject {
     }
 
     private func getActivitiesForDay(_ date: Date) async -> [ActivityRecord] {
-        // This would integrate with ActivityTap data
-        // For now, return empty array
-        return []
+        // Integrate with ActivityTap to get activity data for the day
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        // Get activity history from ActivityTap for the day
+        let activities = ActivityTap.shared.getActivityHistory(since: startOfDay, limit: 1000)
+            .filter { $0.timestamp >= startOfDay && $0.timestamp < endOfDay }
+        
+        // Convert Activity to ActivityRecord
+        return activities.map { activity in
+            ActivityRecord(
+                id: activity.id,
+                title: activity.fusionResult.context.isEmpty ? "Activity" : activity.fusionResult.context,
+                description: activity.windowInfo.title.isEmpty ? activity.windowInfo.bundleIdentifier : activity.windowInfo.title,
+                category: mapActivityCategory(activity.fusionResult.primaryCategory),
+                timestamp: activity.timestamp,
+                duration: activity.duration
+            )
+        }
+    }
+    
+    private func mapActivityCategory(_ category: String) -> ActivityCategory {
+        let lowercased = category.lowercased()
+        
+        if lowercased.contains("work") || lowercased.contains("code") || lowercased.contains("productivity") {
+            return .work
+        } else if lowercased.contains("health") || lowercased.contains("exercise") || lowercased.contains("fitness") {
+            return .health
+        } else if lowercased.contains("learn") || lowercased.contains("study") || lowercased.contains("education") {
+            return .learning
+        } else if lowercased.contains("social") || lowercased.contains("message") || lowercased.contains("chat") {
+            return .social
+        } else if lowercased.contains("leisure") || lowercased.contains("entertainment") || lowercased.contains("game") {
+            return .leisure
+        } else {
+            return .other
+        }
     }
 
     private func getRelevantMemories(for date: Date) async throws -> [MemoryRecord] {
         // Use MemoryStore to get relevant memories for the day
-        let query = "activities experiences memories \(date.formatted(date: .abbreviated, time: .omitted))"
-        let searchResults = try await memoryStore.search(query, limit: 5)
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateStyle = .medium
+        dateFormatter.timeStyle = .none
+        let query = "activities experiences memories \(dateFormatter.string(from: date))"
+        
+        // Use hybrid search to get relevant memories
+        let searchResults = try await HybridMemoryStore.shared.hybridSearch(query, limit: 10)
 
-        // Convert MemorySearchResult to MemoryRecord
-        return searchResults.map { result in
-            MemoryRecord(
-                id: result.id,
-                title: "Memory from \(result.item.timestamp.formatted(date: .abbreviated, time: .omitted))",
-                content: result.item.content,
-                timestamp: result.item.timestamp,
-                relevance: result.score
-            )
-        }
+        // Convert MemorySearchResult to MemoryRecord, filtering by relevance date
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: date)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        
+        return searchResults
+            .filter { result in
+                let itemDate = result.item.timestamp
+                return itemDate >= startOfDay && itemDate < endOfDay
+            }
+            .map { result in
+                MemoryRecord(
+                    id: result.id,
+                    title: "Memory from \(dateFormatter.string(from: result.item.timestamp))",
+                    content: result.item.content,
+                    timestamp: result.item.timestamp,
+                    relevance: result.score
+                )
+            }
     }
 
     private func getWeatherForDay(_ date: Date) async -> String? {
@@ -615,6 +673,99 @@ class DailyJournalGenerator: ObservableObject {
         }
     }
 
+    // MARK: - Automatic Generation
+    
+    func startMidnightTimer() {
+        stopMidnightTimer()
+        
+        let calendar = Calendar.current
+        let now = Date()
+        
+        // Calculate next midnight
+        guard let nextMidnight = calendar.date(bySettingHour: 0, minute: 0, second: 0, of: calendar.date(byAdding: .day, value: 1, to: now) ?? now) else {
+            logger.error("Failed to calculate next midnight")
+            return
+        }
+        
+        let timeUntilMidnight = nextMidnight.timeIntervalSince(now)
+        
+        // Schedule timer for next midnight
+        // No DispatchQueue.main.async needed - we're already @MainActor isolated
+        midnightTimer = Timer.scheduledTimer(withTimeInterval: timeUntilMidnight, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.handleMidnightGeneration()
+                
+                // Schedule recurring daily timer after first generation
+                self?.scheduleRecurringMidnightTimer()
+            }
+        }
+        
+        logger.info("Midnight auto-generation timer scheduled for \(nextMidnight)")
+    }
+    
+    func stopMidnightTimer() {
+        midnightTimer?.invalidate()
+        midnightTimer = nil
+    }
+    
+    private func scheduleRecurringMidnightTimer() {
+        stopMidnightTimer()
+        
+        // Recurring timer fires every 24 hours at midnight
+        let calendar = Calendar.current
+        let now = Date()
+        
+        guard let nextMidnight = calendar.date(bySettingHour: 0, minute: 0, second: 0, of: calendar.date(byAdding: .day, value: 1, to: now) ?? now) else {
+            return
+        }
+        
+        let interval: TimeInterval = 24 * 60 * 60 // 24 hours in seconds
+        let timeUntilMidnight = nextMidnight.timeIntervalSince(now)
+        
+        // Use Task.sleep for delay instead of DispatchQueue - we're already @MainActor isolated
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            
+            // Wait until midnight
+            try? await Task.sleep(nanoseconds: UInt64(timeUntilMidnight * 1_000_000_000))
+            
+            // First generation at midnight
+            await self.handleMidnightGeneration()
+            
+            // Then set up recurring timer for daily generation
+            self.midnightTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.handleMidnightGeneration()
+                }
+            }
+        }
+    }
+    
+    private func handleMidnightGeneration() async {
+        let calendar = Calendar.current
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+        
+        // Check if we've already generated for yesterday
+        if let lastDate = lastAutoGenerationDate, calendar.isDate(lastDate, inSameDayAs: yesterday) {
+            logger.info("Journal already auto-generated for \(yesterday), skipping")
+            return
+        }
+        
+        logger.info("Auto-generating journal for yesterday: \(yesterday)")
+        
+        let preferences = loadOrCreatePreferences()
+        
+        // Generate journal for yesterday with comprehensive template
+        await generateJournal(
+            for: yesterday,
+            template: .comprehensive,
+            preferences: preferences
+        )
+        
+        lastAutoGenerationDate = yesterday
+        logger.info("Auto-generation completed for \(yesterday)")
+    }
+    
     private func saveUserLearningData() {
         if let data = try? JSONEncoder().encode(userLearningData) {
             UserDefaults.standard.set(data, forKey: "JournalUserLearningData")
@@ -677,7 +828,7 @@ class DailyJournalGenerator: ObservableObject {
                     (pattern.template.rawValue, pattern.avgEngagementScore)
                 }
             ),
-            weather: nil,
+            weather: nil as String?,
             dayOfWeek: Calendar.current.component(.weekday, from: date),
             isWeekend: Calendar.current.component(.weekday, from: date) >= 6
         )
@@ -704,7 +855,7 @@ private struct JournalContextData {
     let isWeekend: Bool
 }
 
-// MARK: - Activity Record Model (placeholder for ActivityTap integration)
+// MARK: - Activity Record Model (integrated with ActivityTap)
 private struct ActivityRecord {
     let id: UUID
     let title: String
@@ -712,17 +863,34 @@ private struct ActivityRecord {
     let category: ActivityCategory
     let timestamp: Date
     let duration: TimeInterval?
+    
+    init(id: UUID, title: String, description: String, category: ActivityCategory, timestamp: Date, duration: TimeInterval?) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.category = category
+        self.timestamp = timestamp
+        self.duration = duration
+    }
 }
 
 private enum ActivityCategory {
     case work, health, learning, social, leisure, other
 }
 
-// MARK: - Memory Record Model (placeholder for MemoryStore integration)
+// MARK: - Memory Record Model (integrated with MemoryStore)
 private struct MemoryRecord {
     let id: UUID
     let title: String
     let content: String
     let timestamp: Date
     let relevance: Double
+    
+    init(id: UUID, title: String, content: String, timestamp: Date, relevance: Double) {
+        self.id = id
+        self.title = title
+        self.content = content
+        self.timestamp = timestamp
+        self.relevance = relevance
+    }
 }

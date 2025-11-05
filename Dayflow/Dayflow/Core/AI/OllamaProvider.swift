@@ -9,6 +9,7 @@ import AppKit
 import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
+import os.log
 
 final class OllamaProvider: LLMProvider {
     private let endpoint: String
@@ -52,12 +53,14 @@ final class OllamaProvider: LLMProvider {
         // Save video to temporary file for processing
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).mp4")
         try videoData.write(to: tempURL)
-        defer { try? FileManager.default.removeItem(at: tempURL) }
+        defer { 
+            cleanupTempFileWithRetry(url: tempURL)
+        }
         
         // Step 1: Extract frames at intervals
         let extractionStart = Date()
         let frames = try await extractFrames(from: tempURL)
-        let extractionTime = Date().timeIntervalSince(extractionStart)
+        _ = Date().timeIntervalSince(extractionStart)
         
         
         // Step 2: Get simple descriptions for each frame
@@ -77,7 +80,7 @@ final class OllamaProvider: LLMProvider {
             videoDuration: videoDuration,
             batchId: batchId
         )
-        let mergeTime = Date().timeIntervalSince(mergeStart)
+        _ = Date().timeIntervalSince(mergeStart)
         
         
         let totalTime = Date().timeIntervalSince(callStart)
@@ -444,7 +447,7 @@ final class OllamaProvider: LLMProvider {
         }
         
         // Build message content with image and text
-        var content: [MessageContent] = [
+        let content: [MessageContent] = [
             MessageContent(type: "text", text: prompt, image_url: nil),
             MessageContent(type: "image_url", text: nil, image_url: MessageContent.ImageURL(url: "data:image/jpeg;base64,\(base64String)"))
         ]
@@ -510,7 +513,7 @@ final class OllamaProvider: LLMProvider {
                 )
                 ctxForAttempt = ctx
                 let (data, response) = try await URLSession.shared.data(for: urlRequest)
-                let apiTime = Date().timeIntervalSince(apiStart)
+                _ = Date().timeIntervalSince(apiStart)
                 
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw NSError(domain: "OllamaProvider", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
@@ -1481,5 +1484,37 @@ final class OllamaProvider: LLMProvider {
             code: 9,
             userInfo: [NSLocalizedDescriptionKey: "Failed to generate merged observations after multiple attempts"]
         )
+    }
+    
+    // MARK: - Temp File Cleanup Helpers
+    
+    private func cleanupTempFileWithRetry(url: URL, maxAttempts: Int = 3) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return // File already gone
+        }
+        
+        let logger = Logger(subsystem: "Dayflow", category: "OllamaProvider")
+        
+        var attempt = 0
+        while attempt < maxAttempts {
+            do {
+                try FileManager.default.removeItem(at: url)
+                if attempt > 0 {
+                    logger.info("Successfully deleted temp file after \(attempt) retries: \(url.lastPathComponent)")
+                }
+                return // Success
+            } catch {
+                attempt += 1
+                
+                if attempt >= maxAttempts {
+                    logger.error("Failed to delete temp file after \(maxAttempts) attempts: \(url.path) - \(error.localizedDescription)")
+                } else {
+                    // Retry with exponential backoff
+                    let delay = pow(2.0, Double(attempt - 1)) // 1s, 2s
+                    logger.warning("Temp file cleanup failed (attempt \(attempt)/\(maxAttempts)), retrying in \(Int(delay))s: \(error.localizedDescription)")
+                    Thread.sleep(forTimeInterval: delay)
+                }
+            }
+        }
     }
 }

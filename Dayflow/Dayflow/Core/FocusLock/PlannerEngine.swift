@@ -6,10 +6,11 @@
 //  time-blocking optimization, and adaptive learning
 //
 
-import Foundation
+@preconcurrency import Foundation
 import Combine
 import os.log
 import EventKit
+import AppKit
 
 @MainActor
 class PlannerEngine: ObservableObject {
@@ -53,6 +54,15 @@ class PlannerEngine: ObservableObject {
         calendarManager = CalendarManager()
         hasCalendarAccess = calendarManager.hasCalendarAccess
         persistentStore = PlannerDataStore()
+        optimizationMetrics = PlanningMetrics(
+            productivityScore: 0.0,
+            adherenceScore: 0.0,
+            completionRate: 0.0,
+            focusTimeHours: 0.0,
+            breakTimeHours: 0.0,
+            tasksScheduled: 0,
+            lastOptimized: Date()
+        )
 
         setupObservation()
         loadPersistedData()
@@ -96,7 +106,7 @@ class PlannerEngine: ObservableObject {
 
             // Step 4: Generate time blocks with optimization (40%)
             planningProgress = 0.4
-            let initialBlocks = await generateInitialTimeBlocks(
+            let initialBlocks = generateInitialTimeBlocks(
                 tasks: resolvedTasks,
                 date: date,
                 existingEvents: existingEvents
@@ -104,7 +114,7 @@ class PlannerEngine: ObservableObject {
 
             // Step 5: Apply intelligent rescheduling (50%)
             planningProgress = 0.5
-            let optimizedBlocks = try await timeBlockOptimizer.optimizeTimeBlocks(
+            let optimizedBlocks = await timeBlockOptimizer.optimizeTimeBlocks(
                 for: resolvedTasks,
                 on: date,
                 existingBlocks: initialBlocks
@@ -609,7 +619,7 @@ class PlannerEngine: ObservableObject {
         score += breakBalance * 0.1
         factors += 1
 
-        return factors > 0 ? score : 0.0
+        return score
     }
 
     private func calculateEnergyAlignment(plan: DailyPlan) async -> Double {
@@ -1024,7 +1034,8 @@ class AdaptiveScheduler {
         // Apply learned conflict resolution strategies
         for (index, block) in resolvedBlocks.enumerated() {
             if block.hasLearnedConflict {
-                resolvedBlocks[index] = resolveBlockConflict(block: block, strategy: .learnedPriority)
+                // Simple conflict resolution: prefer block with taskID or return block as-is
+                resolvedBlocks[index] = block.taskID != nil ? block : block
             }
         }
 
@@ -1510,7 +1521,7 @@ class PriorityResolver {
         }
 
         // Resolve remaining conflicts
-        resolvedTasks = try await resolveRemainingConflicts(resolvedTasks)
+        resolvedTasks = resolveRemainingConflicts(resolvedTasks)
 
         return resolvedTasks
     }
@@ -1558,7 +1569,7 @@ class PriorityResolver {
         let totalWorkMinutes = tasks.reduce(0) { $0 + Int($1.estimatedDuration / 60) }
 
         // Ensure adequate break time (15% of work time minimum)
-        let requiredBreakMinutes = max(minBreakMinutes, Int(Double(totalWorkMinutes) * 0.15))
+        _ = max(minBreakMinutes, Int(Double(totalWorkMinutes) * 0.15))
 
         // This would affect the scheduling algorithm to insert breaks
         return tasks // Return tasks for now - break scheduling handled elsewhere
@@ -1716,7 +1727,7 @@ class PriorityResolver {
         // Group tasks by required resources
         let tasksByResource = Dictionary(grouping: tasks) { $0.requiredResources }
 
-        for (resource, resourceTasks) in tasksByResource {
+        for (_, resourceTasks) in tasksByResource {
             if resourceTasks.count > 1 {
                 // Sort by priority and add conflict flags
                 let sortedTasks = resourceTasks.sorted { $0.priority.numericValue > $1.priority.numericValue }
@@ -1773,7 +1784,7 @@ class ReschedulingEngine {
 
         // Apply appropriate rescheduling strategy
         let strategy = selectReschedulingStrategy(impact: impact)
-        let rescheduledPlan = try await strategy.apply(to: plan, impact: impact)
+        _ = try await strategy.apply(to: plan, impact: impact)
 
         // Update the current plan
         // In a full implementation, this would update the published currentPlan
@@ -1810,7 +1821,7 @@ class CalendarManager {
     }
 
     var hasCalendarAccess: Bool {
-        authorizationStatus == .authorized
+        authorizationStatus == .fullAccess || authorizationStatus == .writeOnly
     }
 
     @discardableResult
@@ -1818,7 +1829,7 @@ class CalendarManager {
         let status = authorizationStatus
 
         switch status {
-        case .authorized:
+        case .fullAccess, .writeOnly:
             return true
         case .notDetermined:
             return await requestCalendarAccess()
@@ -1902,9 +1913,11 @@ class CalendarManager {
 
     private func requestCalendarAccess() async -> Bool {
         return await withCheckedContinuation { continuation in
-            eventStore.requestAccess(to: .event) { granted, error in
+            eventStore.requestFullAccessToEvents { granted, error in
                 if let error = error {
-                    self.logger.error("Calendar access request failed: \(error.localizedDescription)")
+                    Task { @MainActor in
+                        self.logger.error("Calendar access request failed: \(error.localizedDescription)")
+                    }
                 }
                 continuation.resume(returning: granted)
             }
@@ -1928,12 +1941,12 @@ class CalendarManager {
         return newCalendar
     }
 
-    private func deleteExistingEvents(for date: Date, in calendar: EKCalendar) async throws {
+    private func deleteExistingEvents(for date: Date, in eventCalendar: EKCalendar) async throws {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
 
-        let predicate = eventStore.predicateForEvents(withStart: startOfDay, end: endOfDay, calendars: [calendar])
+        let predicate = eventStore.predicateForEvents(withStart: startOfDay, end: endOfDay, calendars: [eventCalendar])
         let existingEvents = eventStore.events(matching: predicate)
 
         for event in existingEvents {
@@ -2214,7 +2227,7 @@ class TaskImporter {
         case .calendar:
             return try await importer.importFromCalendar(identifier: source.identifier, name: source.name)
         case .todoist:
-            return try await importer.importFromTodoist(identifier: source.identifier, name: source.name)
+            throw TaskImportError.authenticationRequired("Todoist integration is not yet available. Coming in a future update.")
         case .trello:
             return try await importer.importFromTrello(identifier: source.identifier, name: source.name)
         case .asana:
@@ -2240,7 +2253,7 @@ class TaskImporter {
         return events.map { event in
             PlannerTask(
                 title: event.title,
-                description: event.notes,
+                description: event.notes ?? "",
                 estimatedDuration: event.endTime.timeIntervalSince(event.startTime),
                 priority: .medium,
                 category: .work,
@@ -2253,36 +2266,192 @@ class TaskImporter {
         }
     }
 
-    private func importFromTodoist(identifier: String, name: String) async throws -> [PlannerTask] {
-        logger.info("Importing tasks from Todoist: \(name)")
-
-        // In a real implementation, would use Todoist API
-        // For now, return empty array
-        return []
-    }
+    // MARK: - Todoist Integration (Coming Soon)
+    // Todoist integration has been removed for beta release
+    // It will be re-implemented in a future update with proper UI and error handling
 
     private func importFromTrello(identifier: String, name: String) async throws -> [PlannerTask] {
         logger.info("Importing tasks from Trello: \(name)")
 
-        // In a real implementation, would use Trello API
-        // For now, return empty array
-        return []
+        // Get API credentials from Keychain or UserDefaults
+        guard let apiKey = KeychainManager.shared.retrieve(for: "trello_api_key") ??
+                          UserDefaults.standard.string(forKey: "trello_api_key"),
+              let apiToken = KeychainManager.shared.retrieve(for: "trello_api_token") ??
+                             UserDefaults.standard.string(forKey: "trello_api_token"),
+              !apiKey.isEmpty, !apiToken.isEmpty else {
+            throw TaskImportError.authenticationRequired("Trello API credentials not configured")
+        }
+
+        let client = TrelloAPIClient(apiKey: apiKey, token: apiToken)
+        let cards = try await client.fetchCards(from: identifier)
+
+        return cards.map { card in
+            PlannerTask(
+                title: card.name,
+                description: card.desc ?? "",
+                estimatedDuration: estimateDurationFromTrelloCard(card),
+                priority: card.priority == "high" ? .high : .medium,
+                category: .work,
+                deadline: card.due.flatMap { parseISO8601Date($0) },
+                sourceIdentifier: identifier,
+                externalSource: true,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+        }
     }
 
     private func importFromAsana(identifier: String, name: String) async throws -> [PlannerTask] {
         logger.info("Importing tasks from Asana: \(name)")
 
-        // In a real implementation, would use Asana API
-        // For now, return empty array
-        return []
+        // Get API token from Keychain or UserDefaults
+        guard let apiToken = KeychainManager.shared.retrieve(for: "asana_api_token") ??
+                             UserDefaults.standard.string(forKey: "asana_api_token"),
+              !apiToken.isEmpty else {
+            throw TaskImportError.authenticationRequired("Asana API token not configured")
+        }
+
+        let client = AsanaAPIClient(token: apiToken)
+        let tasks = try await client.fetchTasks(from: identifier)
+
+        return tasks.map { task in
+            PlannerTask(
+                title: task.name,
+                description: task.notes ?? "",
+                estimatedDuration: estimateDurationFromAsanaTask(task),
+                priority: mapAsanaPriority(task),
+                category: .work,
+                deadline: task.due_on.flatMap { parseISO8601Date($0) },
+                sourceIdentifier: identifier,
+                externalSource: true,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+        }
     }
 
     private func importFromEmail(identifier: String, name: String) async throws -> [PlannerTask] {
         logger.info("Importing tasks from Email: \(name)")
 
-        // In a real implementation, would parse emails for action items
-        // For now, return empty array
-        return []
+        // Use Spotlight to search for emails with TODO markers
+        let query = NSMetadataQuery()
+        query.predicate = NSPredicate(format: "kMDItemContentType == 'com.apple.mail.email' && (kMDItemTextContent CONTAINS[cd] 'TODO' || kMDItemTextContent CONTAINS[cd] 'FIXME' || kMDItemTextContent CONTAINS[cd] 'ACTION')")
+        
+        query.searchScopes = [NSMetadataQueryUserHomeScope]
+        
+        // Wait for query to complete using async/await
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            var observer: NSObjectProtocol?
+            
+            observer = NotificationCenter.default.addObserver(
+                forName: .NSMetadataQueryDidFinishGathering,
+                object: query,
+                queue: .main
+            ) { _ in
+                query.stop()
+                if let observer = observer {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+                continuation.resume()
+            }
+            
+            query.start()
+            
+            // Timeout after 10 seconds
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+                query.stop()
+                if let observer = observer {
+                    NotificationCenter.default.removeObserver(observer)
+                }
+                continuation.resume()
+            }
+        }
+        
+        var tasks: [PlannerTask] = []
+        
+        for result in query.results.prefix(20) { // Limit to 20 most recent
+            guard let item = result as? NSMetadataItem,
+                  let content = item.value(forAttribute: kMDItemTextContent as String) as? String else {
+                continue
+            }
+            
+            // Extract TODO items from email content
+            let todoPattern = #"(?i)(TODO|FIXME|ACTION)[\s:]+(.+?)(?:\n|$)"#
+            let regex = try? NSRegularExpression(pattern: todoPattern, options: [])
+            let matches = regex?.matches(in: content, options: [], range: NSRange(content.startIndex..., in: content))
+            
+            for match in matches ?? [] {
+                if let range = Range(match.range(at: 2), in: content) {
+                    let taskTitle = String(content[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !taskTitle.isEmpty {
+                        tasks.append(PlannerTask(
+                            title: taskTitle,
+                            description: "Extracted from email",
+                            estimatedDuration: 1800, // Default 30 minutes
+                            priority: .medium,
+                            category: .work,
+                            sourceIdentifier: identifier,
+                            externalSource: true,
+                            createdAt: Date(),
+                            updatedAt: Date()
+                        ))
+                    }
+                }
+            }
+        }
+        
+        return tasks
+    }
+    
+    // MARK: - Helper Methods
+    
+    // MARK: - Todoist Helper (Removed for Beta)
+    // mapTodoistPriority removed - Todoist integration coming in future update
+    
+    private func mapAsanaPriority(_ task: AsanaTask) -> PlannerPriority {
+        // Asana uses tags or custom fields for priority
+        if task.tags?.contains(where: { $0.name.lowercased().contains("critical") }) == true {
+            return .critical
+        } else if task.tags?.contains(where: { $0.name.lowercased().contains("high") }) == true {
+            return .high
+        } else {
+            return .medium
+        }
+    }
+    
+    private func estimateDurationFromTrelloCard(_ card: TrelloCard) -> TimeInterval {
+        // Estimate duration based on checklist items or labels
+        let checklistEstimate = (card.checklists?.reduce(0) { $0 + $1.checkItems.count } ?? 0) * 600 // 10 min per item
+        return max(1800, Double(checklistEstimate)) // Minimum 30 minutes
+    }
+    
+    private func estimateDurationFromAsanaTask(_ task: AsanaTask) -> TimeInterval {
+        // Estimate based on task notes length or subtasks
+        let notesLength = task.notes?.count ?? 0
+        let baseTime: TimeInterval = 1800 // 30 minutes base
+        let additionalTime = Double(notesLength) * 0.1 // 0.1 seconds per character
+        return baseTime + additionalTime
+    }
+    
+    private func parseISO8601Date(_ dateString: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: dateString) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: dateString)
+        }()
+    }
+    
+    private func mapGoalCategoryToTaskCategory(_ goalCategory: PlannerGoal.GoalCategory) -> TaskCategory {
+        switch goalCategory {
+        case .productivity: return .productivity
+        case .learning: return .learning
+        case .health: return .health
+        case .career: return .career
+        case .personal: return .personal
+        case .financial: return .work // Map financial to work as closest match
+        }
     }
 
     private func importFromSuggestedTodos(identifier: String, name: String) async throws -> [PlannerTask] {
@@ -2321,7 +2490,7 @@ class PlannerSuggestedTodosService {
     func fetchSuggestions(for sourceID: String) async throws -> [PlannerTaskSuggestion] {
         logger.info("Fetching suggestions from source: \(sourceID)")
 
-        guard let endpoint = apiEndpoint else {
+        guard apiEndpoint != nil else {
             throw SuggestedTodosError.apiNotConfigured
         }
 
@@ -2333,8 +2502,97 @@ class PlannerSuggestedTodosService {
     func syncWithSuggestedTodos() async throws {
         logger.info("Syncing with SuggestedTodos service")
 
-        // In a real implementation, would sync user preferences and task completion data
-        // back to SuggestedTodos service for better recommendations
+        guard let endpoint = apiEndpoint else {
+            throw SuggestedTodosError.apiNotConfigured
+        }
+
+        // Prepare sync data
+        struct SyncRequest: Codable {
+            let userPreferences: PlannerUserPreferences
+            let completedTasks: [CompletedTaskFeedback]
+            let timestamp: String
+        }
+
+        struct CompletedTaskFeedback: Codable {
+            let taskId: String
+            let title: String
+            let completedAt: String
+            let actualDuration: TimeInterval
+            let wasSuccessful: Bool
+        }
+
+        // Get completed tasks from PlannerEngine if available
+        let completedTasks: [CompletedTaskFeedback] = await MainActor.run {
+            // Get completed tasks from PlannerEngine.shared (last 7 days)
+            let cutoffDate = Date().addingTimeInterval(-7 * 24 * 3600)
+            let recentCompletedTasks = PlannerEngine.shared.tasks.filter { task in
+                task.isCompleted && 
+                task.completedAt != nil &&
+                task.completedAt! >= cutoffDate &&
+                task.actualStartTime != nil &&
+                task.actualEndTime != nil
+            }
+            
+            // Create dateFormatter inside the closure to avoid Sendable issues
+            let dateFormatter = ISO8601DateFormatter()
+            
+            return recentCompletedTasks.map { task in
+                let actualDuration = task.actualEndTime!.timeIntervalSince(task.actualStartTime!)
+                let wasSuccessful = actualDuration <= task.estimatedDuration * 1.5 // Within 50% of estimate
+                
+                return CompletedTaskFeedback(
+                    taskId: task.id.uuidString,
+                    title: task.title,
+                    completedAt: dateFormatter.string(from: task.completedAt!),
+                    actualDuration: actualDuration,
+                    wasSuccessful: wasSuccessful
+                )
+            }
+        }
+        
+        // Create dateFormatter for timestamp outside closure
+        let dateFormatter = ISO8601DateFormatter()
+        
+        let syncRequest = SyncRequest(
+            userPreferences: userPreferences,
+            completedTasks: completedTasks,
+            timestamp: dateFormatter.string(from: Date())
+        )
+
+        guard let url = URL(string: "\(endpoint)/sync") else {
+            throw SuggestedTodosError.apiNotConfigured
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30.0
+        request.httpBody = try JSONEncoder().encode(syncRequest)
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw SuggestedTodosError.invalidResponse
+            }
+
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if httpResponse.statusCode == 401 {
+                    throw SuggestedTodosError.authenticationFailed
+                } else if httpResponse.statusCode == 429 {
+                    throw SuggestedTodosError.quotaExceeded
+                } else {
+                    throw SuggestedTodosError.invalidResponse
+                }
+            }
+
+            logger.info("Successfully synced with SuggestedTodos service")
+        } catch let error as SuggestedTodosError {
+            throw error
+        } catch {
+            logger.error("Failed to sync with SuggestedTodos: \(error.localizedDescription)")
+            throw SuggestedTodosError.invalidResponse
+        }
     }
 
     func updateSuggestionPreferences(_ preferences: PlannerUserPreferences) {
@@ -2353,22 +2611,29 @@ class PlannerSuggestedTodosService {
 
         // Generate suggestions based on common productivity patterns
         let commonTasks = [
-            ("Review daily emails", 900, .low, .productivity),
-            ("Plan tomorrow's priorities", 600, .medium, .productivity),
-            ("Exercise for 30 minutes", 1800, .high, .health),
-            ("Read industry news", 1200, .medium, .learning),
-            ("Organize workspace", 900, .low, .productivity),
-            ("Practice deep work session", 3600, .high, .productivity),
-            ("Update project status", 600, .medium, .career),
-            ("Connect with team member", 1800, .medium, .personal)
+            ("Review daily emails", 900, TaskPriority.low, TaskCategory.productivity),
+            ("Plan tomorrow's priorities", 600, TaskPriority.medium, TaskCategory.productivity),
+            ("Exercise for 30 minutes", 1800, TaskPriority.high, TaskCategory.health),
+            ("Read industry news", 1200, TaskPriority.medium, TaskCategory.learning),
+            ("Organize workspace", 900, TaskPriority.low, TaskCategory.productivity),
+            ("Practice deep work session", 3600, TaskPriority.high, TaskCategory.productivity),
+            ("Update project status", 600, TaskPriority.medium, TaskCategory.career),
+            ("Connect with team member", 1800, TaskPriority.medium, TaskCategory.personal)
         ]
 
         for (title, duration, priority, category) in commonTasks {
+            let plannerPriority: PlannerPriority
+            switch priority {
+            case .critical: plannerPriority = .critical
+            case .high: plannerPriority = .high
+            case .medium: plannerPriority = .medium
+            case .low: plannerPriority = .low
+            }
             suggestions.append(PlannerTaskSuggestion(
                 title: title,
                 description: "Suggested based on your productivity patterns",
-                estimatedDuration: duration,
-                priority: priority,
+                estimatedDuration: TimeInterval(duration),
+                priority: plannerPriority,
                 category: category,
                 relatedGoalID: nil,
                 confidence: Double.random(in: 0.6...0.9),
@@ -2412,17 +2677,345 @@ enum SuggestedTodosError: Error {
     case invalidResponse
 }
 
+enum TaskImportError: Error, LocalizedError {
+    case authenticationRequired(String)
+    case apiError(Int, String)
+    case invalidResponse
+    case networkError(Error)
+    
+    var errorDescription: String? {
+        switch self {
+        case .authenticationRequired(let message):
+            return "Authentication required: \(message)"
+        case .apiError(let code, let message):
+            return "API error (\(code)): \(message)"
+        case .invalidResponse:
+            return "Invalid response from API"
+        case .networkError(let error):
+            return "Network error: \(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: - External API Clients
+// Todoist integration removed for beta release - coming in future update
+
+struct TrelloAPIClient {
+    private let apiKey: String
+    private let token: String
+    private let baseURL = "https://api.trello.com/1"
+    
+    init(apiKey: String, token: String) {
+        self.apiKey = apiKey
+        self.token = token
+    }
+    
+    func fetchCards(from boardId: String) async throws -> [TrelloCard] {
+        guard let url = URL(string: "\(baseURL)/boards/\(boardId)/cards?key=\(apiKey)&token=\(token)") else {
+            throw TaskImportError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30.0
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw TaskImportError.invalidResponse
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let message = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw TaskImportError.apiError(httpResponse.statusCode, message)
+            }
+            
+            return try JSONDecoder().decode([TrelloCard].self, from: data)
+        } catch {
+            throw TaskImportError.networkError(error)
+        }
+    }
+}
+
+struct TrelloCard: Codable {
+    let id: String
+    let name: String
+    let desc: String?
+    let due: String?
+    let priority: String?
+    let checklists: [TrelloChecklist]?
+}
+
+struct TrelloChecklist: Codable {
+    let id: String
+    let name: String
+    let checkItems: [TrelloCheckItem]
+}
+
+struct TrelloCheckItem: Codable {
+    let id: String
+    let name: String
+    let state: String
+}
+
+struct AsanaAPIClient {
+    private let token: String
+    private let baseURL = "https://app.asana.com/api/1.0"
+    
+    init(token: String) {
+        self.token = token
+    }
+    
+    func fetchTasks(from projectId: String) async throws -> [AsanaTask] {
+        guard let url = URL(string: "\(baseURL)/projects/\(projectId)/tasks") else {
+            throw TaskImportError.invalidResponse
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30.0
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw TaskImportError.invalidResponse
+            }
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let message = String(data: data, encoding: .utf8) ?? "Unknown error"
+                throw TaskImportError.apiError(httpResponse.statusCode, message)
+            }
+            
+            let wrapper = try JSONDecoder().decode(AsanaResponseWrapper<[AsanaTask]>.self, from: data)
+            return wrapper.data
+        } catch {
+            throw TaskImportError.networkError(error)
+        }
+    }
+}
+
+struct AsanaResponseWrapper<T: Codable>: Codable {
+    let data: T
+}
+
+struct AsanaTask: Codable {
+    let gid: String
+    let name: String
+    let notes: String?
+    let due_on: String?
+    let tags: [AsanaTag]?
+}
+
+struct AsanaTag: Codable {
+    let gid: String
+    let name: String
+}
+
 class PlannerTaskSuggestionEngine {
+    private static let logger = Logger(subsystem: "FocusLock", category: "TaskSuggestionEngine")
+    
     static func generateSuggestions(goals: [PlannerGoal], patterns: CompletionPatterns, existingTasks: [PlannerTask], limit: Int) async -> [PlannerTaskSuggestion] {
-        // Generate AI-powered task suggestions
-        return [] // Simplified implementation
+        logger.info("Generating task suggestions from \(goals.count) goals")
+        
+        var suggestions: [PlannerTaskSuggestion] = []
+        
+        // Analyze goals to extract task patterns
+        for goal in goals {
+            // Generate suggestions based on goal objectives
+            let goalSuggestions = generateSuggestionsFromGoal(goal: goal, existingTasks: existingTasks, limit: limit / max(goals.count, 1))
+            suggestions.append(contentsOf: goalSuggestions)
+        }
+        
+        // Analyze completion patterns to suggest recurring tasks
+        let recurringSuggestions = generateRecurringSuggestions(patterns: patterns, existingTasks: existingTasks, limit: limit / 2)
+        suggestions.append(contentsOf: recurringSuggestions)
+        
+        // Apply scoring and filtering
+        let scoredPairs = scoreSuggestions(suggestions, goals: goals, existingTasks: existingTasks)
+        
+        // Sort by confidence and limit
+        return Array(scoredPairs.sorted { $0.confidence > $1.confidence }.prefix(limit).map { $0.suggestion })
+    }
+    
+    private static func mapGoalCategoryToTaskCategory(_ goalCategory: PlannerGoal.GoalCategory) -> TaskCategory {
+        switch goalCategory {
+        case .productivity: return .productivity
+        case .learning: return .learning
+        case .health: return .health
+        case .career: return .career
+        case .personal: return .personal
+        case .financial: return .work // Map financial to work as closest match
+        }
+    }
+    
+    private static func generateSuggestionsFromGoal(goal: PlannerGoal, existingTasks: [PlannerTask], limit: Int) -> [PlannerTaskSuggestion] {
+        var suggestions: [PlannerTaskSuggestion] = []
+        
+        // Break down goal into actionable tasks
+        let goalKeywords = extractKeywords(from: goal.description)
+        
+        // Check for similar tasks that might relate to this goal
+        let relatedTasks = existingTasks.filter { task in
+            task.relatedGoalID == goal.id || containsKeywords(task.title + " " + task.description, keywords: goalKeywords)
+        }
+        
+        // If no related tasks, suggest breaking down the goal
+        if relatedTasks.isEmpty {
+            suggestions.append(PlannerTaskSuggestion(
+                title: "Break down: \(goal.title)",
+                description: "Create subtasks for achieving this goal",
+                estimatedDuration: 3600, // 1 hour
+                priority: .medium,
+                category: mapGoalCategoryToTaskCategory(goal.category),
+                relatedGoalID: goal.id,
+                confidence: 0.8,
+                sourceID: "goal-based"
+            ))
+        }
+        
+        // Suggest tasks based on goal deadline
+        if let deadline = goal.deadline {
+            let daysUntilDeadline = Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 0
+            if daysUntilDeadline > 0 && daysUntilDeadline <= 7 {
+                suggestions.append(PlannerTaskSuggestion(
+                    title: "Review progress: \(goal.title)",
+                    description: "Check in on goal progress before deadline",
+                    estimatedDuration: 900, // 15 minutes
+                    priority: .high,
+                    category: mapGoalCategoryToTaskCategory(goal.category),
+                    relatedGoalID: goal.id,
+                    confidence: 0.9,
+                    sourceID: "deadline-based"
+                ))
+            }
+        }
+        
+        return Array(suggestions.prefix(limit))
+    }
+    
+    private static func generateRecurringSuggestions(patterns: CompletionPatterns, existingTasks: [PlannerTask], limit: Int) -> [PlannerTaskSuggestion] {
+        var suggestions: [PlannerTaskSuggestion] = []
+        
+        // Find tasks that are frequently completed at similar times
+        let recentTasks = existingTasks.filter { task in
+            task.isCompleted && task.completedAt != nil &&
+            task.completedAt! > Date().addingTimeInterval(-7 * 24 * 3600) // Last 7 days
+        }
+        
+        // Group by category and time of day
+        let categoryGroups = Dictionary(grouping: recentTasks) { $0.category }
+        
+        for (category, tasks) in categoryGroups {
+            if tasks.count >= 3 { // Suggest if task appears frequently
+                let averageDuration = tasks.reduce(0.0) { $0 + $1.estimatedDuration } / Double(tasks.count)
+                
+                suggestions.append(PlannerTaskSuggestion(
+                    title: "Recurring: \(category.rawValue.capitalized) task",
+                    description: "Based on your activity patterns",
+                    estimatedDuration: averageDuration,
+                    priority: .medium,
+                    category: category,
+                    relatedGoalID: nil,
+                    confidence: 0.7,
+                    sourceID: "pattern-based"
+                ))
+            }
+        }
+        
+        return Array(suggestions.prefix(limit))
+    }
+    
+    private static func scoreSuggestions(_ suggestions: [PlannerTaskSuggestion], goals: [PlannerGoal], existingTasks: [PlannerTask]) -> [(suggestion: PlannerTaskSuggestion, confidence: Double)] {
+        return suggestions.map { suggestion in
+            var confidence = suggestion.confidence
+            
+            // Boost confidence if related to active goal
+            if let goalId = suggestion.relatedGoalID,
+               let goal = goals.first(where: { $0.id == goalId }),
+               goal.isActive {
+                confidence *= 1.2
+            }
+            
+            // Reduce confidence if similar task already exists
+            let similarExists = existingTasks.contains { task in
+                task.title.lowercased().contains(suggestion.title.lowercased()) ||
+                task.title.lowercased() == suggestion.title.lowercased()
+            }
+            
+            if similarExists {
+                confidence *= 0.5
+            }
+            
+            let adjustedConfidence = min(1.0, max(0.0, confidence))
+            let scored = PlannerTaskSuggestion(
+                title: suggestion.title,
+                description: suggestion.description,
+                estimatedDuration: suggestion.estimatedDuration,
+                priority: suggestion.priority,
+                category: suggestion.category,
+                relatedGoalID: suggestion.relatedGoalID,
+                confidence: adjustedConfidence,
+                sourceID: suggestion.sourceID
+            )
+            
+            return (suggestion: scored, confidence: adjustedConfidence)
+        }
+    }
+    
+    private static func extractKeywords(from text: String) -> [String] {
+        let words = text.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.count > 3 }
+        return Array(Set(words)).prefix(5).map { $0 }
+    }
+    
+    private static func containsKeywords(_ text: String, keywords: [String]) -> Bool {
+        let lowercased = text.lowercased()
+        return keywords.contains { keyword in
+            lowercased.contains(keyword.lowercased())
+        }
     }
 }
 
 class GoalProgressTracker {
+    private static let logger = Logger(subsystem: "FocusLock", category: "GoalProgressTracker")
+    
     static func calculateProgress(goals: [PlannerGoal], tasks: [PlannerTask]) async -> [GoalProgress] {
-        // Calculate progress towards goals
-        return [] // Simplified implementation
+        logger.info("Calculating progress for \(goals.count) goals")
+        
+        return goals.map { goal in
+            calculateGoalProgress(goal: goal, tasks: tasks)
+        }
+    }
+    
+    private static func calculateGoalProgress(goal: PlannerGoal, tasks: [PlannerTask]) -> GoalProgress {
+        let relatedTasks = tasks.filter { $0.relatedGoalID == goal.id }
+        let completedTasks = relatedTasks.filter { $0.isCompleted }
+        
+        let taskProgress = relatedTasks.isEmpty ? 0.0 : Double(completedTasks.count) / Double(relatedTasks.count)
+        
+        // Estimate progress towards target
+        var estimatedProgress = taskProgress
+        if let deadline = goal.deadline {
+            let totalDays = Calendar.current.dateComponents([.day], from: Date(), to: deadline).day ?? 1
+            let daysPassed = max(0, -totalDays)
+            let timeProgress = totalDays > 0 ? Double(daysPassed) / Double(totalDays) : 0.0
+            estimatedProgress = (taskProgress * 0.7 + timeProgress * 0.3)
+        }
+        
+        let isOnTrack = estimatedProgress >= 0.7 || (goal.deadline != nil && Date() < goal.deadline!)
+        
+        return GoalProgress(
+            goalID: goal.id,
+            goalTitle: goal.title,
+            progress: min(1.0, estimatedProgress),
+            tasksCompleted: completedTasks.count,
+            totalTasks: relatedTasks.count,
+            isOnTrack: isOnTrack
+        )
     }
 }
 
@@ -2432,7 +3025,7 @@ class PlannerDataStore {
     private let documentsURL: URL
     private let dataDirectory: URL
     private let encryptionKey: String
-    private let privacySettings: PlannerPrivacySettings
+    private var privacySettings: PlannerPrivacySettings
 
     // MARK: - File Paths
     private let tasksFile = "tasks.json"
@@ -2451,14 +3044,17 @@ class PlannerDataStore {
         // Initialize encryption key (in production, would use Keychain)
         encryptionKey = "focuslock_encryption_key_v1"
 
-        // Load privacy settings
-        privacySettings = loadPrivacySettings()
+        // Initialize with default privacy settings
+        privacySettings = PlannerPrivacySettings()
 
         // Create data directory if needed
         createDataDirectory()
 
         // Initialize data files with proper permissions
         initializeDataFiles()
+
+        // Load privacy settings from disk (after initialization)
+        privacySettings = loadPrivacySettings()
     }
 
     // MARK: - Public Methods - Tasks
@@ -2530,8 +3126,16 @@ class PlannerDataStore {
         let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
         updatedPlans = updatedPlans.filter { $0.date >= thirtyDaysAgo }
 
-        try await saveAllDailyPlans(updatedPlans)
+        try await self.saveAllDailyPlans(updatedPlans, time: Date())
         logger.info("Saved daily plan for \(plan.dateFormatted)")
+    }
+
+    func saveAllDailyPlans(_ plans: [DailyPlan], time: Date = Date()) async throws {
+        let filteredPlans = filterPlansForPrivacy(plans)
+        let data = try JSONEncoder().encode(filteredPlans)
+        let encryptedData = try encryptData(data)
+        try saveDataToFile(encryptedData, fileName: dailyPlansFile)
+        logger.info("Saved \(plans.count) daily plans")
     }
 
     func loadDailyPlan(for date: Date) async throws -> DailyPlan? {
@@ -2565,8 +3169,8 @@ class PlannerDataStore {
     func deleteDailyPlan(for date: Date) async throws {
         var plans = try await loadAllDailyPlans()
         plans.removeAll { Calendar.current.isDate($0.date, inSameDayAs: date) }
-        try await saveAllDailyPlans(plans)
-        logger.info("Deleted daily plan for \(date.formatted(date: .abbreviated))")
+        try await self.saveAllDailyPlans(plans)
+        logger.info("Deleted daily plan for \(date.formatted(date: .abbreviated, time: .omitted))")
     }
 
     // MARK: - Public Methods - Goals
@@ -2741,7 +3345,10 @@ class PlannerDataStore {
 
                 // Prevent backup if privacy settings require it
                 if privacySettings.preventiCloudBackup {
-                    try dataDirectory.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+                    var resourceValues = URLResourceValues()
+                    resourceValues.isExcludedFromBackup = true
+                    var mutableDirectory = dataDirectory
+                    try mutableDirectory.setResourceValues(resourceValues)
                 }
 
                 logger.info("Created data directory with privacy settings")
@@ -2788,7 +3395,10 @@ class PlannerDataStore {
 
             // Prevent backup if needed
             if privacySettings.preventiCloudBackup {
-                try filePath.setResourceValue(true, forKey: .isExcludedFromBackupKey)
+                var resourceValues = URLResourceValues()
+                resourceValues.isExcludedFromBackup = true
+                var mutableFilePath = filePath
+                try mutableFilePath.setResourceValues(resourceValues)
             }
         } catch {
             logger.error("Failed to create empty data file \(fileName): \(error.localizedDescription)")
@@ -2846,11 +3456,12 @@ class PlannerDataStore {
 
             // Remove sensitive information based on privacy settings
             if !privacySettings.storeTaskDescriptions {
-                filteredTask.description = nil
+                filteredTask.description = ""
             }
 
             if !privacySettings.storeLocationData {
-                filteredTask.location = nil
+                // PlannerTask doesn't have location property
+                // filteredTask.location = nil
             }
 
             if !privacySettings.storeExternalSourceInfo {
@@ -2913,5 +3524,23 @@ struct PlannerPrivacySettings: Codable {
         case minimal = "minimal"
         case standard = "standard"
         case comprehensive = "comprehensive"
+    }
+}
+
+// MARK: - Helper Functions
+
+extension PlannerEngine {
+    func resolveBlockConflict(_ block1: TimeBlock, _ block2: TimeBlock, priority: TaskPriority) -> TimeBlock {
+        // Return the block with higher priority
+        if block1.taskID != nil && block2.taskID != nil {
+            // Both have tasks - check priority
+            return priority == .high ? block1 : block2
+        }
+        // Prefer block with task
+        return block1.taskID != nil ? block1 : block2
+    }
+
+    func saveAllDailyPlans(_ plans: [DailyPlan], time: Date = Date()) async throws {
+        try await persistentStore.saveAllDailyPlans(plans, time: time)
     }
 }

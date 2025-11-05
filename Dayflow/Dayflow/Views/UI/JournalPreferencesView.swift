@@ -39,15 +39,14 @@ struct JournalPreferencesView: View {
                 .padding()
             }
             .navigationTitle("Journal Preferences")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .automatic) {
                     Button("Cancel") {
                         dismiss()
                     }
                 }
 
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         savePreferences()
                         dismiss()
@@ -94,7 +93,7 @@ struct JournalPreferencesView: View {
                 settingRow(
                     title: "Default Template",
                     description: "Template used when generating journals",
-                    value: preferences.template.displayName,
+                    value: preferences.preferredTemplate.displayName,
                     action: {
                         // Template selection would be handled here
                     }
@@ -104,7 +103,7 @@ struct JournalPreferencesView: View {
                 settingRow(
                     title: "Default Length",
                     description: "Preferred journal length",
-                    value: preferences.length.displayName,
+                    value: preferences.lengthPreference.displayName,
                     action: {
                         // Length selection would be handled here
                     }
@@ -114,7 +113,7 @@ struct JournalPreferencesView: View {
                 settingRow(
                     title: "Default Tone",
                     description: "Writing style for your journals",
-                    value: preferences.tone.displayName,
+                    value: preferences.tonePreference.description,
                     action: {
                         // Tone selection would be handled here
                     }
@@ -135,12 +134,7 @@ struct JournalPreferencesView: View {
                 .fontWeight(.semibold)
 
             VStack(spacing: 12) {
-                // Auto-generate at end of day
-                toggleSetting(
-                    title: "Auto-generate Daily",
-                    description: "Automatically create a journal at the end of each day",
-                    isOn: $preferences.autoGenerate
-                )
+                // Note: Auto-generate feature would need to be implemented in the generator
 
                 // Include questions
                 toggleSetting(
@@ -163,16 +157,7 @@ struct JournalPreferencesView: View {
                     isOn: $preferences.includeSentiment
                 )
 
-                // Maximum highlights
-                if preferences.includeHighlights {
-                    stepperSetting(
-                        title: "Maximum Highlights",
-                        description: "Maximum number of key moments to highlight",
-                        value: $preferences.maxHighlights,
-                        range: 1...10,
-                        step: 1
-                    )
-                }
+                // Note: Max highlights would be a generator setting
             }
         }
         .padding()
@@ -189,35 +174,10 @@ struct JournalPreferencesView: View {
                 .fontWeight(.semibold)
 
             VStack(spacing: 12) {
-                // Local storage only
-                toggleSetting(
-                    title: "Local Storage Only",
-                    description: "Keep all journal data on your device only",
-                    isOn: $preferences.localOnly
-                )
-
-                // Encrypt journals
-                toggleSetting(
-                    title: "Encrypt Journal Data",
-                    description: "Add an extra layer of security to your journals",
-                    isOn: $preferences.encryptData
-                )
-
-                // Auto-delete old journals
-                toggleSetting(
-                    title: "Auto-delete Old Journals",
-                    description: "Automatically remove journals older than specified period",
-                    isOn: $preferences.autoDelete
-                )
-
-                if preferences.autoDelete {
-                    pickerSetting(
-                        title: "Retention Period",
-                        description: "How long to keep journals before auto-deletion",
-                        selection: $preferences.retentionPeriod,
-                        options: JournalRetentionPeriod.allCases
-                    )
-                }
+                // Note: Privacy settings would be managed at the app level
+                Text("Privacy settings are managed at the application level")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
         .padding()
@@ -244,29 +204,15 @@ struct JournalPreferencesView: View {
 
             if showingAdvancedOptions {
                 VStack(spacing: 12) {
-                    // Learning enabled
-                    toggleSetting(
-                        title: "Enable AI Learning",
-                        description: "Allow the system to learn from your preferences",
-                        isOn: $preferences.learningEnabled
-                    )
-
-                    // Personalization level
-                    sliderSetting(
-                        title: "Personalization Level",
-                        description: "How much the AI should adapt to your style",
-                        value: $preferences.personalizationLevel,
-                        range: 0...1
-                    )
-
                     // Custom prompts
-                    if preferences.personalizationLevel > 0.7 {
-                        textAreaSetting(
-                            title: "Custom Instructions",
-                            description: "Additional instructions for journal generation",
-                            text: $preferences.customPrompt
+                    textAreaSetting(
+                        title: "Custom Instructions",
+                        description: "Additional instructions for journal generation",
+                        text: Binding(
+                            get: { preferences.customPrompts.joined(separator: "\n") },
+                            set: { preferences.customPrompts = $0.components(separatedBy: "\n").filter { !$0.isEmpty } }
                         )
-                    }
+                    )
                 }
             }
         }
@@ -395,7 +341,7 @@ struct JournalPreferencesView: View {
         }
     }
 
-    private func pickerSetting<T: CaseIterable & Hashable>(title: String, description: String, selection: Binding<T>, options: T) -> some View where T: CustomStringConvertible {
+    private func pickerSetting<T: CaseIterable & Hashable>(title: String, description: String, selection: Binding<T>) -> some View where T: CustomStringConvertible {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.subheadline)
@@ -406,7 +352,7 @@ struct JournalPreferencesView: View {
                 .foregroundColor(.secondary)
 
             Picker(selection: selection, label: EmptyView()) {
-                ForEach(Array(options), id: \.self) { option in
+                ForEach(Array(T.allCases), id: \.self) { option in
                     Text(option.description).tag(option)
                 }
             }
@@ -453,12 +399,13 @@ struct JournalPreferencesView: View {
 extension JournalRetentionPeriod: CustomStringConvertible {
     var description: String {
         switch self {
-        case .week: return "1 Week"
-        case .month: return "1 Month"
-        case .quarter: return "3 Months"
-        case .halfYear: return "6 Months"
-        case .year: return "1 Year"
+        case .oneWeek: return "1 Week"
+        case .oneMonth: return "1 Month"
+        case .threeMonths: return "3 Months"
+        case .sixMonths: return "6 Months"
+        case .oneYear: return "1 Year"
         case .forever: return "Forever"
+        default: return "1 Month" // Fallback for any other cases
         }
     }
 }

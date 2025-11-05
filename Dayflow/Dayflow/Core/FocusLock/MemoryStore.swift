@@ -200,50 +200,71 @@ actor BM25Index {
 
 actor VectorEmbeddingGenerator {
     private var embeddingModel: NLEmbedding?
+    private var isLoading: Bool = false
+    private var loadingTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "FocusLock", category: "VectorEmbeddingGenerator")
 
     init() {
-        Task {
-            await loadEmbeddingModel()
-        }
+        // Defer loading to avoid blocking initialization
+        // Call loadEmbeddingModel() explicitly via completeInitialization()
     }
 
-    private func loadEmbeddingModel() {
-        // Use Apple's multilingual sentence embedding model
-        Task {
-            do {
-                let model = try await NLEmbedding.sentenceEmbedding(for: .english)
-                await MainActor.run {
-                    guard let strongSelf = self else { return }
-                    strongSelf.setEmbeddingModel(model)
-                    strongSelf.logger.info("Successfully loaded sentence embedding model")
-                }
-            } catch {
-                await MainActor.run {
-                    self?.logger.error("Failed to load embedding model: \(error.localizedDescription)")
-                }
+    func loadEmbeddingModel() async {
+        // Prevent concurrent loading attempts
+        guard !isLoading else {
+            // Wait for existing load to complete
+            await loadingTask?.value
+            return
+        }
+        
+        isLoading = true
+        loadingTask = Task {
+            // Use Apple's multilingual sentence embedding model
+            let model = NLEmbedding.sentenceEmbedding(for: .english)
+            if let model = model {
+                await setEmbeddingModel(model)
+                logger.info("Successfully loaded sentence embedding model")
+            } else {
+                logger.error("Failed to load embedding model: model is nil")
             }
+            isLoading = false
         }
+        
+        await loadingTask?.value
     }
 
-    private func setEmbeddingModel(_ model: NLEmbedding) {
+    private func setEmbeddingModel(_ model: NLEmbedding) async {
         self.embeddingModel = model
     }
+    
+    func isModelReady() async -> Bool {
+        return embeddingModel != nil
+    }
 
-    func generateEmbedding(for text: String) async throws -> [Double] {
+    func generateEmbedding(for text: String) async throws -> [Float] {
+        // Ensure model is loaded before generating embeddings
+        if embeddingModel == nil {
+            await loadEmbeddingModel()
+        }
+        
         guard let model = embeddingModel else {
             throw EmbeddingError.modelNotLoaded
         }
 
         let startTime = CFAbsoluteTimeGetCurrent()
-        guard let embedding = try model.vector(for: text) else {
-            throw EmbeddingError.modelNotLoaded
+        guard let embeddingDouble = model.vector(for: text) else {
+            throw EmbeddingError.processingFailed
         }
         let duration = CFAbsoluteTimeGetCurrent() - startTime
 
         logger.info("Generated embedding in \(String(format: "%.3f", duration))s")
 
-        return embedding
+        // Convert [Double] to [Float]
+        var embeddingFloat: [Float] = []
+        for value in embeddingDouble {
+            embeddingFloat.append(Float(value))
+        }
+        return embeddingFloat
     }
 
     func generateBatchEmbeddings(for texts: [String]) async throws -> [[Float]] {
@@ -316,18 +337,25 @@ actor HybridMemoryStore: MemoryStore {
         try FileManager.default.createDirectory(at: dbPath.deletingLastPathComponent(),
                                              withIntermediateDirectories: true)
 
-        databaseQueue = try DatabaseQueue(path: dbPath.path)
-
-        try setupDatabase()
-
-        // Load existing items asynchronously
-        Task {
-            await loadExistingItems()
-        }
+        let queue = try DatabaseQueue(path: dbPath.path)
+        databaseQueue = queue
+        // Setup database synchronously during init
+        try setupDatabase(queue: queue)
     }
 
-    private func setupDatabase() throws {
-        try databaseQueue.write { db in
+    // Public method to complete async initialization
+    public func completeInitialization() async {
+        // Load embedding model first (non-blocking, async)
+        await embeddingGenerator.loadEmbeddingModel()
+        
+        // Then load existing items and rebuild index (can be done lazily)
+        await loadExistingItems()
+        
+        logger.info("MemoryStore initialization complete")
+    }
+
+    nonisolated private func setupDatabase(queue: DatabaseQueue) throws {
+        try queue.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS memory_items (
                     id TEXT PRIMARY KEY,
@@ -353,20 +381,45 @@ actor HybridMemoryStore: MemoryStore {
         }
     }
 
+    private var isIndexLoaded: Bool = false
+    
     private func loadExistingItems() async {
+        // Lazy load - only load index on first search or explicit request
+        guard !isIndexLoaded else { return }
+        
         do {
             let items = try await getAllStoredItems()
-            logger.info("Loaded \(items.count) existing items into memory index")
+            logger.info("Loading \(items.count) existing items into BM25 index (lazy load)")
 
-            // Rebuild BM25 index
-            for item in items {
-                let terms = tokenizeForBM25(item.content)
-                await bm25Index.addDocument(id: item.id, terms: terms)
+            // Rebuild BM25 index incrementally (non-blocking)
+            // Process items in batches to avoid overwhelming the system
+            let batchSize = 50
+            for batchStart in stride(from: 0, to: items.count, by: batchSize) {
+                let batchEnd = min(batchStart + batchSize, items.count)
+                let batch = Array(items[batchStart..<batchEnd])
+                
+                await withTaskGroup(of: Void.self) { group in
+                    for item in batch {
+                        group.addTask { [weak self] in
+                            guard let self = self else { return }
+                            let terms = await self.tokenizeForBM25(item.content)
+                            await self.bm25Index.addDocument(id: item.id, terms: terms)
+                        }
+                    }
+                }
             }
+            
+            isIndexLoaded = true
+            logger.info("BM25 index loaded with \(items.count) items")
 
         } catch {
             logger.error("Failed to load existing items: \(error.localizedDescription)")
         }
+    }
+    
+    // Public method to explicitly trigger index loading
+    public func ensureIndexLoaded() async {
+        await loadExistingItems()
     }
 
     // MARK: - MemoryStore Protocol Implementation
@@ -378,11 +431,11 @@ actor HybridMemoryStore: MemoryStore {
         let finalItem: MemoryItem
         if item.embeddings == nil {
             let embeddings = try await embeddingGenerator.generateEmbedding(for: item.content)
-            var updatedItem = item
+            _ = item
             finalItem = MemoryItem(
                 content: item.content,
                 source: item.source,
-                embeddings: embeddings,
+                embeddings: embeddings.map { Float($0) },
                 metadata: item.metadata
             )
         } else {
@@ -402,22 +455,24 @@ actor HybridMemoryStore: MemoryStore {
 
     func search(_ query: String, limit: Int = 10) async throws -> [MemorySearchResult] {
         let startTime = CFAbsoluteTimeGetCurrent()
+        
+        // Lazy load index on first search
+        await ensureIndexLoaded()
 
         let results = await bm25Index.search(query: query, limit: limit)
 
-        let searchResults = try await results.compactMap { [weak self] (id, score) -> MemorySearchResult? in
-            guard let self = self,
-                  let item = try await self.getItem(id: id) else { return nil }
-
+        var searchResults: [MemorySearchResult] = []
+        for (id, score) in results {
+            guard let item = try await self.getItem(id: id) else { continue }
             let highlightedContent = self.highlightText(item.content, query: query)
 
-            return MemorySearchResult(
+            searchResults.append(MemorySearchResult(
                 id: id,
                 item: item,
                 score: score,
                 matchType: .keyword(score: score),
                 highlightedContent: highlightedContent
-            )
+            ))
         }
 
         let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -457,17 +512,17 @@ actor HybridMemoryStore: MemoryStore {
         similarities.sort { $0.1 > $1.1 }
         let topResults = Array(similarities.prefix(limit))
 
-        let searchResults = try await topResults.compactMap { [weak self] (id, score) -> MemorySearchResult? in
-            guard let self = self,
-                  let item = try await self.getItem(id: id) else { return nil }
-
-            return MemorySearchResult(
-                id: id,
-                item: item,
-                score: score,
-                matchType: .semantic(score: score),
-                highlightedContent: nil
-            )
+        var searchResults: [MemorySearchResult] = []
+        for (id, score) in topResults {
+            if let item = try await getItem(id: id) {
+                searchResults.append(MemorySearchResult(
+                    id: id,
+                    item: item,
+                    score: score,
+                    matchType: .semantic(score: score),
+                    highlightedContent: nil
+                ))
+            }
         }
 
         let duration = CFAbsoluteTimeGetCurrent() - startTime
@@ -549,14 +604,14 @@ actor HybridMemoryStore: MemoryStore {
 
         // Create new BM25 index and clear the existing one
         let newIndex = BM25Index()
-        let oldIndex = bm25Index
+        _ = bm25Index
         bm25Index = newIndex
         // Note: The old index will be deallocated automatically
         logger.info("Cleared all items from memory store")
     }
 
     func getStatistics() async throws -> MemoryStoreStatistics {
-        let items = try getAllStoredItems()
+        let items = try await getAllStoredItems()
         let indexedItems = items.filter { $0.embeddings != nil }
 
         let avgEmbeddingTime = embeddingGenerationTimes.isEmpty ? 0 :
@@ -566,7 +621,7 @@ actor HybridMemoryStore: MemoryStore {
             searchTimes.reduce(0, +) / Double(searchTimes.count)
 
         // Calculate storage size
-        let storageSize = try databaseQueue.read { db -> Int64 in
+        let storageSize = try await databaseQueue.read { db -> Int64 in
             try Int64.fetchOne(db, sql: "SELECT SUM(LENGTH(embeddings) + LENGTH(content) + LENGTH(metadata)) FROM memory_items") ?? 0
         }
 
@@ -594,7 +649,7 @@ actor HybridMemoryStore: MemoryStore {
             embeddingsData = nil
         }
 
-        try databaseQueue.write { db in
+        try await databaseQueue.write { db in
             try db.execute(sql: """
                 INSERT OR REPLACE INTO memory_items
                 (id, content, timestamp, source, embeddings, metadata)
@@ -611,7 +666,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getItem(id: UUID) async throws -> MemoryItem? {
-        return try databaseQueue.read { db -> MemoryItem? in
+        return try await databaseQueue.read { db -> MemoryItem? in
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items WHERE id = ?
@@ -622,34 +677,36 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getAllStoredItems() async throws -> [MemoryItem] {
-        return try databaseQueue.read { db -> [MemoryItem] in
+        let rows = try databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items ORDER BY timestamp DESC
-            """).compactMap { try parseMemoryItem(from: $0) }
+            """)
         }
+        return try rows.compactMap { try parseMemoryItem(from: $0) }
     }
 
     private func getItemsWithEmbeddings() async throws -> [MemoryItem] {
-        return try databaseQueue.read { db -> [MemoryItem] in
+        let rows = try databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items
                 WHERE embeddings IS NOT NULL
                 ORDER BY timestamp DESC
-            """).compactMap { try parseMemoryItem(from: $0) }
+            """)
         }
+        return try rows.compactMap { try parseMemoryItem(from: $0) }
     }
 
-    private func parseMemoryItem(from row: Row) throws -> MemoryItem {
+    nonisolated private func parseMemoryItem(from row: Row) throws -> MemoryItem {
         let idString: String = row["id"]
         let content: String = row["content"]
-        let timestamp: Int = row["timestamp"]
+        let _: Int = row["timestamp"]
         let sourceString: String = row["source"]
         let embeddingsData: Data? = row["embeddings"]
         let metadataString: String? = row["metadata"]
 
-        guard let id = UUID(uuidString: idString),
+        guard let _ = UUID(uuidString: idString),
               let source = MemorySource(rawValue: sourceString) else {
                 throw DatabaseError.invalidData
             }
@@ -670,12 +727,10 @@ actor HybridMemoryStore: MemoryStore {
         }
 
         return MemoryItem(
-            id: id,
             content: content,
-            timestamp: Date(timeIntervalSince1970: Double(timestamp)),
             source: source,
             embeddings: embeddings,
-            metadata: metadata
+            metadata: metadata.mapValues { $0.value }
         )
     }
 

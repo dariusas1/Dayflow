@@ -10,7 +10,7 @@ import Combine
 
 struct JournalView: View {
     @StateObject private var generator = DailyJournalGenerator.shared
-    @StateObject private var settingsManager = SettingsManager.shared
+    @StateObject private var settingsManager = FocusLockSettingsManager.shared
     @State private var selectedDate = Date()
     @State private var showingTemplateSelector = false
     @State private var showingExportOptions = false
@@ -29,17 +29,24 @@ struct JournalView: View {
     }
 
     var body: some View {
-        NavigationView {
+        ZStack {
+            // Background matching MainView
+            Image("MainUIBackground")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+            
+            // Main white panel container
             ScrollView {
-                VStack(spacing: 24) {
-                    // Header Section
+                VStack(alignment: .leading, spacing: 24) {
+                    // Header Section - matching MainView style
                     headerSection
+
+                    // Auto-generation info banner
+                    autoGenerationInfoBanner
 
                     // Date Selector
                     dateSelectorSection
-
-                    // Generation Controls
-                    generationControlsSection
 
                     // Loading State
                     if generator.isGenerating {
@@ -66,28 +73,20 @@ struct JournalView: View {
                         journalHistorySection
                     }
                 }
-                .padding()
+                .padding(30)
             }
-            .navigationTitle("Daily Journal")
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button("Preferences", systemImage: "slider.horizontal.3") {
-                            showingPreferences = true
-                        }
-                        Button("Export", systemImage: "square.and.arrow.up") {
-                            showingExportOptions = true
-                        }
-                        Button("History", systemImage: "clock") {
-                            // Show history
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white)
+                        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 0)
                 }
-            }
-            .sheet(isPresented: $showingTemplateSelector) {
+            )
+            .padding([.top, .trailing, .bottom], 15)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showingTemplateSelector) {
                 JournalTemplateView(
                     selectedTemplate: $selectedTemplate,
                     preferences: $journalPreferences
@@ -101,29 +100,98 @@ struct JournalView: View {
             .sheet(isPresented: $showingPreferences) {
                 JournalPreferencesView(preferences: $journalPreferences)
             }
-            .onAppear {
-                loadJournalHistory()
-                animateContent = true
-            }
+        .onAppear {
+            loadJournalHistory()
+            animateContent = true
         }
     }
 
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(spacing: 12) {
-            Text("Your AI-Powered Journal")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Daily Journal")
+                    .font(.custom("InstrumentSerif-Regular", size: 36))
+                    .foregroundColor(.black)
 
-            Text("Transform your daily activities into meaningful reflections")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
+                Spacer()
+
+                // Toolbar actions integrated into header
+                HStack(spacing: 12) {
+                    Button(action: { showingPreferences = true }) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .help("Preferences")
+
+                    Menu {
+                        Button("Export", systemImage: "square.and.arrow.up") {
+                            showingExportOptions = true
+                        }
+                        Button("History", systemImage: "clock") {
+                            // Show history
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+
+            Text("Your daily activities transformed into meaningful reflections")
+                .font(.custom("Nunito", size: 16))
+                .foregroundColor(.black.opacity(0.7))
+                .fontWeight(.medium)
         }
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.1), value: animateContent)
+    }
+    
+    // MARK: - Auto-Generation Info Banner
+    
+    private var autoGenerationInfoBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "moon.stars.fill")
+                .font(.system(size: 20))
+                .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Automatic Journal Generation")
+                    .font(.custom("Nunito", size: 14))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black)
+                
+                Text("Your journal is automatically created each day at midnight based on your activities")
+                    .font(.custom("Nunito", size: 12))
+                    .foregroundColor(.black.opacity(0.7))
+                    .lineSpacing(2)
+            }
+            
+            Spacer()
+        }
+        .padding(20)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.08), location: 0.00),
+                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .opacity(animateContent ? 1.0 : 0.0)
+        .animation(.easeInOut(duration: 0.6).delay(0.15), value: animateContent)
     }
 
     // MARK: - Date Selector Section
@@ -133,29 +201,32 @@ struct JournalView: View {
             HStack {
                 Button(action: { changeDate(by: -1) }) {
                     Image(systemName: "chevron.left")
-                        .font(.title2)
-                        .foregroundColor(.blue)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                 }
+                .buttonStyle(PlainButtonStyle())
 
                 Spacer()
 
-                VStack {
+                VStack(spacing: 4) {
                     Text(selectedDate.formatted(date: .abbreviated, time: .omitted))
-                        .font(.headline)
-                        .fontWeight(.medium)
+                        .font(.custom("Nunito", size: 16))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.black)
 
                     Text(selectedDate.formatted(.dateTime.weekday(.wide)))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.black.opacity(0.6))
                 }
 
                 Spacer()
 
                 Button(action: { changeDate(by: 1) }) {
                     Image(systemName: "chevron.right")
-                        .font(.title2)
-                        .foregroundColor(.blue)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                 }
+                .buttonStyle(PlainButtonStyle())
             }
             .padding(.horizontal)
 
@@ -166,6 +237,10 @@ struct JournalView: View {
                 quickDateButton("This Week", isToday: false)
             }
         }
+        .padding()
+        .background(Color.white)
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.2), value: animateContent)
     }
@@ -181,94 +256,69 @@ struct JournalView: View {
             }
         }) {
             Text(title)
-                .font(.caption)
+                .font(.custom("Nunito", size: 12))
                 .fontWeight(.medium)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(Color.blue.opacity(0.1))
-                .foregroundColor(.blue)
+                .background(
+                    ZStack {
+                        Color.white.opacity(0.69)
+                        LinearGradient(
+                            stops: [
+                                Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
+                                Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                            ],
+                            startPoint: UnitPoint(x: 1.15, y: 3.61),
+                            endPoint: UnitPoint(x: 0.02, y: 0)
+                        )
+                    }
+                )
+                .foregroundColor(.black)
                 .cornerRadius(16)
         }
+        .buttonStyle(PlainButtonStyle())
     }
 
-    // MARK: - Generation Controls Section
-
-    private var generationControlsSection: some View {
-        VStack(spacing: 16) {
-            // Template selection
-            HStack {
-                Text("Template:")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                Spacer()
-
-                Button(action: { showingTemplateSelector = true }) {
-                    HStack {
-                        Text(selectedTemplate.displayName)
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                    }
-                    .font(.subheadline)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.gray.opacity(0.1))
-                    .cornerRadius(8)
-                }
-            }
-
-            // Generate button
-            Button(action: {
-                Task {
-                    await generator.generateJournalWithHighlights(
-                        for: selectedDate,
-                        template: selectedTemplate,
-                        preferences: journalPreferences
-                    )
-                }
-            }) {
-                HStack {
-                    Image(systemName: "sparkles")
-                    Text("Generate Journal")
-                        .fontWeight(.semibold)
-                }
-                .font(.headline)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(
-                    LinearGradient(
-                        gradient: Gradient(colors: [.blue, .purple]),
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(12)
-            }
-            .disabled(generator.isGenerating)
-        }
-        .opacity(animateContent ? 1.0 : 0.0)
-        .animation(.easeInOut(duration: 0.6).delay(0.3), value: animateContent)
-    }
 
     // MARK: - Loading Section
 
     private var loadingSection: some View {
-        VStack(spacing: 16) {
-            ProgressView(value: generator.currentProgress)
-                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
-                .scaleEffect(1.2)
+        VStack(spacing: 20) {
+            // Enhanced progress indicator
+                        ZStack {
+                Circle()
+                    .stroke(Color(red: 1, green: 0.42, blue: 0.02).opacity(0.2), lineWidth: 4)
+                    .frame(width: 60, height: 60)
+                
+                Circle()
+                    .trim(from: 0, to: generator.currentProgress)
+                    .stroke(Color(red: 1, green: 0.42, blue: 0.02), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear, value: generator.currentProgress)
+                
+                    Image(systemName: "sparkles")
+                    .font(.system(size: 24))
+                    .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
+            }
+
+            VStack(spacing: 8) {
+                Text("Generating Your Journal")
+                    .font(.custom("Nunito", size: 18))
+                    .fontWeight(.semibold)
+                    .foregroundColor(.black)
 
             Text(generator.progressMessage)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.custom("Nunito", size: 14))
+                .foregroundColor(.black.opacity(0.6))
                 .multilineTextAlignment(.center)
+            }
 
             // Animated loading dots
             HStack(spacing: 8) {
                 ForEach(0..<3) { index in
                     Circle()
-                        .fill(Color.blue)
+                        .fill(Color(red: 1, green: 0.42, blue: 0.02))
                         .frame(width: 8, height: 8)
                         .scaleEffect(loadingScale(for: index))
                         .animation(
@@ -280,9 +330,23 @@ struct JournalView: View {
                 }
             }
         }
-        .padding()
-        .background(Color.gray.opacity(0.05))
+        .frame(maxWidth: .infinity)
+        .padding(40)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95), location: 0.00),
+                        Gradient.Stop(color: Color.white, location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
     private func loadingScale(for index: Int) -> CGFloat {
@@ -295,15 +359,16 @@ struct JournalView: View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.title)
-                .foregroundColor(.orange)
+                .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
 
             Text("Generation Failed")
-                .font(.headline)
+                .font(.custom("Nunito", size: 18))
                 .fontWeight(.semibold)
+                .foregroundColor(.black)
 
             Text(error.localizedDescription)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
+                .font(.custom("Nunito", size: 14))
+                .foregroundColor(.black.opacity(0.6))
                 .multilineTextAlignment(.center)
 
             Button("Try Again") {
@@ -315,17 +380,19 @@ struct JournalView: View {
                     )
                 }
             }
-            .font(.subheadline)
-            .fontWeight(.medium)
+            .font(.custom("Nunito", size: 14))
+            .fontWeight(.semibold)
             .foregroundColor(.white)
             .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .background(Color.orange)
+            .padding(.vertical, 10)
+            .background(Color(red: 1, green: 0.42, blue: 0.02))
             .cornerRadius(8)
+            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
         }
-        .padding()
-        .background(Color.orange.opacity(0.1))
+        .padding(24)
+        .background(Color.white)
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     // MARK: - Journal Content Section
@@ -344,9 +411,7 @@ struct JournalView: View {
             }
 
             // Sentiment analysis
-            if let sentiment = journal.sentimentAnalysis {
-                sentimentSection(sentiment)
-            }
+            sentimentSection(journal.sentiment)
 
             // Actions
             journalActionsSection(journal)
@@ -356,18 +421,20 @@ struct JournalView: View {
     }
 
     private func journalHeader(_ journal: DailyJournal) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(journal.date.formatted(date: .long, time: .omitted))
-                    .font(.headline)
-                    .fontWeight(.semibold)
+                    .font(.custom("InstrumentSerif-Regular", size: 22))
+                    .foregroundColor(.black)
 
-                HStack {
-                    Image(systemName: journal.template.systemImage)
-                        .font(.caption)
+                HStack(spacing: 8) {
+                    Image(systemName: journal.template.icon)
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                     Text(journal.template.displayName)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.custom("Nunito", size: 12))
+                        .foregroundColor(.black.opacity(0.6))
+                        .fontWeight(.medium)
                 }
             }
 
@@ -375,35 +442,71 @@ struct JournalView: View {
 
             // Edit button
             Button(action: { isEditingJournal.toggle() }) {
-                Image(systemName: isEditingJournal ? "checkmark" : "pencil")
-                    .font(.subheadline)
-                    .foregroundColor(.blue)
+                HStack(spacing: 6) {
+                    Image(systemName: isEditingJournal ? "checkmark.circle.fill" : "pencil.circle.fill")
+                        .font(.system(size: 20))
+                    Text(isEditingJournal ? "Done" : "Edit")
+                        .font(.custom("Nunito", size: 13))
+                        .fontWeight(.semibold)
+                }
+                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1))
+                .cornerRadius(8)
             }
+            .buttonStyle(PlainButtonStyle())
         }
-        .padding()
-        .background(Color.gray.opacity(0.05))
+        .padding(20)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34).opacity(0.05), location: 0.00),
+                        Gradient.Stop(color: Color.white, location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
     }
 
     private func journalContentView(_ journal: DailyJournal) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             if isEditingJournal {
                 TextEditor(text: .constant(journal.content))
-                    .font(.body)
+                    .font(.custom("Nunito", size: 15))
                     .padding()
-                    .background(Color.gray.opacity(0.05))
+                    .background(Color.white)
                     .cornerRadius(8)
             } else {
                 Text(journal.content)
-                    .font(.body)
-                    .lineSpacing(2)
+                    .font(.custom("Nunito", size: 15))
+                    .foregroundColor(.black.opacity(0.85))
+                    .lineSpacing(6)
                     .textSelection(.enabled)
             }
         }
-        .padding()
-        .background(Color.white)
+        .padding(24)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0.3), location: 0.00),
+                        Gradient.Stop(color: Color.white, location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
         .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
     private func highlightsSection(_ highlights: [JournalHighlight]) -> some View {
@@ -412,12 +515,14 @@ struct JournalView: View {
                 Button(action: { showingHighlights.toggle() }) {
                     HStack {
                         Image(systemName: showingHighlights ? "chevron.down" : "chevron.right")
+                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                         Text("Key Highlights (\(highlights.count))")
-                            .font(.subheadline)
+                            .font(.custom("Nunito", size: 16))
                             .fontWeight(.semibold)
+                            .foregroundColor(.black)
                     }
-                    .foregroundColor(.primary)
                 }
+                .buttonStyle(PlainButtonStyle())
 
                 Spacer()
             }
@@ -430,135 +535,226 @@ struct JournalView: View {
                 }
             }
         }
-        .padding()
-        .background(Color.yellow.opacity(0.05))
+        .padding(20)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34).opacity(0.05), location: 0.00),
+                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func highlightRow(_ highlight: JournalHighlight) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: highlight.category.systemImage)
-                .foregroundColor(highlight.category.color)
-                .frame(width: 20)
+        HStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 1, green: 0.42, blue: 0.02).opacity(0.1))
+                    .frame(width: 36, height: 36)
+                
+            Image(systemName: highlight.category.icon)
+                    .font(.system(size: 16))
+                .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
+            }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(highlight.title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.custom("Nunito", size: 15))
+                    .fontWeight(.bold)
+                    .foregroundColor(.black)
 
-                Text(highlight.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                Text(highlight.content)
+                    .font(.custom("Nunito", size: 13))
+                    .foregroundColor(.black.opacity(0.7))
+                    .lineSpacing(2)
                     .lineLimit(2)
             }
 
             Spacer()
 
-            // Significance indicator
+            // Significance indicator with label
+            VStack(spacing: 4) {
             Circle()
                 .fill(highlight.significanceColor)
-                .frame(width: 8, height: 8)
+                    .frame(width: 10, height: 10)
+                
+                Text(highlight.significance > 0.7 ? "High" : highlight.significance > 0.4 ? "Med" : "Low")
+                    .font(.custom("Nunito", size: 9))
+                    .foregroundColor(.black.opacity(0.5))
+            }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(Color.white.opacity(0.5))
+        .cornerRadius(10)
     }
 
     private func sentimentSection(_ sentiment: SentimentAnalysis) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "heart")
-                    .foregroundColor(.pink)
+                Image(systemName: "heart.fill")
+                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
 
                 Text("Emotional Insights")
-                    .font(.subheadline)
+                    .font(.custom("Nunito", size: 16))
                     .fontWeight(.semibold)
+                    .foregroundColor(.black)
 
                 Spacer()
 
-                Text(sentiment.overallSentiment.displayName)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(sentiment.overallSentiment.color.opacity(0.2))
-                    .foregroundColor(sentiment.overallSentiment.color)
+                Text(sentiment.overallSentiment.emotion.capitalized)
+                    .font(.custom("Nunito", size: 11))
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        ZStack {
+                            Color.white.opacity(0.69)
+                            LinearGradient(
+                                stops: [
+                                    Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
+                                    Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                                ],
+                                startPoint: UnitPoint(x: 1.15, y: 3.61),
+                                endPoint: UnitPoint(x: 0.02, y: 0)
+                            )
+                        }
+                    )
+                    .foregroundColor(.black)
                     .cornerRadius(8)
             }
 
             // Top emotions
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(sentiment.emotionScores.prefix(3)) { emotion in
+                    ForEach(sentiment.emotionalBreakdown.prefix(3), id: \.emotion) { emotion in
                         HStack(spacing: 4) {
-                            Text(emotion.emotion.displayName)
-                                .font(.caption2)
+                            Text(emotion.emotion.capitalized)
+                                .font(.custom("Nunito", size: 11))
                             Text(String(format: "%.0f%%", emotion.intensity * 100))
-                                .font(.caption2)
-                                .fontWeight(.medium)
+                                .font(.custom("Nunito", size: 11))
+                                .fontWeight(.semibold)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.purple.opacity(0.1))
-                        .foregroundColor(.purple)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1))
+                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
                         .cornerRadius(6)
                     }
                 }
             }
         }
-        .padding()
-        .background(Color.pink.opacity(0.05))
+        .padding(20)
+        .background(Color.white)
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func journalActionsSection(_ journal: DailyJournal) -> some View {
         HStack(spacing: 16) {
-            Button("Share") {
+            Button("Share Journal") {
                 showingExportOptions = true
             }
-            .font(.subheadline)
-            .fontWeight(.medium)
-            .foregroundColor(.blue)
+            .font(.custom("Nunito", size: 14))
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(Color.blue.opacity(0.1))
-            .cornerRadius(8)
-
-            Button("Regenerate") {
-                Task {
-                    await generator.regenerateJournal(
-                        with: selectedTemplate,
-                        preferences: journalPreferences
+            .frame(height: 48)
+            .background(
+                ZStack {
+                    Color(red: 1, green: 0.42, blue: 0.02)
+                    LinearGradient(
+                        stops: [
+                            Gradient.Stop(color: Color.white.opacity(0.2), location: 0.00),
+                            Gradient.Stop(color: Color.clear, location: 1.00),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
                 }
-            }
-            .font(.subheadline)
-            .fontWeight(.medium)
-            .foregroundColor(.green)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(Color.green.opacity(0.1))
-            .cornerRadius(8)
+            )
+            .cornerRadius(10)
+            .shadow(color: Color(red: 1, green: 0.42, blue: 0.02).opacity(0.3), radius: 4, x: 0, y: 2)
+            .buttonStyle(PlainButtonStyle())
         }
     }
 
     // MARK: - Empty State Section
 
     private var emptyStateSection: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "book.closed")
-                .font(.system(size: 60))
-                .foregroundColor(.gray.opacity(0.5))
-
-            VStack(spacing: 8) {
-                Text("No Journal Yet")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-
-                Text("Generate your first AI-powered journal entry to see your daily reflections come to life")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+        VStack(spacing: 24) {
+            // Animated icon
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            stops: [
+                                Gradient.Stop(color: Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1), location: 0.00),
+                                Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 120, height: 120)
+                
+                Image(systemName: "moon.stars.fill")
+                    .font(.system(size: 48))
+                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.5))
             }
+
+            VStack(spacing: 12) {
+                Text("No Journal for This Date")
+                    .font(.custom("InstrumentSerif-Regular", size: 24))
+                    .foregroundColor(.black)
+
+                Text("Journals are automatically generated at midnight each day.\n\nYour daily reflections will appear here once the system processes your activities and creates a personalized summary.")
+                    .font(.custom("Nunito", size: 15))
+                    .foregroundColor(.black.opacity(0.7))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(4)
+                    .padding(.horizontal, 60)
+            }
+            
+            // Info box
+            HStack(spacing: 10) {
+                Image(systemName: "info.circle.fill")
+                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                
+                Text("Use the date selector above to view past journal entries")
+                    .font(.custom("Nunito", size: 13))
+                    .foregroundColor(.black.opacity(0.6))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.05))
+            .cornerRadius(8)
         }
-        .padding(.vertical, 40)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 70)
+        .background(
+            ZStack {
+                Color.white
+                LinearGradient(
+                    stops: [
+                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95), location: 0.00),
+                        Gradient.Stop(color: Color.white, location: 1.00),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        )
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.5), value: animateContent)
     }
@@ -569,16 +765,18 @@ struct JournalView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Recent Journals")
-                    .font(.headline)
+                    .font(.custom("Nunito", size: 18))
                     .fontWeight(.semibold)
+                    .foregroundColor(.black)
 
                 Spacer()
 
                 Button("View All") {
                     // Navigate to full history
                 }
-                .font(.caption)
-                .foregroundColor(.blue)
+                .font(.custom("Nunito", size: 12))
+                .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                .buttonStyle(PlainButtonStyle())
             }
 
             LazyVStack(spacing: 8) {
@@ -587,45 +785,65 @@ struct JournalView: View {
                 }
             }
         }
-        .padding()
-        .background(Color.gray.opacity(0.05))
+        .padding(20)
+        .background(Color.white)
         .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func historyRow(_ journal: DailyJournal) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(journal.date.formatted(date: .abbreviated, time: .omitted))
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-
-                HStack {
-                    Image(systemName: journal.template.systemImage)
-                        .font(.caption2)
-                    Text(journal.template.displayName)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            Spacer()
-
-            if let sentiment = journal.sentimentAnalysis {
-                Text(sentiment.overallSentiment.displayName)
-                    .font(.caption)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(sentiment.overallSentiment.color.opacity(0.2))
-                    .foregroundColor(sentiment.overallSentiment.color)
-                    .cornerRadius(4)
-            }
-        }
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture {
+        Button(action: {
             selectedDate = journal.date
             generator.generatedJournal = journal
+        }) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(journal.date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.custom("Nunito", size: 14))
+                        .fontWeight(.semibold)
+                        .foregroundColor(.black)
+
+                    HStack {
+                        Image(systemName: journal.template.icon)
+                            .font(.custom("Nunito", size: 10))
+                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                        Text(journal.template.displayName)
+                            .font(.custom("Nunito", size: 10))
+                            .foregroundColor(.black.opacity(0.6))
+                    }
+                }
+
+                Spacer()
+
+                if !journal.sentiment.emotionalBreakdown.isEmpty {
+                    Text(journal.sentiment.overallSentiment.displayName)
+                        .font(.custom("Nunito", size: 10))
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            ZStack {
+                                Color.white.opacity(0.69)
+                                LinearGradient(
+                                    stops: [
+                                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
+                                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                                    ],
+                                    startPoint: UnitPoint(x: 1.15, y: 3.61),
+                                    endPoint: UnitPoint(x: 0.02, y: 0)
+                                )
+                            }
+                        )
+                        .foregroundColor(.black)
+                        .cornerRadius(4)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 12)
+            .background(Color.white.opacity(0.5))
+            .cornerRadius(8)
         }
+        .buttonStyle(PlainButtonStyle())
     }
 
     // MARK: - Helper Methods
@@ -650,36 +868,42 @@ struct JournalView: View {
 
 // Note: JournalTemplate properties (displayName, systemImage, etc.) are defined in FocusLockModels.swift
 
-extension HighlightCategory {
+extension JournalHighlight.HighlightCategory {
     var systemImage: String {
-        switch self {
-        case .achievement: return "trophy"
-        case .challenge: return "exclamationmark.triangle"
-        case .learning: return "book"
-        case .moment: return "star"
-        case .insight: return "lightbulb"
-        case .gratitude: return "heart"
+        return icon
+    }
+    
+    var colorValue: Color {
+        let colorStr = self.color // Get the String color property
+        switch colorStr {
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "blue": return .blue
+        case "green": return .green
+        case "purple": return .purple
+        case "pink": return .pink
+        default: return .gray
         }
     }
-
-    // Note: color property is defined in FocusLockModels.swift
 }
 
 extension SentimentScore {
     var displayName: String {
-        switch self {
-        case .positive: return "Positive"
-        case .neutral: return "Neutral"
-        case .negative: return "Negative"
-        }
+        return emotion.capitalized
     }
 
     var color: Color {
-        switch self {
+        switch sentimentType {
         case .positive: return .green
         case .neutral: return .gray
         case .negative: return .red
         }
+    }
+}
+
+extension JournalTemplate {
+    var systemImage: String {
+        return icon
     }
 }
 

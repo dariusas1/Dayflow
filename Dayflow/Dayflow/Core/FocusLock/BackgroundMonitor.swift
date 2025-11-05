@@ -52,7 +52,9 @@ class BackgroundMonitor: ObservableObject {
     }
 
     deinit {
-        stopMonitoring()
+        Task { @MainActor [weak self] in
+            self?.performStopMonitoring()
+        }
     }
 
     // MARK: - Public Interface
@@ -80,7 +82,7 @@ class BackgroundMonitor: ObservableObject {
 
     nonisolated func stopMonitoring() {
         Task { @MainActor in
-            await self.performStopMonitoring()
+            self.performStopMonitoring()
         }
     }
 

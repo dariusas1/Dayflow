@@ -6,6 +6,7 @@
 import Foundation
 import GRDB
 import Sentry
+import os.log
 
 extension DateFormatter {
     static let yyyyMMdd: DateFormatter = {
@@ -292,6 +293,29 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
     private let fileMgr = FileManager.default
     private let root: URL
     var recordingsRoot: URL { root }
+    
+    // Connection monitoring
+    private var connectionCount: Int {
+        get {
+            UserDefaults.standard.integer(forKey: "storageManager_connectionCount")
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "storageManager_connectionCount")
+        }
+    }
+    
+    private var lastConnectionCheck: Date {
+        get {
+            if let timestamp = UserDefaults.standard.double(forKey: "storageManager_lastConnectionCheck") as TimeInterval?,
+               timestamp > 0 {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+            return Date()
+        }
+        set {
+            UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "storageManager_lastConnectionCheck")
+        }
+    }
 
     // TEMPORARY DEBUG: Remove after identifying slow queries
     private let debugSlowQueries = true
@@ -311,6 +335,15 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         // Ensure directories exist before opening database
         try? fileMgr.createDirectory(at: baseDir, withIntermediateDirectories: true)
         try? fileMgr.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+        
+        // Create Second Brain file system storage directories
+        let journalsDir = baseDir.appendingPathComponent("journals", isDirectory: true)
+        let decisionsDir = baseDir.appendingPathComponent("decisions", isDirectory: true)
+        let insightsDir = baseDir.appendingPathComponent("insights", isDirectory: true)
+        
+        try? fileMgr.createDirectory(at: journalsDir, withIntermediateDirectories: true)
+        try? fileMgr.createDirectory(at: decisionsDir, withIntermediateDirectories: true)
+        try? fileMgr.createDirectory(at: insightsDir, withIntermediateDirectories: true)
 
         root = recordingsDir
         dbURL = baseDir.appendingPathComponent("chunks.sqlite")
@@ -324,6 +357,11 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         // Configure database with WAL mode for better performance and safety
         var config = Configuration()
         config.maximumReaderCount = 5
+        
+        // CRITICAL: Set QoS to userInitiated to prevent priority inversion
+        // when database is accessed from main thread during UI updates
+        config.qos = .userInitiated
+        
         config.prepareDatabase { db in
             if !db.configuration.readonly {
                 try db.execute(sql: "PRAGMA journal_mode = WAL")
@@ -331,6 +369,13 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
             }
             try db.execute(sql: "PRAGMA busy_timeout = 5000")
         }
+        
+        // Track connection pool usage for monitoring
+        // Note: defaultTransactionKind is now automatically managed by GRDB
+        #if DEBUG
+        // Add connection monitoring in debug builds
+        // Trace is set on the database instance after creation, not on config
+        #endif
 
         db = try! DatabasePool(path: dbURL.path, configuration: config)
 
@@ -352,6 +397,47 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         purgeIfNeeded()
         TimelapseStorageManager.shared.purgeIfNeeded()
         startPurgeScheduler()
+        
+        // Run initial database optimization check, then schedule weekly
+        optimizeDatabaseIfNeeded()
+        startDatabaseOptimizationScheduler()
+        
+        // Start connection monitoring
+        startConnectionMonitoring()
+    }
+    
+    private func startConnectionMonitoring() {
+        // Monitor connection pool usage periodically
+        let monitorQueue = DispatchQueue(label: "com.dayflow.storage.connectionMonitor", qos: .utility)
+        let timer = DispatchSource.makeTimerSource(queue: monitorQueue)
+        timer.schedule(deadline: .now() + 300, repeating: 300) // Every 5 minutes
+        timer.setEventHandler { [weak self] in
+            self?.checkConnectionHealth()
+        }
+        timer.resume()
+    }
+    
+    private func checkConnectionHealth() {
+        let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
+        
+        // Check if we're holding too many connections
+        // GRDB's DatabasePool manages connections internally, but we can monitor usage patterns
+        do {
+            // Perform a simple query to verify connection health
+            _ = try db.read { db in
+                try db.execute(sql: "SELECT 1")
+            }
+            
+            #if DEBUG
+            logger.debug("Connection pool health check passed")
+            #endif
+        } catch {
+            logger.error("Connection pool health check failed: \(error.localizedDescription)")
+        }
+        
+        // Check for connection leaks by monitoring query patterns
+        // In a real implementation, you'd track connection usage over time
+        lastConnectionCheck = Date()
     }
 
     // TEMPORARY DEBUG: Timing helpers for database operations
@@ -596,6 +682,135 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
                 print("✅ Added is_deleted column and composite indexes to timeline_cards")
             }
+            
+            // Second Brain Platform Tables
+            try db.execute(sql: """
+                -- Journal entries: stores daily journal metadata
+                CREATE TABLE IF NOT EXISTS journal_entries (
+                    id TEXT PRIMARY KEY,
+                    date DATE NOT NULL UNIQUE,
+                    generated_summary TEXT,
+                    execution_score REAL,
+                    metadata TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON journal_entries(date DESC);
+                CREATE INDEX IF NOT EXISTS idx_journal_entries_created ON journal_entries(created_at DESC);
+                
+                -- Journal sections: stores individual sections of a journal entry
+                CREATE TABLE IF NOT EXISTS journal_sections (
+                    id TEXT PRIMARY KEY,
+                    journal_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+                    section_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT,
+                    order_index INTEGER NOT NULL,
+                    is_custom INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_journal_sections_journal ON journal_sections(journal_id, order_index);
+                CREATE INDEX IF NOT EXISTS idx_journal_sections_type ON journal_sections(section_type);
+                
+                -- Todos: smart task management with priorities
+                CREATE TABLE IF NOT EXISTS todos (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    project TEXT,
+                    priority TEXT NOT NULL,
+                    scheduled_time DATETIME,
+                    duration INTEGER,
+                    context TEXT,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    dependencies TEXT,
+                    subtasks TEXT,
+                    metadata TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
+                CREATE INDEX IF NOT EXISTS idx_todos_priority ON todos(priority, status);
+                CREATE INDEX IF NOT EXISTS idx_todos_scheduled ON todos(scheduled_time);
+                CREATE INDEX IF NOT EXISTS idx_todos_project ON todos(project, status);
+                CREATE INDEX IF NOT EXISTS idx_todos_created ON todos(created_at DESC);
+                
+                -- Decisions log: track decisions with context
+                CREATE TABLE IF NOT EXISTS decisions_log (
+                    id TEXT PRIMARY KEY,
+                    question TEXT NOT NULL,
+                    options TEXT,
+                    tradeoffs TEXT,
+                    owner TEXT,
+                    deadline DATETIME,
+                    decision TEXT,
+                    outcome TEXT,
+                    metadata TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    decided_at DATETIME,
+                    reviewed_at DATETIME
+                );
+                CREATE INDEX IF NOT EXISTS idx_decisions_created ON decisions_log(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_decisions_deadline ON decisions_log(deadline);
+                CREATE INDEX IF NOT EXISTS idx_decisions_owner ON decisions_log(owner);
+                
+                -- Conversations log: track meaningful conversations
+                CREATE TABLE IF NOT EXISTS conversations_log (
+                    id TEXT PRIMARY KEY,
+                    person_name TEXT NOT NULL,
+                    context TEXT,
+                    key_points TEXT,
+                    decisions TEXT,
+                    follow_ups TEXT,
+                    sentiment TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    conversation_date DATE NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations_log(conversation_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_conversations_person ON conversations_log(person_name);
+                
+                -- User context: profile data and preferences
+                CREATE TABLE IF NOT EXISTS user_context (
+                    id TEXT PRIMARY KEY,
+                    key TEXT NOT NULL UNIQUE,
+                    value TEXT NOT NULL,
+                    category TEXT,
+                    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_context_category ON user_context(category);
+                
+                -- Proactive alerts: coaching and intelligence alerts
+                CREATE TABLE IF NOT EXISTS proactive_alerts (
+                    id TEXT PRIMARY KEY,
+                    alert_type TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    context TEXT,
+                    is_dismissed INTEGER NOT NULL DEFAULT 0,
+                    dismissed_at DATETIME,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_proactive_alerts_active ON proactive_alerts(created_at DESC) WHERE is_dismissed = 0;
+                CREATE INDEX IF NOT EXISTS idx_proactive_alerts_type ON proactive_alerts(alert_type, created_at DESC);
+                
+                -- Context switches: track task switching behavior
+                CREATE TABLE IF NOT EXISTS context_switches (
+                    id TEXT PRIMARY KEY,
+                    from_activity TEXT,
+                    to_activity TEXT,
+                    from_app TEXT,
+                    to_app TEXT,
+                    duration_seconds INTEGER,
+                    switch_reason TEXT,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_context_switches_created ON context_switches(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_context_switches_date ON context_switches(DATE(created_at));
+            """)
+            
+            print("✅ Second Brain platform tables created successfully")
         }
     }
 
@@ -1235,10 +1450,10 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
             """, arguments: [toTs, fromTs, fromTs, toTs])
 
             for card in cardsToDelete {
-                let id: Int64 = card["id"]
-                let start: String = card["start"]
-                let end: String = card["end"]
-                let title: String = card["title"]
+                _ = card["id"]
+                _ = card["start"]
+                _ = card["end"]
+                _ = card["title"]
             }
 
             // Soft delete existing cards in the range using timestamp columns
@@ -1293,7 +1508,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 let startComponents = calendar.dateComponents([.hour, .minute], from: startTime)
                 guard let startHour = startComponents.hour, let startMinute = startComponents.minute else { continue }
 
-                var startDate = resolveClock(startHour, startMinute)
+                let startDate = resolveClock(startHour, startMinute)
 
                 let startTs = Int(startDate.timeIntervalSince1970)
 
@@ -1733,10 +1948,833 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
             """, arguments: StatementArguments(batchIds))
         }
     }
+    
+    // MARK: - Second Brain Platform Operations
+    
+    // MARK: Journal Operations
+    
+    func saveJournal(_ journal: EnhancedDailyJournal) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        let journalId = journal.id.uuidString
+        let metadataJSON = (try? encoder.encode(journal.metadata)).flatMap { String(data: $0, encoding: .utf8) }
+        
+        try timedWrite("saveJournal") { db in
+            // Insert or replace journal entry
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO journal_entries (
+                    id, date, generated_summary, execution_score, metadata, updated_at
+                ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, arguments: [
+                journalId,
+                DateFormatter.yyyyMMdd.string(from: journal.date),
+                journal.generatedSummary,
+                journal.executionScore,
+                metadataJSON
+            ])
+            
+            // Delete existing sections for this journal
+            try db.execute(sql: "DELETE FROM journal_sections WHERE journal_id = ?", arguments: [journalId])
+            
+            // Insert sections
+            for section in journal.sections {
+                try db.execute(sql: """
+                    INSERT INTO journal_sections (
+                        id, journal_id, section_type, title, content, order_index, is_custom
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, arguments: [
+                    section.id.uuidString,
+                    journalId,
+                    section.type.rawValue,
+                    section.title,
+                    section.content,
+                    section.order,
+                    section.isCustom ? 1 : 0
+                ])
+            }
+        }
+        
+        return journalId
+    }
+    
+    func loadJournal(forDate date: Date) throws -> EnhancedDailyJournal? {
+        let dayString = DateFormatter.yyyyMMdd.string(from: date)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("loadJournal") { db in
+            // Fetch journal entry
+            guard let journalRow = try Row.fetchOne(db, sql: """
+                SELECT * FROM journal_entries WHERE date = ?
+            """, arguments: [dayString]) else {
+                return nil
+            }
+            
+            let journalId: String = journalRow["id"]
+            
+            // Fetch sections
+            let sectionRows = try Row.fetchAll(db, sql: """
+                SELECT * FROM journal_sections
+                WHERE journal_id = ?
+                ORDER BY order_index ASC
+            """, arguments: [journalId])
+            
+            let sections = sectionRows.map { row -> JournalSection in
+                let sectionTypeRaw: String = row["section_type"]
+                let sectionType = JournalSectionType(rawValue: sectionTypeRaw) ?? .daySummary
+                
+                return JournalSection(
+                    id: UUID(uuidString: row["id"]) ?? UUID(),
+                    type: sectionType,
+                    title: row["title"],
+                    content: row["content"] ?? "",
+                    order: row["order_index"],
+                    isCustom: (row["is_custom"] as? Int64 ?? 0) != 0
+                )
+            }
+            
+            // Parse metadata
+            var metadata = JournalMetadata()
+            if let metadataString: String = journalRow["metadata"],
+               let metadataData = metadataString.data(using: .utf8),
+               let decodedMetadata = try? decoder.decode(JournalMetadata.self, from: metadataData) {
+                metadata = decodedMetadata
+            }
+            
+            return EnhancedDailyJournal(
+                id: UUID(uuidString: journalId) ?? UUID(),
+                date: date,
+                sections: sections,
+                generatedSummary: journalRow["generated_summary"] ?? "",
+                executionScore: journalRow["execution_score"] ?? 5.0,
+                metadata: metadata
+            )
+        }
+    }
+    
+    func deleteJournal(id: UUID) throws {
+        try timedWrite("deleteJournal") { db in
+            try db.execute(sql: "DELETE FROM journal_entries WHERE id = ?", arguments: [id.uuidString])
+        }
+    }
+    
+    func fetchJournals(limit: Int = 30) throws -> [EnhancedDailyJournal] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("fetchJournals") { db in
+            let journalRows = try Row.fetchAll(db, sql: """
+                SELECT * FROM journal_entries
+                ORDER BY date DESC
+                LIMIT ?
+            """, arguments: [limit])
+            
+            return try journalRows.compactMap { journalRow -> EnhancedDailyJournal? in
+                let journalId: String = journalRow["id"]
+                let dateString: String = journalRow["date"]
+                
+                guard let date = DateFormatter.yyyyMMdd.date(from: dateString) else {
+                    return nil
+                }
+                
+                // Fetch sections
+                let sectionRows = try Row.fetchAll(db, sql: """
+                    SELECT * FROM journal_sections
+                    WHERE journal_id = ?
+                    ORDER BY order_index ASC
+                """, arguments: [journalId])
+                
+                let sections = sectionRows.map { row -> JournalSection in
+                    let sectionTypeRaw: String = row["section_type"]
+                    let sectionType = JournalSectionType(rawValue: sectionTypeRaw) ?? .daySummary
+                    
+                    return JournalSection(
+                        id: UUID(uuidString: row["id"]) ?? UUID(),
+                        type: sectionType,
+                        title: row["title"],
+                        content: row["content"] ?? "",
+                        order: row["order_index"],
+                        isCustom: (row["is_custom"] as? Int64 ?? 0) != 0
+                    )
+                }
+                
+                // Parse metadata
+                var metadata = JournalMetadata()
+                if let metadataString: String = journalRow["metadata"],
+                   let metadataData = metadataString.data(using: .utf8),
+                   let decodedMetadata = try? decoder.decode(JournalMetadata.self, from: metadataData) {
+                    metadata = decodedMetadata
+                }
+                
+                return EnhancedDailyJournal(
+                    id: UUID(uuidString: journalId) ?? UUID(),
+                    date: date,
+                    sections: sections,
+                    generatedSummary: journalRow["generated_summary"] ?? "",
+                    executionScore: journalRow["execution_score"] ?? 5.0,
+                    metadata: metadata
+                )
+            }
+        }
+    }
+    
+    // MARK: Todo Operations
+    
+    func saveTodo(_ todo: SmartTodo) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        let todoId = todo.id.uuidString
+        let dependenciesJSON = (try? encoder.encode(todo.dependencies)).flatMap { String(data: $0, encoding: .utf8) }
+        let subtasksJSON = todo.subtasks.flatMap { (try? encoder.encode($0)).flatMap { String(data: $0, encoding: .utf8) } }
+        let metadataJSON = (try? encoder.encode(todo.metadata)).flatMap { String(data: $0, encoding: .utf8) }
+        
+        try timedWrite("saveTodo") { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO todos (
+                    id, title, description, project, priority,
+                    scheduled_time, duration, context, source, status,
+                    dependencies, subtasks, metadata, updated_at,
+                    completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """, arguments: [
+                todoId,
+                todo.title,
+                todo.description,
+                todo.project.rawValue,
+                todo.priority.rawValue,
+                todo.scheduledTime?.timeIntervalSince1970,
+                Int(todo.duration),
+                todo.context.rawValue,
+                todo.source.rawValue,
+                todo.status.rawValue,
+                dependenciesJSON,
+                subtasksJSON,
+                metadataJSON,
+                todo.completedAt?.timeIntervalSince1970
+            ])
+        }
+        
+        return todoId
+    }
+    
+    func updateTodoStatus(id: UUID, status: TodoStatus) throws {
+        let completedAt = status == .completed ? Date().timeIntervalSince1970 : nil
+        
+        try timedWrite("updateTodoStatus") { db in
+            try db.execute(sql: """
+                UPDATE todos
+                SET status = ?, updated_at = CURRENT_TIMESTAMP, completed_at = ?
+                WHERE id = ?
+            """, arguments: [status.rawValue, completedAt, id.uuidString])
+        }
+    }
+    
+    func fetchTodos(priority: TodoPriority? = nil, project: TodoProject? = nil, status: TodoStatus? = nil) throws -> [SmartTodo] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("fetchTodos") { db in
+            var sql = "SELECT * FROM todos WHERE 1=1"
+            var arguments: [DatabaseValueConvertible] = []
+            
+            if let priority = priority {
+                sql += " AND priority = ?"
+                arguments.append(priority.rawValue)
+            }
+            
+            if let project = project {
+                sql += " AND project = ?"
+                arguments.append(project.rawValue)
+            }
+            
+            if let status = status {
+                sql += " AND status = ?"
+                arguments.append(status.rawValue)
+            }
+            
+            sql += " ORDER BY CASE priority WHEN 'p0' THEN 0 WHEN 'p1' THEN 1 WHEN 'p2' THEN 2 END, created_at DESC"
+            
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+            
+            return try rows.compactMap { row -> SmartTodo? in
+                guard let id = UUID(uuidString: row["id"]),
+                      let projectRaw: String = row["project"],
+                      let project = TodoProject(rawValue: projectRaw),
+                      let priorityRaw: String = row["priority"],
+                      let priority = TodoPriority(rawValue: priorityRaw),
+                      let contextRaw: String = row["context"],
+                      let context = TodoContext(rawValue: contextRaw),
+                      let sourceRaw: String = row["source"],
+                      let source = TodoSource(rawValue: sourceRaw),
+                      let statusRaw: String = row["status"],
+                      let status = TodoStatus(rawValue: statusRaw) else {
+                    return nil
+                }
+                
+                let scheduledTime: Date? = {
+                    if let timestamp: Double = row["scheduled_time"] {
+                        return Date(timeIntervalSince1970: timestamp)
+                    }
+                    return nil
+                }()
+                
+                let completedAt: Date? = {
+                    if let timestamp: Double = row["completed_at"] {
+                        return Date(timeIntervalSince1970: timestamp)
+                    }
+                    return nil
+                }()
+                
+                let dependencies: [UUID] = {
+                    if let jsonString: String = row["dependencies"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([UUID].self, from: data) {
+                        return decoded
+                    }
+                    return []
+                }()
+                
+                let subtasks: [Subtask]? = {
+                    if let jsonString: String = row["subtasks"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([Subtask].self, from: data) {
+                        return decoded
+                    }
+                    return nil
+                }()
+                
+                let metadata: [String: AnyCodable] = {
+                    if let jsonString: String = row["metadata"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([String: AnyCodable].self, from: data) {
+                        return decoded
+                    }
+                    return [:]
+                }()
+                
+                return SmartTodo(
+                    id: id,
+                    title: row["title"],
+                    description: row["description"],
+                    project: project,
+                    priority: priority,
+                    scheduledTime: scheduledTime,
+                    duration: TimeInterval(row["duration"] ?? 0),
+                    context: context,
+                    source: source,
+                    status: status,
+                    dependencies: dependencies,
+                    subtasks: subtasks,
+                    metadata: TodoMetadata()
+                )
+            }
+        }
+    }
+    
+    func fetchP0Tasks() throws -> [SmartTodo] {
+        return try fetchTodos(priority: .p0, status: .pending)
+    }
+    
+    func deleteTodo(id: UUID) throws {
+        try timedWrite("deleteTodo") { db in
+            try db.execute(sql: "DELETE FROM todos WHERE id = ?", arguments: [id.uuidString])
+        }
+    }
+    
+    // MARK: Proactive Alerts Operations
+    
+    func saveProactiveAlert(_ alert: ProactiveAlert) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        let alertId = alert.id.uuidString
+        let contextJSON = (try? encoder.encode(alert.context)).flatMap { String(data: $0, encoding: .utf8) }
+        
+        try timedWrite("saveProactiveAlert") { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO proactive_alerts (
+                    id, alert_type, message, severity, context,
+                    is_dismissed, dismissed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                alertId,
+                alert.alertType.rawValue,
+                alert.message,
+                alert.severity.rawValue,
+                contextJSON,
+                alert.isDismissed ? 1 : 0,
+                alert.dismissedAt?.timeIntervalSince1970
+            ])
+        }
+        
+        return alertId
+    }
+    
+    func fetchActiveAlerts(severity: AlertSeverity? = nil) throws -> [ProactiveAlert] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("fetchActiveAlerts") { db in
+            var sql = "SELECT * FROM proactive_alerts WHERE is_dismissed = 0"
+            var arguments: [DatabaseValueConvertible] = []
+            
+            if let severity = severity {
+                sql += " AND severity = ?"
+                arguments.append(severity.rawValue)
+            }
+            
+            sql += " ORDER BY created_at DESC"
+            
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+            
+            return try rows.compactMap { row -> ProactiveAlert? in
+                guard let id = UUID(uuidString: row["id"]),
+                      let alertTypeRaw: String = row["alert_type"],
+                      let alertType = AlertType(rawValue: alertTypeRaw),
+                      let severityRaw: String = row["severity"],
+                      let severity = AlertSeverity(rawValue: severityRaw),
+                      let createdAtTimestamp: Double = row["created_at"] else {
+                    return nil
+                }
+                
+                let context: String? = row["context"]
+                
+                let dismissedAt: Date? = {
+                    if let timestamp: Double = row["dismissed_at"] {
+                        return Date(timeIntervalSince1970: timestamp)
+                    }
+                    return nil
+                }()
+                
+                return ProactiveAlert(
+                    id: id,
+                    alertType: alertType,
+                    message: row["message"],
+                    severity: severity,
+                    context: context,
+                    isDismissed: (row["is_dismissed"] as? Int64 ?? 0) != 0
+                )
+            }
+        }
+    }
+    
+    func dismissAlert(id: UUID) throws {
+        try timedWrite("dismissAlert") { db in
+            try db.execute(sql: """
+                UPDATE proactive_alerts
+                SET is_dismissed = 1, dismissed_at = ?
+                WHERE id = ?
+            """, arguments: [Date().timeIntervalSince1970, id.uuidString])
+        }
+    }
+    
+    // MARK: Context Switches Operations
+    
+    func saveContextSwitch(_ contextSwitch: ContextSwitch) throws -> String {
+        let switchId = contextSwitch.id.uuidString
+        
+        try timedWrite("saveContextSwitch") { db in
+            try db.execute(sql: """
+                INSERT INTO context_switches (
+                    id, from_activity, to_activity, from_app, to_app,
+                    duration_seconds, switch_reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                switchId,
+                contextSwitch.fromActivity,
+                contextSwitch.toActivity,
+                contextSwitch.fromApp,
+                contextSwitch.toApp,
+                Int(contextSwitch.durationSeconds),
+                contextSwitch.switchReason
+            ])
+        }
+        
+        return switchId
+    }
+    
+    func fetchContextSwitches(since: Date) throws -> [ContextSwitch] {
+        let sinceTimestamp = since.timeIntervalSince1970
+        
+        return try timedRead("fetchContextSwitches") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM context_switches
+                WHERE created_at >= ?
+                ORDER BY created_at DESC
+            """, arguments: [sinceTimestamp])
+            
+            return try rows.compactMap { row -> ContextSwitch? in
+                guard let id = UUID(uuidString: row["id"]),
+                      let createdAtTimestamp: Double = row["created_at"] else {
+                    return nil
+                }
+                
+                return ContextSwitch(
+                    id: id,
+                    fromActivity: row["from_activity"] ?? "",
+                    toActivity: row["to_activity"] ?? "",
+                    fromApp: row["from_app"] ?? "",
+                    toApp: row["to_app"] ?? "",
+                    durationSeconds: Int(row["duration_seconds"] ?? 0),
+                    switchReason: row["switch_reason"]
+                )
+            }
+        }
+    }
+    
+    // MARK: Conversation Log Operations
+    
+    func saveConversation(_ conversation: ConversationLog) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        let conversationId = conversation.id.uuidString
+        let keyPointsJSON = (try? encoder.encode(conversation.keyPoints)).flatMap { String(data: $0, encoding: .utf8) }
+        let decisionsJSON = (try? encoder.encode(conversation.decisions)).flatMap { String(data: $0, encoding: .utf8) }
+        let followUpsJSON = (try? encoder.encode(conversation.followUps)).flatMap { String(data: $0, encoding: .utf8) }
+        
+        try timedWrite("saveConversation") { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO conversations_log (
+                    id, person_name, context, key_points, decisions,
+                    follow_ups, sentiment, conversation_date
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                conversationId,
+                conversation.personName,
+                conversation.context,
+                keyPointsJSON,
+                decisionsJSON,
+                followUpsJSON,
+                conversation.sentiment,
+                DateFormatter.yyyyMMdd.string(from: conversation.conversationDate)
+            ])
+        }
+        
+        return conversationId
+    }
+    
+    func fetchConversations(person: String? = nil, limit: Int = 50) throws -> [ConversationLog] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("fetchConversations") { db in
+            var sql = "SELECT * FROM conversations_log WHERE 1=1"
+            var arguments: [DatabaseValueConvertible] = []
+            
+            if let person = person {
+                sql += " AND person_name = ?"
+                arguments.append(person)
+            }
+            
+            sql += " ORDER BY conversation_date DESC LIMIT ?"
+            arguments.append(Int64(limit))
+            
+            let rows = try Row.fetchAll(db, sql: sql, arguments: StatementArguments(arguments))
+            
+            return rows.compactMap { row -> ConversationLog? in
+                guard let id = UUID(uuidString: row["id"]),
+                      let dateString: String = row["conversation_date"],
+                      let conversationDate = DateFormatter.yyyyMMdd.date(from: dateString) else {
+                    return nil
+                }
+                
+                let keyPoints: [String] = {
+                    if let jsonString: String = row["key_points"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([String].self, from: data) {
+                        return decoded
+                    }
+                    return []
+                }()
+                
+                let decisions: [String] = {
+                    if let jsonString: String = row["decisions"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([String].self, from: data) {
+                        return decoded
+                    }
+                    return []
+                }()
+                
+                let followUps: [String] = {
+                    if let jsonString: String = row["follow_ups"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([String].self, from: data) {
+                        return decoded
+                    }
+                    return []
+                }()
+                
+                return ConversationLog(
+                    id: id,
+                    personName: row["person_name"],
+                    context: row["context"],
+                    keyPoints: keyPoints,
+                    decisions: decisions,
+                    followUps: followUps,
+                    sentiment: row["sentiment"],
+                    conversationDate: conversationDate
+                )
+            }
+        }
+    }
+    
+    // MARK: User Context Operations
+    
+    func saveUserContext(key: String, value: String, category: String? = nil) throws {
+        let contextId = UUID().uuidString
+        
+        try timedWrite("saveUserContext") { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO user_context (
+                    id, key, value, category, updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, arguments: [contextId, key, value, category])
+        }
+    }
+    
+    func getUserContext(key: String) throws -> String? {
+        return try timedRead("getUserContext") { db in
+            try String.fetchOne(db, sql: """
+                SELECT value FROM user_context WHERE key = ?
+            """, arguments: [key])
+        }
+    }
+    
+    func fetchUserContextByCategory(category: String) throws -> [String: String] {
+        return try timedRead("fetchUserContextByCategory") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT key, value FROM user_context
+                WHERE category = ?
+                ORDER BY updated_at DESC
+            """, arguments: [category])
+            
+            var result: [String: String] = [:]
+            for row in rows {
+                if let key: String = row["key"], let value: String = row["value"] {
+                    result[key] = value
+                }
+            }
+            return result
+        }
+    }
+    
+    // MARK: Screen Recall Operations
+    
+    func recallActivity(at timestamp: Date, contextWindow: TimeInterval = 600) throws -> ActivityRecall {
+        let startTs = Int(timestamp.timeIntervalSince1970 - contextWindow)
+        let endTs = Int(timestamp.timeIntervalSince1970 + contextWindow)
+        
+        return try timedRead("recallActivity") { db in
+            // Find timeline cards that overlap with the timestamp
+            let cardRows = try Row.fetchAll(db, sql: """
+                SELECT * FROM timeline_cards
+                WHERE start_ts <= ? AND end_ts >= ?
+                  AND is_deleted = 0
+                ORDER BY start_ts ASC
+            """, arguments: [endTs, startTs])
+            
+            let decoder = JSONDecoder()
+            let cards = cardRows.compactMap { row -> TimelineCard? in
+                var distractions: [Distraction]? = nil
+                var appSites: AppSites? = nil
+                if let metadataString: String = row["metadata"],
+                   let jsonData = metadataString.data(using: .utf8) {
+                    if let meta = try? decoder.decode(TimelineMetadata.self, from: jsonData) {
+                        distractions = meta.distractions
+                        appSites = meta.appSites
+                    }
+                }
+                
+                return TimelineCard(
+                    batchId: row["batch_id"],
+                    startTimestamp: row["start"] ?? "",
+                    endTimestamp: row["end"] ?? "",
+                    category: row["category"],
+                    subcategory: row["subcategory"],
+                    title: row["title"],
+                    summary: row["summary"],
+                    detailedSummary: row["detailed_summary"],
+                    day: row["day"],
+                    distractions: distractions,
+                    videoSummaryURL: row["video_summary_url"],
+                    otherVideoSummaryURLs: nil,
+                    appSites: appSites
+                )
+            }
+            
+            // Find the exact card at the timestamp
+            let exactCard = cards.first { card in
+                guard let startTs = try? parseTimestampFromCard(card),
+                      let endTs = try? parseTimestampFromCard(card, isEnd: true) else {
+                    return false
+                }
+                let targetTs = Int(timestamp.timeIntervalSince1970)
+                return startTs <= targetTs && endTs >= targetTs
+            }
+            
+            // Get observations for context
+            let observations = try Row.fetchAll(db, sql: """
+                SELECT observation FROM observations
+                WHERE start_ts <= ? AND end_ts >= ?
+                ORDER BY start_ts ASC
+                LIMIT 5
+            """, arguments: [endTs, startTs]).compactMap { $0["observation"] as? String }
+            
+            // Get context switches around this time
+            let contextSwitches = try Row.fetchAll(db, sql: """
+                SELECT from_activity, to_activity, from_app, to_app
+                FROM context_switches
+                WHERE created_at >= ? AND created_at <= ?
+                ORDER BY created_at ASC
+                LIMIT 3
+            """, arguments: [startTs, endTs]).map { row -> String in
+                let from: String = row["from_activity"] ?? ""
+                let to: String = row["to_activity"] ?? ""
+                return "\(from) → \(to)"
+            }
+            
+            return ActivityRecall(
+                timestamp: timestamp,
+                primaryActivity: exactCard,
+                nearbyActivities: cards.filter { $0.id != exactCard?.id },
+                observations: observations,
+                contextSwitches: contextSwitches,
+                videoPath: exactCard?.videoSummaryURL
+            )
+        }
+    }
+    
+    private func parseTimestampFromCard(_ card: TimelineCard, isEnd: Bool = false) throws -> Int {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        
+        let timeString = isEnd ? card.endTimestamp : card.startTimestamp
+        guard let time = formatter.date(from: timeString) else {
+            throw NSError(domain: "StorageManager", code: -1, userInfo: nil)
+        }
+        
+        // Use the day from the card to construct full date
+        guard let dayDate = DateFormatter.yyyyMMdd.date(from: card.day) else {
+            throw NSError(domain: "StorageManager", code: -1, userInfo: nil)
+        }
+        
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.hour, .minute], from: time)
+        guard let fullDate = calendar.date(bySettingHour: components.hour ?? 0, minute: components.minute ?? 0, second: 0, of: dayDate) else {
+            throw NSError(domain: "StorageManager", code: -1, userInfo: nil)
+        }
+        
+        return Int(fullDate.timeIntervalSince1970)
+    }
+    
+    // MARK: Decision Log Operations
+    
+    func saveDecision(_ decision: DecisionLog) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        
+        let decisionId = decision.id.uuidString
+        let optionsJSON = (try? encoder.encode(decision.options)).flatMap { String(data: $0, encoding: .utf8) }
+        let tradeoffsJSON = (try? encoder.encode(decision.tradeoffs)).flatMap { String(data: $0, encoding: .utf8) }
+        let metadataJSON = (try? encoder.encode(decision.metadata)).flatMap { String(data: $0, encoding: .utf8) }
+        
+        try timedWrite("saveDecision") { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO decisions_log (
+                    id, question, options, tradeoffs, owner, deadline,
+                    decision, outcome, metadata, decided_at, reviewed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, arguments: [
+                decisionId,
+                decision.question,
+                optionsJSON,
+                tradeoffsJSON,
+                decision.owner,
+                decision.deadline?.timeIntervalSince1970,
+                decision.decision,
+                decision.outcome,
+                metadataJSON,
+                decision.decidedAt?.timeIntervalSince1970,
+                decision.reviewedAt?.timeIntervalSince1970
+            ])
+        }
+        
+        return decisionId
+    }
+    
+    func fetchDecisions(limit: Int = 50) throws -> [DecisionLog] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        
+        return try timedRead("fetchDecisions") { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT * FROM decisions_log
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, arguments: [limit])
+            
+            return try rows.compactMap { row -> DecisionLog? in
+                guard let id = UUID(uuidString: row["id"]),
+                      let createdAtTimestamp: Double = row["created_at"] else {
+                    return nil
+                }
+                
+                let options: [DecisionOption] = {
+                    if let jsonString: String = row["options"],
+                       let data = jsonString.data(using: .utf8),
+                       let decoded = try? decoder.decode([DecisionOption].self, from: data) {
+                        return decoded
+                    }
+                    return []
+                }()
+                
+                let tradeoffs: String? = row["tradeoffs"]
+                
+                let deadline: Date? = {
+                    if let timestamp: Double = row["deadline"] {
+                        return Date(timeIntervalSince1970: timestamp)
+                    }
+                    return nil
+                }()
+                
+                return DecisionLog(
+                    id: id,
+                    question: row["question"],
+                    options: options,
+                    tradeoffs: tradeoffs,
+                    owner: row["owner"],
+                    deadline: deadline,
+                    decision: row["decision"],
+                    outcome: row["outcome"],
+                    metadata: DecisionMetadata()
+                )
+            }
+        }
+    }
 
 
     private let purgeQ = DispatchQueue(label: "com.dayflow.storage.purge", qos: .background)
     private var purgeTimer: DispatchSourceTimer?
+    
+    private let optimizationQ = DispatchQueue(label: "com.dayflow.storage.optimization", qos: .utility)
+    private var optimizationTimer: DispatchSourceTimer?
+    private var lastVacuumDate: Date? {
+        get {
+            if let timestamp = UserDefaults.standard.double(forKey: "storageManager_lastVacuumDate") as TimeInterval?,
+               timestamp > 0 {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+            return nil
+        }
+        set {
+            UserDefaults.standard.set(newValue?.timeIntervalSince1970 ?? 0, forKey: "storageManager_lastVacuumDate")
+        }
+    }
 
     private func startPurgeScheduler() {
         let timer = DispatchSource.makeTimerSource(queue: purgeQ)
@@ -1747,6 +2785,17 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
         timer.resume()
         purgeTimer = timer
+    }
+    
+    private func startDatabaseOptimizationScheduler() {
+        let timer = DispatchSource.makeTimerSource(queue: optimizationQ)
+        // Check daily, but only run VACUUM weekly or when needed
+        timer.schedule(deadline: .now() + 86400, repeating: 86400) // Every day
+        timer.setEventHandler { [weak self] in
+            self?.optimizeDatabaseIfNeeded()
+        }
+        timer.resume()
+        optimizationTimer = timer
     }
 
     private func purgeIfNeeded() {
@@ -1925,6 +2974,145 @@ private extension StorageManager {
             } catch {
                 print("⚠️ StorageManager: failed to migrate \(name): \(error)")
             }
+        }
+    }
+    
+    func optimizeDatabaseIfNeeded() {
+        optimizationQ.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Check if VACUUM is needed
+            let shouldVacuum: Bool = {
+                // Run VACUUM weekly
+                if let lastVacuum = self.lastVacuumDate {
+                    let daysSinceLastVacuum = Date().timeIntervalSince(lastVacuum) / 86400
+                    if daysSinceLastVacuum >= 7 {
+                        return true
+                    }
+                } else {
+                    // First time - run after 7 days of usage
+                    return false
+                }
+                
+                // Or run if database size exceeds threshold
+                do {
+                    let dbSize = try self.getDatabaseSize()
+                    let dbSizeMB = Double(dbSize) / (1024 * 1024)
+                    
+                    // Run VACUUM if database exceeds 100MB
+                    if dbSizeMB > 100 {
+                        return true
+                    }
+                } catch {
+                    // If we can't check size, don't run VACUUM
+                    return false
+                }
+                
+                return false
+            }()
+            
+            guard shouldVacuum else { return }
+            
+            // Perform VACUUM operation
+            do {
+                let startTime = Date()
+                try self.timedWrite("VACUUM") { db in
+                    try db.execute(sql: "VACUUM")
+                }
+                let duration = Date().timeIntervalSince(startTime)
+                
+                // Update last vacuum date
+                self.lastVacuumDate = Date()
+                
+                // Log for debugging
+                let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
+                logger.info("Database VACUUM completed in \(String(format: "%.2f", duration))s")
+                
+                // Track growth rate
+                self.trackDatabaseGrowth()
+                
+            } catch {
+                let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
+                logger.error("Database VACUUM failed: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func getDatabaseSize() throws -> Int64 {
+        let dbPath = dbURL.path
+        var totalSize: Int64 = 0
+        
+        // Get main database file size
+        if FileManager.default.fileExists(atPath: dbPath) {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: dbPath),
+               let size = attrs[.size] as? NSNumber {
+                totalSize += size.int64Value
+            }
+        }
+        
+        // Get WAL file size
+        let walPath = dbPath + "-wal"
+        if FileManager.default.fileExists(atPath: walPath) {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: walPath),
+               let size = attrs[.size] as? NSNumber {
+                totalSize += size.int64Value
+            }
+        }
+        
+        // Get SHM file size
+        let shmPath = dbPath + "-shm"
+        if FileManager.default.fileExists(atPath: shmPath) {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: shmPath),
+               let size = attrs[.size] as? NSNumber {
+                totalSize += size.int64Value
+            }
+        }
+        
+        return totalSize
+    }
+    
+    private func trackDatabaseGrowth() {
+        do {
+            let currentSize = try getDatabaseSize()
+            let sizeMB = Double(currentSize) / (1024 * 1024)
+            
+            // Store growth history (last 30 days)
+            var growthHistory = UserDefaults.standard.array(forKey: "storageManager_dbGrowthHistory") as? [[String: Any]] ?? []
+            
+            let entry: [String: Any] = [
+                "date": Date().timeIntervalSince1970,
+                "sizeMB": sizeMB
+            ]
+            
+            growthHistory.append(entry)
+            
+            // Keep only last 30 entries
+            if growthHistory.count > 30 {
+                growthHistory.removeFirst(growthHistory.count - 30)
+            }
+            
+            UserDefaults.standard.set(growthHistory, forKey: "storageManager_dbGrowthHistory")
+            
+            // Calculate growth rate if we have enough data
+            if growthHistory.count >= 2,
+               let firstEntry = growthHistory.first,
+               let firstSize = firstEntry["sizeMB"] as? Double,
+               let lastEntry = growthHistory.last,
+               let lastDate = lastEntry["date"] as? TimeInterval {
+                let daysDiff = (Date().timeIntervalSince1970 - lastDate) / 86400
+                if daysDiff > 0 {
+                    let growthRate = (sizeMB - firstSize) / daysDiff // MB per day
+                    
+                    // Log if growth rate is concerning (> 10 MB per day)
+                    if growthRate > 10 {
+                        let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
+                        logger.warning("Database growth rate is high: \(String(format: "%.2f", growthRate)) MB/day")
+                    }
+                }
+            }
+        } catch {
+            let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
+            logger.error("Failed to track database growth: \(error.localizedDescription)")
         }
     }
 }

@@ -54,11 +54,8 @@ struct PlannerView: View {
                 // Bottom Action Bar
                 actionBar
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Color(NSColor.controlBackgroundColor))
             .navigationTitle("Planner")
-#if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-#endif
             .toolbar {
                 #if os(iOS)
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -87,8 +84,9 @@ struct PlannerView: View {
                     let task = PlannerTask(
                         title: suggestion.title,
                         description: suggestion.description,
-                        estimatedDuration: suggestion.estimatedDuration,
-                        priority: suggestion.priority
+                        estimatedDuration: suggestion.estimatedDuration ?? 3600,
+                        priority: .medium, // Use default priority since TaskSuggestion doesn't have priority property
+                        deadline: nil // TaskSuggestion doesn't have deadline information
                     )
                     plannerEngine.addTask(task)
                     showingSuggestions = false
@@ -125,7 +123,7 @@ struct PlannerView: View {
             Task {
                 _ = await plannerEngine.ensureCalendarAuthorization()
                 if plannerEngine.currentPlan == nil {
-                    try? await plannerEngine.generateDailyPlan(for: selectedDate)
+                    _ = try? await plannerEngine.generateDailyPlan(for: selectedDate)
                 }
             }
         }
@@ -243,7 +241,7 @@ struct PlannerView: View {
                         .padding(.vertical, 8)
                         .background(
                             RoundedRectangle(cornerRadius: 12)
-                                .fill(viewMode == mode ? Color.blue : Color(.systemGray5))
+                                .fill(viewMode == mode ? Color.blue : Color(NSColor.controlAccentColor).opacity(0.3))
                         )
                     }
                     .buttonStyle(PlainButtonStyle())
@@ -419,7 +417,7 @@ struct PlannerView: View {
         isOptimizing = true
 
         do {
-            let progress = Timer.publish(every: 0.1, on: .main, in: .common)
+            let _ = Timer.publish(every: 0.1, on: .main, in: .common)
                 .autoconnect()
                 .sink { _ in
                     if optimizationProgress < 0.9 {
@@ -427,7 +425,7 @@ struct PlannerView: View {
                     }
                 }
 
-            try await plannerEngine.generateDailyPlan(for: selectedDate)
+            let _ = try await plannerEngine.generateDailyPlan(for: selectedDate)
             optimizationProgress = 1.0
 
             // Delay to show completion
@@ -558,7 +556,7 @@ struct StatCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(Color(.secondarySystemBackground))
+        .background(Color(NSColor.textBackgroundColor))
         .cornerRadius(8)
     }
 }
@@ -601,7 +599,7 @@ struct TaskCreationView: View {
     @State private var description = ""
     @State private var estimatedDuration: Double = 3600 // 1 hour
     @State private var priority: PlannerPriority = .medium
-    @State private var deadline: Date
+    @State private var deadline: Date = Date()
     @State private var isFocusProtected = false
     @State private var selectedEnergyLevel: PlannerEnergyLevel?
 
@@ -672,25 +670,13 @@ struct TaskCreationView: View {
                 }
             }
             .navigationTitle("New Task")
-#if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-#endif
             .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarLeading) {
-                    cancelToolbarButton
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    createToolbarButton
-                }
-                #else
                 ToolbarItem(placement: .automatic) {
                     cancelToolbarButton
                 }
                 ToolbarItem(placement: .automatic) {
                     createToolbarButton
                 }
-                #endif
             }
         }
         .frame(width: 500, height: 600)
@@ -715,7 +701,7 @@ struct TaskCreationView: View {
         description = ""
         estimatedDuration = 3600
         priority = .medium
-        deadline = nil
+        deadline = Date().addingTimeInterval(24 * 3600) // Tomorrow as default
         isFocusProtected = false
         selectedEnergyLevel = nil
     }
@@ -736,23 +722,12 @@ struct DatePickerView: View {
             Spacer()
 
             .navigationTitle("Select Date")
-#if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-#endif
             .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        isPresented = false
-                    }
-                }
-                #else
                 ToolbarItem(placement: .automatic) {
                     Button("Done") {
                         isPresented = false
                     }
                 }
-                #endif
             }
         }
         .frame(width: 400, height: 500)

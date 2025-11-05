@@ -402,6 +402,8 @@ struct FocusLockSettings: Codable {
     var autoStartDetection: Bool
     var enableNotifications: Bool
     var logSessions: Bool
+    var enableBackgroundMonitoring: Bool // Background monitoring feature
+    var enableTaskDetection: Bool // Task detection feature
 
     static let `default` = FocusLockSettings(
         globalAllowedApps: [
@@ -415,7 +417,9 @@ struct FocusLockSettings: Codable {
         minimumSessionDuration: 300.0, // 5 minutes
         autoStartDetection: true,
         enableNotifications: true,
-        logSessions: true
+        logSessions: true,
+        enableBackgroundMonitoring: true,
+        enableTaskDetection: true
     )
 }
 
@@ -677,6 +681,12 @@ struct TimeBlock: Codable, Identifiable {
     var energyLevel: PlannerEnergyLevel
     var breakBuffer: TimeInterval // Buffer time before/after this block
     var productivityMultiplier: Double = 1.0 // Productivity adjustment factor
+
+    // ML-learning properties
+    var suggestedDurationAdjustment: TimeInterval?
+    var energyAlignmentScore: Double = 0.0
+    var focusOptimizationScore: Double = 0.0
+    var hasLearnedConflict: Bool = false
 
     var duration: TimeInterval {
         return endTime.timeIntervalSince(startTime)
@@ -1090,6 +1100,10 @@ struct ProductivityMetric: Identifiable, Codable, Equatable {
     let timestamp: Date
     let metadata: [String: AnyCodable]
 
+    enum CodingKeys: String, CodingKey {
+        case name, value, unit, category, timestamp, metadata
+    }
+
     static func == (lhs: ProductivityMetric, rhs: ProductivityMetric) -> Bool {
         return lhs.id == rhs.id && lhs.name == rhs.name && lhs.value == rhs.value && lhs.timestamp == rhs.timestamp
     }
@@ -1176,6 +1190,10 @@ struct TrendData: Identifiable, Codable {
     let trendStrength: Double // 0.0 to 1.0
     let insights: [TrendInsight]
     let dateRange: DateInterval
+    
+    enum CodingKeys: String, CodingKey {
+        case metricName, datapoints, trendDirection, trendStrength, insights, dateRange
+    }
 
     enum TrendDirection: String, Codable {
         case increasing = "increasing"
@@ -1207,6 +1225,10 @@ struct TrendData: Identifiable, Codable {
         let date: Date
         let value: Double
         let context: [String: AnyCodable]?
+        
+        enum CodingKeys: String, CodingKey {
+            case date, value, context
+        }
 
         init(date: Date, value: Double, context: [String: Any] = [:]) {
             self.date = date
@@ -1223,6 +1245,10 @@ struct TrendData: Identifiable, Codable {
         let severity: Severity
         let actionable: Bool
         let suggestions: [String]
+        
+        enum CodingKeys: String, CodingKey {
+            case type, title, description, severity, actionable, suggestions
+        }
 
         enum InsightType: String, Codable, CaseIterable {
             case peakPerformance = "peak_performance"
@@ -1445,6 +1471,10 @@ struct Recommendation: Identifiable, Codable {
     let evidence: [ProductivityMetric]
     let createdAt: Date
     let dismissedAt: Date?
+    
+    enum CodingKeys: String, CodingKey {
+        case title, description, category, priority, actionable, estimatedImpact, suggestedActions, evidence, createdAt, dismissedAt
+    }
 
     enum RecommendationCategory: String, Codable, CaseIterable {
         case focusImprovement = "focus_improvement"
@@ -1545,6 +1575,11 @@ struct Recommendation: Identifiable, Codable {
         let difficulty: Difficulty
         let estimatedTime: TimeInterval
         let steps: [String]
+        let type: TaskCategory
+        
+        enum CodingKeys: String, CodingKey {
+            case title, description, difficulty, estimatedTime, steps, type
+        }
 
         enum Difficulty: String, Codable, CaseIterable {
             case easy = "easy"
@@ -2218,6 +2253,10 @@ struct BackgroundTaskInfo: Codable, Identifiable {
     let isActive: Bool
     let priority: TaskPriority
     let resourceUsage: ResourceUsage?
+    
+    enum CodingKeys: String, CodingKey {
+        case name, identifier, startTime, endTime, isActive, priority, resourceUsage
+    }
 
     var displayName: String {
         return name
@@ -2244,6 +2283,10 @@ struct ComponentBatteryUsage: Codable, Identifiable {
     let usageLevel: Double
     let timestamp: Date
     let duration: TimeInterval
+    
+    enum CodingKeys: String, CodingKey {
+        case component, usageLevel, timestamp, duration
+    }
 
     var displayName: String {
         return component.displayName
@@ -2283,6 +2326,10 @@ struct PowerOptimizationRecommendation: Codable, Identifiable {
     let priority: PowerRecommendationPriority
     let potentialSavings: Double
     let impact: String
+    
+    enum CodingKeys: String, CodingKey {
+        case type, title, description, priority, potentialSavings, impact
+    }
 
     var displayName: String {
         return title
@@ -2438,6 +2485,22 @@ struct SuggestedTodo: Codable, Identifiable, Equatable {
     var dismissReason: String?
     var learningScore: Double // Machine learning score for this suggestion
 
+    // Computed suggested action for UI compatibility
+    var suggestedAction: Recommendation.SuggestedAction {
+        let category = contextTags.first { tag in
+            TaskCategory.allCases.map(\.rawValue).contains(tag)
+        }.flatMap { TaskCategory(rawValue: $0) } ?? .work
+
+        return Recommendation.SuggestedAction(
+            title: title,
+            description: description,
+            difficulty: .moderate,
+            estimatedTime: estimatedDuration ?? 300,
+            steps: [],
+            type: category
+        )
+    }
+
     var isActive: Bool {
         return !isDismissed && (userFeedback == nil || userFeedback?.score != nil)
     }
@@ -2543,12 +2606,40 @@ enum SuggestionPriority: String, Codable, CaseIterable {
         }
     }
 
+    var displayName: String {
+        return displayTitle
+    }
+
     var color: String {
         switch self {
         case .low: return "green"
         case .medium: return "yellow"
         case .high: return "orange"
         case .urgent: return "red"
+        }
+    }
+}
+
+enum SuggestionFilter: String, CaseIterable {
+    case all = "all"
+    case highPriority = "high_priority"
+    case mediumPriority = "medium_priority"
+    case lowPriority = "low_priority"
+    case work = "work"
+    case personal = "personal"
+    case communication = "communication"
+    case quick = "quick"
+
+    var displayName: String {
+        switch self {
+        case .all: return "All"
+        case .highPriority: return "High Priority"
+        case .mediumPriority: return "Medium Priority"
+        case .lowPriority: return "Low Priority"
+        case .work: return "Work"
+        case .personal: return "Personal"
+        case .communication: return "Communication"
+        case .quick: return "Quick Tasks"
         }
     }
 }
@@ -2572,6 +2663,10 @@ enum SuggestionSourceType: String, Codable, CaseIterable {
         case .deadlineProximity: return "Deadline Alert"
         case .recurringTask: return "Recurring Task"
         }
+    }
+    
+    var displayName: String {
+        return sourceTitle
     }
 }
 
@@ -3143,6 +3238,29 @@ struct ProductivityInsight: Codable, Identifiable {
     var color: Color {
         return type.color
     }
+
+    var category: InsightCategory {
+        switch type {
+        case .peakPerformance, .focusQuality:
+            return .productivity
+        case .productivityPattern, .taskEfficiency:
+            return .pattern
+        case .schedulingImprovement:
+            return .timeManagement
+        case .goalProgress:
+            return .goal
+        case .energyOptimization, .burnoutRisk:
+            return .trend
+        }
+    }
+
+    enum InsightCategory: String, Codable {
+        case productivity
+        case pattern
+        case timeManagement
+        case trend
+        case goal
+    }
 }
 
 struct ProductivityRecommendation: Codable, Identifiable {
@@ -3154,6 +3272,10 @@ struct ProductivityRecommendation: Codable, Identifiable {
     let difficulty: ImplementationDifficulty
     let estimatedTimeToImplement: TimeInterval
     let steps: [String]
+    
+    enum CodingKeys: String, CodingKey {
+        case category, title, description, expectedImpact, difficulty, estimatedTimeToImplement, steps
+    }
 
     enum RecommendationCategory: String, CaseIterable, Codable {
         case scheduling = "scheduling"
@@ -3206,6 +3328,10 @@ struct ActionableItem: Codable, Identifiable {
     let type: ActionType
     let isCompleted: Bool
     let completedAt: Date?
+    
+    enum CodingKeys: String, CodingKey {
+        case title, description, type, isCompleted, completedAt
+    }
 
     enum ActionType: String, CaseIterable, Codable {
         case setting = "setting"
@@ -3281,6 +3407,7 @@ struct TemplateTask: Codable, Identifiable {
     var tags: [String]
 
     init(title: String, description: String, estimatedDuration: TimeInterval, suggestedPriority: PlannerPriority = .medium, isOptional: Bool = false) {
+        self.id = UUID()
         self.title = title
         self.description = description
         self.estimatedDuration = estimatedDuration
@@ -3340,6 +3467,9 @@ struct PrivacySettings: Codable {
 // MARK: - Daily Journal Models
 
 enum JournalTemplate: String, CaseIterable, Codable {
+    case concise = "concise"
+    case balanced = "balanced"
+    case detailed = "detailed"
     case reflective = "reflective"
     case achievement = "achievement"
     case gratitude = "gratitude"
@@ -3349,6 +3479,9 @@ enum JournalTemplate: String, CaseIterable, Codable {
 
     var displayName: String {
         switch self {
+        case .concise: return "Concise"
+        case .balanced: return "Balanced"
+        case .detailed: return "Detailed"
         case .reflective: return "Reflective"
         case .achievement: return "Achievement-Focused"
         case .gratitude: return "Gratitude"
@@ -3360,6 +3493,9 @@ enum JournalTemplate: String, CaseIterable, Codable {
 
     var templateDescription: String {
         switch self {
+        case .concise: return "Brief summary of the day"
+        case .balanced: return "Balanced overview with key moments"
+        case .detailed: return "Comprehensive daily analysis"
         case .reflective: return "Deep reflection on thoughts, feelings, and experiences"
         case .achievement: return "Focus on accomplishments and progress made"
         case .gratitude: return "Celebrate positive moments and express gratitude"
@@ -3371,6 +3507,9 @@ enum JournalTemplate: String, CaseIterable, Codable {
 
     var icon: String {
         switch self {
+        case .concise: return "doc.text"
+        case .balanced: return "scale.3d"
+        case .detailed: return "list.bullet.rectangle"
         case .reflective: return "brain.head.profile"
         case .achievement: return "trophy"
         case .gratitude: return "heart"
@@ -3402,14 +3541,11 @@ struct JournalEngagementMetrics: Codable {
         self.entryCount = entryCount
         self.averageEntryLength = averageEntryLength
         self.reflectionQuality = reflectionQuality
-        self.engagementScore = calculateEngagementScore(duration: sessionDuration, entries: entryCount, quality: reflectionQuality)
+        // Calculate engagement score inline
+        let durationScore = min(sessionDuration / 300.0, 1.0) // 5 minutes = full score
+        let entryScore = min(Double(entryCount) / 3.0, 1.0) // 3 entries = full score
+        self.engagementScore = (durationScore + entryScore + reflectionQuality) / 3.0
         self.timestamp = Date()
-    }
-
-    private func calculateEngagementScore(duration: TimeInterval, entries: Int, quality: Double) -> Double {
-        let durationScore = min(duration / 300.0, 1.0) // 5 minutes = full score
-        let entryScore = min(Double(entries) / 3.0, 1.0) // 3 entries = full score
-        return (durationScore + entryScore + quality) / 3.0
     }
 }
 
@@ -3517,6 +3653,16 @@ struct JournalHighlight: Codable, Identifiable {
     }
 }
 
+// Journal Sentiment enum for UI display
+enum JournalSentiment: String, Codable {
+    case veryPositive = "very_positive"
+    case positive = "positive"
+    case neutral = "neutral"
+    case negative = "negative"
+    case veryNegative = "very_negative"
+    case mixed = "mixed"
+}
+
 struct SentimentAnalysis: Codable {
     let overallSentiment: SentimentScore
     let emotionalBreakdown: [EmotionScore]
@@ -3593,6 +3739,13 @@ struct JournalPreferences: Codable {
     var includeQuestions: Bool
     var customPrompts: [String]
     var learningData: UserLearningData
+    var autoGenerate: Bool
+    var localOnly: Bool
+    var learningEnabled: Bool
+    var maxHighlights: Int
+    var retentionPeriod: JournalRetentionPeriod
+    var personalizationLevel: Double
+    var encryptData: Bool
 
     static let `default` = JournalPreferences()
 
@@ -3605,7 +3758,14 @@ struct JournalPreferences: Codable {
         includeHighlights: Bool = true,
         includeQuestions: Bool = true,
         customPrompts: [String] = [],
-        learningData: UserLearningData = UserLearningData()
+        learningData: UserLearningData = UserLearningData(),
+        autoGenerate: Bool = true,
+        localOnly: Bool = false,
+        learningEnabled: Bool = true,
+        maxHighlights: Int = 5,
+        retentionPeriod: JournalRetentionPeriod = .oneMonth,
+        personalizationLevel: Double = 0.5,
+        encryptData: Bool = false
     ) {
         self.preferredTemplate = preferredTemplate
         self.focusAreas = focusAreas
@@ -3616,6 +3776,13 @@ struct JournalPreferences: Codable {
         self.includeQuestions = includeQuestions
         self.customPrompts = customPrompts
         self.learningData = learningData
+        self.autoGenerate = autoGenerate
+        self.localOnly = localOnly
+        self.learningEnabled = learningEnabled
+        self.maxHighlights = maxHighlights
+        self.retentionPeriod = retentionPeriod
+        self.personalizationLevel = personalizationLevel
+        self.encryptData = encryptData
     }
 }
 
@@ -4193,6 +4360,10 @@ struct PerformanceDebugTaskInfo: Codable, Identifiable {
     let cpuUsage: Double
     let memoryUsage: Int64
     let status: TaskStatus
+    
+    enum CodingKeys: String, CodingKey {
+        case name, startTime, duration, cpuUsage, memoryUsage, status
+    }
 
     var formattedDuration: String {
         let formatter = DateComponentsFormatter()
@@ -4205,7 +4376,7 @@ struct PerformanceDebugTaskInfo: Codable, Identifiable {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useMB, .useGB]
         formatter.countStyle = .memory
-        return formatter.string(fromByteCount: memoryUsage) ?? "0 MB"
+        return formatter.string(fromByteCount: memoryUsage)
     }
 }
 
@@ -4232,6 +4403,10 @@ struct PerformanceComponentBatteryUsage: Codable, Identifiable {
     let averageUsage: Double
     let peakUsage: Double
     let lastUpdated: Date
+    
+    enum CodingKeys: String, CodingKey {
+        case componentName, currentUsage, averageUsage, peakUsage, lastUpdated
+    }
 
     var usagePercentage: Double {
         return min(currentUsage * 100, 100)
@@ -4254,6 +4429,10 @@ struct PerformancePowerOptimizationRecommendation: Codable, Identifiable {
     let potentialSavings: Double
     let implementationComplexity: Complexity
     let isApplicable: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case title, description, priority, potentialSavings, implementationComplexity, isApplicable
+    }
 
     enum Priority: String, Codable, CaseIterable {
         case low = "low"
@@ -4406,6 +4585,10 @@ struct ActionResult: Codable, Identifiable {
     let success: Bool
     let duration: TimeInterval
     let error: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case action, success, duration, error
+    }
 }
 
 // MARK: - Performance Monitoring Types
@@ -4442,6 +4625,10 @@ struct OptimizationRecord: Codable, Identifiable {
     let duration: TimeInterval
     let results: [ActionResult]
     let success: Bool
+    
+    enum CodingKeys: String, CodingKey {
+        case strategy, startTime, duration, results, success
+    }
 }
 
 enum OptimizationPriority: String, CaseIterable, Codable {
@@ -4461,19 +4648,110 @@ enum OptimizationPriority: String, CaseIterable, Codable {
 }
 
 enum ROOptimizationAction: Codable {
+    enum CodingKeys: String, CodingKey {
+        case clearCache, increaseCacheSize, reduceProcessingIntensity, reduceComponentProcessingIntensity, reduceProcessingFrequency
+        case reduceBatchSize, reducePollingFrequency, reduceSamplingRate, reduceMemoryFootprint, reduceComponentMemoryFootprint
+        case lowerQuality, lowerThreadPriority, lowerComponentThreadPriority, useSimplifiedModel
+        case pauseBackgroundTasks, optimizeTaskScheduling, prioritizeForegroundTasks, deferProcessing
+        case optimizeMemory, compressData, enableMemoryCompression, clearTempFiles
+        case compressOldCache, optimizeDatabase, enableLowPowerMode, reduceDisplayRefreshRate
+        case enableThermalThrottling, disableNonEssentialFeatures, disableHighIntensityFeatures
+        case enableLazyLoading, enableResponseCaching, enableEventFiltering, enableSmartCaching
+        case enableAdaptiveOptimization
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let key = container.allKeys.first {
+            switch key {
+            case .clearCache:
+                let nested = try container.nestedContainer(keyedBy: DynamicCodingKeys.self, forKey: key)
+                self = .clearCache(target: try nested.decode(CacheTarget.self, forKey: DynamicCodingKeys(stringValue: "target")!),
+                              percentage: try nested.decode(Double.self, forKey: DynamicCodingKeys(stringValue: "percentage")!))
+            case .increaseCacheSize:
+                self = .increaseCacheSize(percentage: try container.decode(Double.self, forKey: .increaseCacheSize))
+            case .reduceProcessingIntensity:
+                if let nested = try? container.nestedContainer(keyedBy: DynamicCodingKeys.self, forKey: key) {
+                    if let allComponentsKey = DynamicCodingKeys(stringValue: "allComponents"), nested.contains(allComponentsKey) {
+                        self = .reduceProcessingIntensity(allComponents: try nested.decode(Double.self, forKey: allComponentsKey))
+                    } else {
+                        if let componentKey = DynamicCodingKeys(stringValue: "component"), let intensityKey = DynamicCodingKeys(stringValue: "intensity") {
+                            self = .reduceComponentProcessingIntensity(component: try nested.decode(FocusLockComponent.self, forKey: componentKey),
+                                                              intensity: try nested.decode(Double.self, forKey: intensityKey))
+                        } else {
+                            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing required keys for reduceProcessingIntensity"))
+                        }
+                    }
+                } else {
+                    self = .reduceProcessingIntensity(allComponents: 0.0)
+                }
+            case .reduceComponentProcessingIntensity:
+                if let nested = try? container.nestedContainer(keyedBy: DynamicCodingKeys.self, forKey: key) {
+                    if let componentKey = DynamicCodingKeys(stringValue: "component"), let intensityKey = DynamicCodingKeys(stringValue: "intensity") {
+                        self = .reduceComponentProcessingIntensity(component: try nested.decode(FocusLockComponent.self, forKey: componentKey),
+                                                               intensity: try nested.decode(Double.self, forKey: intensityKey))
+                    } else {
+                        throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Missing required keys for reduceComponentProcessingIntensity"))
+                    }
+                } else {
+                    throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Invalid data for reduceComponentProcessingIntensity"))
+                }
+            default:
+                throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unsupported key: \(key.stringValue)"))
+            }
+        } else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "No key found"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .clearCache(let target, let percentage):
+            var nestedContainer = container.nestedContainer(keyedBy: DynamicCodingKeys.self, forKey: .clearCache)
+            try nestedContainer.encode(target, forKey: DynamicCodingKeys(stringValue: "target")!)
+            try nestedContainer.encode(percentage, forKey: DynamicCodingKeys(stringValue: "percentage")!)
+        case .increaseCacheSize(let percentage):
+            try container.encode(percentage, forKey: .increaseCacheSize)
+        case .reduceProcessingIntensity(let allComponents):
+            try container.encode(allComponents, forKey: .reduceProcessingIntensity)
+        case .reduceComponentProcessingIntensity(let component, let intensity):
+            var nestedContainer = container.nestedContainer(keyedBy: DynamicCodingKeys.self, forKey: .reduceComponentProcessingIntensity)
+            try nestedContainer.encode(component, forKey: DynamicCodingKeys(stringValue: "component")!)
+            try nestedContainer.encode(intensity, forKey: DynamicCodingKeys(stringValue: "intensity")!)
+        default:
+            // For simplicity, only encode the most common cases
+            break
+        }
+    }
+
+    private struct DynamicCodingKeys: CodingKey {
+        var stringValue: String
+        var intValue: Int?
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            self.intValue = intValue
+            self.stringValue = String(intValue)
+        }
+    }
+
     // Cache operations
     case clearCache(target: CacheTarget, percentage: Double)
     case increaseCacheSize(percentage: Double)
 
     // Processing operations
     case reduceProcessingIntensity(allComponents: Double)
-    case reduceProcessingIntensity(component: FocusLockComponent, intensity: Double)
+    case reduceComponentProcessingIntensity(component: FocusLockComponent, intensity: Double)
     case reduceProcessingFrequency(component: FocusLockComponent, interval: TimeInterval)
     case reduceBatchSize(component: FocusLockComponent, reduction: Double)
     case reducePollingFrequency(component: FocusLockComponent, interval: TimeInterval)
     case reduceSamplingRate(component: FocusLockComponent, rate: Double)
     case reduceMemoryFootprint(allComponents: Double)
-    case reduceMemoryFootprint(component: FocusLockComponent, reduction: Double)
+    case reduceComponentMemoryFootprint(component: FocusLockComponent, reduction: Double)
 
     // Quality and performance
     case lowerQuality(component: FocusLockComponent)
@@ -4572,6 +4850,640 @@ enum ActionType: String, Codable, CaseIterable {
         case .finance: return "Finance"
         case .learning: return "Learning"
         case .other: return "Other"
+        }
+    }
+}
+
+// MARK: - Second Brain Platform Models
+
+// MARK: - Enhanced Journal Models
+
+struct EnhancedDailyJournal: Codable, Identifiable {
+    let id: UUID
+    let date: Date
+    var sections: [JournalSection]
+    let generatedSummary: String
+    let executionScore: Double // 0-10 rating
+    let metadata: JournalMetadata
+    let createdAt: Date
+    let updatedAt: Date
+    
+    init(id: UUID = UUID(), date: Date, sections: [JournalSection] = [], generatedSummary: String = "", executionScore: Double = 5.0, metadata: JournalMetadata = JournalMetadata()) {
+        self.id = id
+        self.date = Calendar.current.startOfDay(for: date)
+        self.sections = sections
+        self.generatedSummary = generatedSummary
+        self.executionScore = executionScore
+        self.metadata = metadata
+        self.createdAt = Date()
+        self.updatedAt = Date()
+    }
+    
+    var formattedDate: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        return formatter.string(from: date)
+    }
+    
+    func section(ofType type: JournalSectionType) -> JournalSection? {
+        return sections.first { $0.type == type }
+    }
+}
+
+struct JournalSection: Codable, Identifiable, Equatable {
+    let id: UUID
+    let type: JournalSectionType
+    let title: String
+    var content: String
+    var order: Int
+    let isCustom: Bool
+    let createdAt: Date
+    
+    init(id: UUID = UUID(), type: JournalSectionType, title: String, content: String = "", order: Int, isCustom: Bool = false) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.content = content
+        self.order = order
+        self.isCustom = isCustom
+        self.createdAt = Date()
+    }
+    
+    static func == (lhs: JournalSection, rhs: JournalSection) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+enum JournalSectionType: String, Codable, CaseIterable {
+    case daySummary = "day_summary"
+    case unfinishedTasks = "unfinished_tasks"
+    case summaryPoints = "summary_points"
+    case timeline = "timeline"
+    case conversations = "conversations"
+    case planForNextDay = "plan_for_next_day"
+    case productivity = "productivity"
+    case personalNotes = "personal_notes"
+    case decisionLog = "decision_log"
+    case quickLinks = "quick_links"
+    case goalsTips = "goals_tips"
+    case improvements = "improvements"
+    case leads = "leads"
+    case delegationHiring = "delegation_hiring"
+    case incidentsQuality = "incidents_quality"
+    case custom = "custom"
+    
+    var displayName: String {
+        switch self {
+        case .daySummary: return "Day Summary"
+        case .unfinishedTasks: return "Unfinished Tasks"
+        case .summaryPoints: return "Summary Points"
+        case .timeline: return "Timeline of the Day"
+        case .conversations: return "Conversations I Had"
+        case .planForNextDay: return "Plan for Next Day"
+        case .productivity: return "Productivity"
+        case .personalNotes: return "Personal Notes"
+        case .decisionLog: return "Decision Log"
+        case .quickLinks: return "Quick Links"
+        case .goalsTips: return "Goals/Tips"
+        case .improvements: return "Improvements"
+        case .leads: return "Leads"
+        case .delegationHiring: return "Delegation & Hiring"
+        case .incidentsQuality: return "Incidents & Quality Log"
+        case .custom: return "Custom"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .daySummary: return "doc.text"
+        case .unfinishedTasks: return "list.bullet.circle"
+        case .summaryPoints: return "star.circle"
+        case .timeline: return "clock"
+        case .conversations: return "person.2"
+        case .planForNextDay: return "calendar.badge.plus"
+        case .productivity: return "chart.bar"
+        case .personalNotes: return "note.text"
+        case .decisionLog: return "brain"
+        case .quickLinks: return "link"
+        case .goalsTips: return "target"
+        case .improvements: return "arrow.up.circle"
+        case .leads: return "person.crop.circle.badge.plus"
+        case .delegationHiring: return "person.3"
+        case .incidentsQuality: return "exclamationmark.triangle"
+        case .custom: return "square.grid.2x2"
+        }
+    }
+    
+    var isListBased: Bool {
+        switch self {
+        case .unfinishedTasks, .summaryPoints, .planForNextDay, .quickLinks, .goalsTips, .improvements, .leads, .delegationHiring, .incidentsQuality:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+struct JournalMetadata: Codable {
+    var deepWorkMinutes: Int = 0
+    var adminWorkMinutes: Int = 0
+    var contextSwitchCount: Int = 0
+    var energyLevel: Double = 5.0 // 1-10
+    var timeOnP1Tasks: Double = 0.0 // percentage
+    var topDistraction: String = ""
+    var activitiesCount: Int = 0
+    var conversationsCount: Int = 0
+    var decisionsCount: Int = 0
+}
+
+// MARK: - Smart Todo Models
+
+struct SmartTodo: Codable, Identifiable, Equatable {
+    let id: UUID
+    var title: String
+    var description: String?
+    let project: TodoProject
+    var priority: TodoPriority
+    var scheduledTime: Date?
+    var duration: TimeInterval // in seconds
+    let context: TodoContext
+    let source: TodoSource
+    var status: TodoStatus
+    var dependencies: [UUID]
+    var subtasks: [Subtask]?
+    let metadata: TodoMetadata
+    let createdAt: Date
+    var completedAt: Date?
+    var updatedAt: Date
+    
+    init(id: UUID = UUID(), title: String, description: String? = nil, project: TodoProject, priority: TodoPriority, scheduledTime: Date? = nil, duration: TimeInterval = 1800, context: TodoContext = .laptop, source: TodoSource, status: TodoStatus = .pending, dependencies: [UUID] = [], subtasks: [Subtask]? = nil, metadata: TodoMetadata = TodoMetadata()) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.project = project
+        self.priority = priority
+        self.scheduledTime = scheduledTime
+        self.duration = duration
+        self.context = context
+        self.source = source
+        self.status = status
+        self.dependencies = dependencies
+        self.subtasks = subtasks
+        self.metadata = metadata
+        self.createdAt = Date()
+        self.completedAt = nil
+        self.updatedAt = Date()
+    }
+    
+    var formattedDuration: String {
+        let minutes = Int(duration / 60)
+        if minutes < 60 {
+            return "\(minutes)m"
+        } else {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            return mins > 0 ? "\(hours)h \(mins)m" : "\(hours)h"
+        }
+    }
+    
+    var urgencyScore: Double {
+        var score = Double(priority.numericValue) / 3.0
+        
+        if let scheduled = scheduledTime {
+            let hoursUntil = scheduled.timeIntervalSinceNow / 3600
+            if hoursUntil < 0 {
+                score += 1.0 // Overdue
+            } else if hoursUntil < 2 {
+                score += 0.8 // Due very soon
+            } else if hoursUntil < 24 {
+                score += 0.4 // Due today
+            }
+        }
+        
+        return min(score, 1.0)
+    }
+    
+    static func == (lhs: SmartTodo, rhs: SmartTodo) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+struct Subtask: Codable, Identifiable {
+    let id: UUID
+    let title: String
+    let duration: TimeInterval
+    var isCompleted: Bool
+    
+    init(id: UUID = UUID(), title: String, duration: TimeInterval, isCompleted: Bool = false) {
+        self.id = id
+        self.title = title
+        self.duration = duration
+        self.isCompleted = isCompleted
+    }
+}
+
+enum TodoProject: String, Codable, CaseIterable {
+    case m3rcuryAgent = "m3rcury_agent"
+    case precisionDetail = "precision_detail"
+    case windowWashing = "window_washing"
+    case acneAI = "acne_ai"
+    case school = "school"
+    case personal = "personal"
+    case selfCare = "self_care"
+    
+    var displayName: String {
+        switch self {
+        case .m3rcuryAgent: return "M3rcury Agent"
+        case .precisionDetail: return "Precision Detail"
+        case .windowWashing: return "Window Washing"
+        case .acneAI: return "Acne AI"
+        case .school: return "School"
+        case .personal: return "Personal"
+        case .selfCare: return "Self-Care"
+        }
+    }
+    
+    var color: String {
+        switch self {
+        case .m3rcuryAgent: return "purple"
+        case .precisionDetail: return "blue"
+        case .windowWashing: return "cyan"
+        case .acneAI: return "green"
+        case .school: return "orange"
+        case .personal: return "pink"
+        case .selfCare: return "mint"
+        }
+    }
+}
+
+enum TodoPriority: String, Codable, CaseIterable {
+    case p0 = "P0" // Moves KPI this week/unlocks work
+    case p1 = "P1" // This week
+    case p2 = "P2" // Later/backlog
+    
+    var displayName: String {
+        self.rawValue
+    }
+    
+    var numericValue: Int {
+        switch self {
+        case .p0: return 3
+        case .p1: return 2
+        case .p2: return 1
+        }
+    }
+    
+    var color: String {
+        switch self {
+        case .p0: return "red"
+        case .p1: return "orange"
+        case .p2: return "gray"
+        }
+    }
+}
+
+enum TodoContext: String, Codable, CaseIterable {
+    case phone = "phone"
+    case laptop = "laptop"
+    case inPerson = "in_person"
+    case errands = "errands"
+    
+    var icon: String {
+        switch self {
+        case .phone: return "phone"
+        case .laptop: return "laptopcomputer"
+        case .inPerson: return "person"
+        case .errands: return "car"
+        }
+    }
+}
+
+enum TodoSource: String, Codable {
+    case manual = "manual"
+    case jarvis = "jarvis"
+    case journal = "journal"
+    case activity = "activity"
+    case proactive = "proactive"
+}
+
+enum TodoStatus: String, Codable {
+    case pending = "pending"
+    case inProgress = "in_progress"
+    case blocked = "blocked"
+    case completed = "completed"
+    case cancelled = "cancelled"
+}
+
+struct TodoMetadata: Codable {
+    var estimatedROI: String?
+    var wealthImpact: String?
+    var energyRequired: String? // HIGH/MED/LOW
+    var relatedActivityId: UUID?
+    var notes: String?
+}
+
+// MARK: - Decision Log Models
+
+struct DecisionLog: Codable, Identifiable {
+    let id: UUID
+    let question: String
+    var options: [DecisionOption]
+    var tradeoffs: String?
+    let owner: String
+    var deadline: Date?
+    var decision: String?
+    var outcome: String?
+    let metadata: DecisionMetadata
+    let createdAt: Date
+    var decidedAt: Date?
+    var reviewedAt: Date?
+    
+    init(id: UUID = UUID(), question: String, options: [DecisionOption] = [], tradeoffs: String? = nil, owner: String, deadline: Date? = nil, decision: String? = nil, outcome: String? = nil, metadata: DecisionMetadata = DecisionMetadata()) {
+        self.id = id
+        self.question = question
+        self.options = options
+        self.tradeoffs = tradeoffs
+        self.owner = owner
+        self.deadline = deadline
+        self.decision = decision
+        self.outcome = outcome
+        self.metadata = metadata
+        self.createdAt = Date()
+        self.decidedAt = nil
+        self.reviewedAt = nil
+    }
+    
+    var isDecided: Bool {
+        decision != nil
+    }
+    
+    var isPastDeadline: Bool {
+        guard let deadline = deadline else { return false }
+        return deadline < Date()
+    }
+}
+
+struct DecisionOption: Codable, Identifiable {
+    let id: UUID
+    let label: String
+    let description: String?
+    var pros: [String]
+    var cons: [String]
+    
+    init(id: UUID = UUID(), label: String, description: String? = nil, pros: [String] = [], cons: [String] = []) {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.pros = pros
+        self.cons = cons
+    }
+}
+
+struct DecisionMetadata: Codable {
+    var category: String?
+    var relatedProject: TodoProject?
+    var impactLevel: String? // HIGH/MED/LOW
+    var reversible: Bool = true
+}
+
+// MARK: - Conversation Log Models
+
+struct ConversationLog: Codable, Identifiable {
+    let id: UUID
+    let personName: String
+    var context: String?
+    var keyPoints: [String]
+    var decisions: [String]
+    var followUps: [String]
+    let sentiment: String?
+    let conversationDate: Date
+    let createdAt: Date
+    
+    init(id: UUID = UUID(), personName: String, context: String? = nil, keyPoints: [String] = [], decisions: [String] = [], followUps: [String] = [], sentiment: String? = nil, conversationDate: Date = Date()) {
+        self.id = id
+        self.personName = personName
+        self.context = context
+        self.keyPoints = keyPoints
+        self.decisions = decisions
+        self.followUps = followUps
+        self.sentiment = sentiment
+        self.conversationDate = conversationDate
+        self.createdAt = Date()
+    }
+}
+
+// MARK: - Activity Recall
+
+struct ActivityRecall: Codable {
+    let timestamp: Date
+    let primaryActivity: TimelineCard?
+    let nearbyActivities: [TimelineCard]
+    let observations: [String]
+    let contextSwitches: [String]
+    let videoPath: String?
+    
+    var summary: String {
+        guard let primary = primaryActivity else {
+            return "No activity found at \(timestamp.formatted(date: .omitted, time: .shortened))"
+        }
+        
+        var text = "At \(timestamp.formatted(date: .omitted, time: .shortened)), you were working on:\n"
+        text += "\n**\(primary.title)**\n"
+        text += "\(primary.summary)\n"
+        
+        if !observations.isEmpty {
+            text += "\n**Details:**\n"
+            text += observations.prefix(3).map { "• \($0)" }.joined(separator: "\n")
+        }
+        
+        if !contextSwitches.isEmpty {
+            text += "\n\n**Context switches around this time:**\n"
+            text += contextSwitches.map { "→ \($0)" }.joined(separator: "\n")
+        }
+        
+        if !nearbyActivities.isEmpty {
+            text += "\n\n**Nearby activities:**\n"
+            text += nearbyActivities.prefix(2).map { "• \($0.startTimestamp)-\($0.endTimestamp): \($0.title)" }.joined(separator: "\n")
+        }
+        
+        return text
+    }
+}
+
+// MARK: - User Context Models
+
+struct UserContextItem: Codable, Identifiable {
+    let id: UUID
+    let key: String
+    var value: String
+    let category: UserContextCategory
+    let updatedAt: Date
+    
+    init(id: UUID = UUID(), key: String, value: String, category: UserContextCategory) {
+        self.id = id
+        self.key = key
+        self.value = value
+        self.category = category
+        self.updatedAt = Date()
+    }
+}
+
+enum UserContextCategory: String, Codable {
+    case schedule = "schedule"
+    case projects = "projects"
+    case goals = "goals"
+    case preferences = "preferences"
+    case energyPatterns = "energy_patterns"
+}
+
+struct ScheduleBlock: Codable {
+    let dayOfWeek: Int // 1-7 (Sunday-Saturday)
+    let startTime: String // "9:30"
+    let endTime: String // "13:30"
+    let activity: String
+    let isRecurring: Bool
+}
+
+// MARK: - Proactive Alert Models
+
+struct ProactiveAlert: Codable, Identifiable {
+    let id: UUID
+    let alertType: AlertType
+    let message: String
+    let severity: AlertSeverity
+    var context: String?
+    var isDismissed: Bool
+    var dismissedAt: Date?
+    let createdAt: Date
+    
+    init(id: UUID = UUID(), alertType: AlertType, message: String, severity: AlertSeverity, context: String? = nil, isDismissed: Bool = false) {
+        self.id = id
+        self.alertType = alertType
+        self.message = message
+        self.severity = severity
+        self.context = context
+        self.isDismissed = isDismissed
+        self.dismissedAt = nil
+        self.createdAt = Date()
+    }
+}
+
+enum AlertType: String, Codable {
+    case contextSwitch = "context_switch"
+    case p0Neglect = "p0_neglect"
+    case energyMismatch = "energy_mismatch"
+    case droppedBall = "dropped_ball"
+    case patternRecognition = "pattern_recognition"
+    case roiChallenge = "roi_challenge"
+    case anchorBlockViolation = "anchor_block_violation"
+    case deadlineApproaching = "deadline_approaching"
+}
+
+// Legacy FocusSession model used by FocusSessionManager
+// TODO: Reconcile with the main FocusSession struct
+struct LegacyFocusSession: Codable, Identifiable {
+    let id: UUID
+    let mode: FocusMode
+    let taskId: UUID?
+    let startTime: Date
+    var endTime: Date?
+    var interruptionCount: Int
+    var actualDuration: TimeInterval {
+        if let end = endTime {
+            return end.timeIntervalSince(startTime)
+        }
+        return Date().timeIntervalSince(startTime)
+    }
+    
+    init(id: UUID = UUID(), mode: FocusMode, taskId: UUID? = nil, startTime: Date = Date(), endTime: Date? = nil, interruptionCount: Int = 0) {
+        self.id = id
+        self.mode = mode
+        self.taskId = taskId
+        self.startTime = startTime
+        self.endTime = endTime
+        self.interruptionCount = interruptionCount
+    }
+}
+
+// MARK: - Context Switch Models
+
+struct ContextSwitch: Codable, Identifiable {
+    let id: UUID
+    let fromActivity: String?
+    let toActivity: String?
+    let fromApp: String?
+    let toApp: String?
+    let durationSeconds: Int
+    var switchReason: String?
+    let createdAt: Date
+    
+    init(id: UUID = UUID(), fromActivity: String?, toActivity: String?, fromApp: String?, toApp: String?, durationSeconds: Int, switchReason: String? = nil) {
+        self.id = id
+        self.fromActivity = fromActivity
+        self.toActivity = toActivity
+        self.fromApp = fromApp
+        self.toApp = toApp
+        self.durationSeconds = durationSeconds
+        self.switchReason = switchReason
+        self.createdAt = Date()
+    }
+}
+
+// MARK: - Jarvis Coach Models
+
+enum JarvisMode: String, Codable {
+    case assistant = "assistant"           // Default helpful mode
+    case executiveCoach = "executive_coach" // Proactive, challenging, ROI-focused
+    case mentor = "mentor"                  // Teaching, pattern recognition
+    case secondBrain = "second_brain"       // Pure recall, no judgment
+}
+
+struct CoachingContext: Codable {
+    let currentMode: JarvisMode
+    var userEnergyLevel: Double // 1-10
+    var recentContextSwitches: Int
+    var p0TasksPending: Int
+    let timeOfDay: String
+    var userSchedule: ScheduleBlock?
+    var currentFocusMode: FocusMode?
+    
+    init(currentMode: JarvisMode = .assistant, userEnergyLevel: Double = 5.0, recentContextSwitches: Int = 0, p0TasksPending: Int = 0, timeOfDay: String = "", userSchedule: ScheduleBlock? = nil, currentFocusMode: FocusMode? = nil) {
+        self.currentMode = currentMode
+        self.userEnergyLevel = userEnergyLevel
+        self.recentContextSwitches = recentContextSwitches
+        self.p0TasksPending = p0TasksPending
+        self.timeOfDay = timeOfDay
+        self.userSchedule = userSchedule
+        self.currentFocusMode = currentFocusMode
+    }
+}
+
+enum FocusMode: String, Codable {
+    case anchor = "anchor"   // 60-120min deep work
+    case triage = "triage"   // 30-90min small tasks
+    case break_ = "break"    // Rest period
+    
+    var displayName: String {
+        switch self {
+        case .anchor: return "Anchor Block"
+        case .triage: return "Triage Block"
+        case .break_: return "Break"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .anchor: return "target"
+        case .triage: return "list.bullet"
+        case .break_: return "pause.circle"
+        }
+    }
+    
+    var color: String {
+        switch self {
+        case .anchor: return "purple"
+        case .triage: return "blue"
+        case .break_: return "green"
         }
     }
 }

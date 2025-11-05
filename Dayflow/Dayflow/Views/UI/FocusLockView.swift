@@ -14,7 +14,7 @@ struct FocusLockView: View {
     @State private var showingSettings = false
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 0) {
             // Header
             VStack(spacing: 8) {
                 Text("Focus Lock")
@@ -25,6 +25,9 @@ struct FocusLockView: View {
                     .font(.custom("Nunito", size: 14))
                     .foregroundColor(Color.gray)
             }
+            .padding(.top, 20)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
 
             // Current Session Status
             VStack(spacing: 12) {
@@ -61,9 +64,8 @@ struct FocusLockView: View {
                         .cornerRadius(8)
                 }
             }
-            .padding()
-            .background(Color.gray.opacity(0.05))
-            .cornerRadius(12)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
 
             // Control Buttons
             VStack(spacing: 12) {
@@ -124,6 +126,8 @@ struct FocusLockView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
 
             Spacer()
 
@@ -146,9 +150,10 @@ struct FocusLockView: View {
                 .padding()
                 .background(Color.gray.opacity(0.05))
                 .cornerRadius(12)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
         }
-        .padding()
         .sheet(isPresented: $showingTaskSelection) {
             TaskSelectionView(
                 selectedTask: $currentTask,
