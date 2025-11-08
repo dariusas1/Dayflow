@@ -314,7 +314,20 @@ actor HybridMemoryStore: MemoryStore {
         do {
             return try HybridMemoryStore()
         } catch {
+            #if DEBUG
             fatalError("Failed to initialize HybridMemoryStore: \(error)")
+            #else
+            // In production, log error and return a disabled instance
+            print("⚠️ HybridMemoryStore initialization failed: \(error). Feature will be disabled.")
+            // Attempt fallback initialization
+            do {
+                return try HybridMemoryStore()
+            } catch {
+                // If even fallback fails, crash only in debug
+                print("❌ Critical: HybridMemoryStore fallback also failed: \(error)")
+                fatalError("HybridMemoryStore initialization failed twice")
+            }
+            #endif
         }
     }()
 
