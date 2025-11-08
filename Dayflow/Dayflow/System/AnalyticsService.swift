@@ -4,7 +4,7 @@
 //
 //  Centralized analytics wrapper for PostHog. Provides
 //  - identity management (anonymous UUID stored in Keychain)
-//  - opt-in gate (default ON)
+//  - opt-in gate (default OFF - privacy-first)
 //  - super properties and person properties
 //  - sampling and throttling helpers
 //  - safe, PII-free capture helpers and bucketing utils
@@ -27,8 +27,8 @@ final class AnalyticsService {
     var isOptedIn: Bool {
         get {
             if UserDefaults.standard.object(forKey: optInKey) == nil {
-                // Default ON per product decision
-                return true
+                // Privacy-first: Default to OPT-IN required (false) - user must explicitly consent
+                return false
             }
             return UserDefaults.standard.bool(forKey: optInKey)
         }
@@ -38,6 +38,12 @@ final class AnalyticsService {
     }
 
     func start(apiKey: String, host: String) {
+        // Only initialize PostHog if user has opted in
+        guard isOptedIn else {
+            print("📊 Analytics: User has not opted in. PostHog will not be initialized.")
+            return
+        }
+
         let config = PostHogConfig(apiKey: apiKey, host: host)
         // Disable autocapture for privacy
         config.captureApplicationLifecycleEvents = false
@@ -60,6 +66,8 @@ final class AnalyticsService {
             UserDefaults.standard.set(true, forKey: "installTsSent")
         }
         PostHogSDK.shared.capture("person_props_updated", properties: payload)
+
+        print("✅ Analytics: PostHog initialized with user consent.")
     }
 
     @discardableResult

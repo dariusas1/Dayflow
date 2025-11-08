@@ -2,8 +2,32 @@
 //  FocusSessionManager.swift
 //  FocusLock
 //
-//  Manages focus sessions with Anchor/Triage block enforcement
-//  Prevents context switching and tracks productivity patterns
+//  LEGACY SESSION MANAGER - Deprecated
+//
+//  ⚠️ DEPRECATION NOTICE:
+//  This is a legacy session manager that uses simplified LegacyFocusSession models.
+//  It provides lightweight Anchor/Triage/Break tracking for the FocusSessionWidget.
+//
+//  CURRENT USAGE:
+//  - FocusSessionWidget (dashboard widget)
+//  - SmartTodoView (minimal reference)
+//
+//  MODERN ALTERNATIVE:
+//  Use SessionManager for full-featured sessions with:
+//  - App blocking via LockController
+//  - Emergency break support
+//  - Performance monitoring
+//  - Resource tracking
+//  - Full FocusSession model with persistence
+//
+//  POST-BETA MIGRATION PLAN:
+//  1. Migrate FocusSessionWidget to use SessionManager
+//  2. Add Anchor/Triage/Break modes to SessionManager if needed
+//  3. Remove this file and LegacyFocusSession model
+//  4. Consolidate all session management under SessionManager
+//
+//  For now, this manager provides simple session tracking without the overhead
+//  of full blocking enforcement. It uses UserDefaults for persistence (temporary).
 //
 
 import Foundation
@@ -127,12 +151,15 @@ class FocusSessionManager: ObservableObject {
         
         // Record in history
         sessionHistory.append(session)
-        
+
         // Keep only last 100 sessions
         if sessionHistory.count > 100 {
             sessionHistory = Array(sessionHistory.suffix(100))
         }
-        
+
+        // Save to persistent storage
+        saveSessionHistory()
+
         // Notify proactive engine
         proactiveEngine.endLegacyFocusSession()
         
@@ -319,8 +346,26 @@ class FocusSessionManager: ObservableObject {
     }
     
     private func loadSessionHistory() {
-        // TODO: Load from database
-        sessionHistory = []
+        // Load from UserDefaults
+        // Note: This uses UserDefaults as a temporary solution until SessionManager reconciliation
+        if let data = UserDefaults.standard.data(forKey: "focus_session_history"),
+           let decoded = try? JSONDecoder().decode([LegacyFocusSession].self, from: data) {
+            sessionHistory = decoded
+            logger.info("Loaded \(sessionHistory.count) sessions from history")
+        } else {
+            sessionHistory = []
+            logger.info("No session history found, starting fresh")
+        }
+    }
+
+    private func saveSessionHistory() {
+        // Save to UserDefaults
+        if let encoded = try? JSONEncoder().encode(sessionHistory) {
+            UserDefaults.standard.set(encoded, forKey: "focus_session_history")
+            logger.debug("Saved \(sessionHistory.count) sessions to history")
+        } else {
+            logger.error("Failed to encode session history")
+        }
     }
 }
 

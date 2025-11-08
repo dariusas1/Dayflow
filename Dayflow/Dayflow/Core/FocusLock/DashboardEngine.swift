@@ -696,9 +696,9 @@ class DashboardEngine: ObservableObject {
     }
 
     private func setupDataRefresh() {
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { _ in
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task {
-                await self.refreshData()
+                await self?.refreshData()
             }
         }
     }

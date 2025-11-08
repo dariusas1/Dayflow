@@ -99,10 +99,16 @@ final class OllamaProvider: LLMProvider {
     func generateActivityCards(observations: [Observation], context: ActivityGenerationContext, batchId: Int64?) async throws -> (cards: [ActivityCardData], log: LLMCall) {
         let callStart = Date()
         var logs: [String] = []
-        
+
         let sortedObservations = context.batchObservations.sorted { $0.startTs < $1.startTs }
-        
-        
+
+        // Safety: Ensure we have observations to process
+        guard let firstObs = sortedObservations.first,
+              let lastObs = sortedObservations.last else {
+            throw NSError(domain: "OllamaProvider", code: 1001,
+                         userInfo: [NSLocalizedDescriptionKey: "No observations to process"])
+        }
+
         // Generate initial activity card for these observations
         let (titleSummary, firstLog) = try await generateTitleAndSummary(
             observations: sortedObservations,
@@ -110,12 +116,12 @@ final class OllamaProvider: LLMProvider {
             batchId: batchId
         )
         logs.append(firstLog)
-        
+
         let normalizedCategory = normalizeCategory(titleSummary.category, categories: context.categories)
 
         let initialCard = ActivityCardData(
-            startTime: formatTimestampForPrompt(sortedObservations.first!.startTs),
-            endTime: formatTimestampForPrompt(sortedObservations.last!.endTs),
+            startTime: formatTimestampForPrompt(firstObs.startTs),
+            endTime: formatTimestampForPrompt(lastObs.endTs),
             category: normalizedCategory,
             subcategory: "",
             title: titleSummary.title,

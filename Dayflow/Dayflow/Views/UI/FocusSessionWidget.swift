@@ -119,18 +119,8 @@ struct FocusSessionWidget: View {
             
             // Quick actions
             HStack(spacing: 8) {
-                if session.mode == .anchor {
-                    Button(action: {
-                        // TODO: Implement log interruption
-                    }) {
-                        Label("Log Interruption", systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.bordered)
-                }
-                
                 Spacer()
-                
+
                 Button(action: {
                     focusManager.endSession()
                 }) {

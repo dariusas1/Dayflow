@@ -17,6 +17,7 @@ struct SettingsView: View {
         case storage
         case providers
         case focuslock
+        case bedtime
         case other
 
         var id: String { rawValue }
@@ -26,6 +27,7 @@ struct SettingsView: View {
             case .storage: return "Storage"
             case .providers: return "Providers"
             case .focuslock: return "FocusLock"
+            case .bedtime: return "Bedtime"
             case .other: return "Other"
             }
         }
@@ -35,6 +37,7 @@ struct SettingsView: View {
             case .storage: return "Recording status and disk usage"
             case .providers: return "Manage LLM providers and customize prompts"
             case .focuslock: return "Focus sessions and productivity features"
+            case .bedtime: return "Enforce healthy sleep habits"
             case .other: return "General preferences & support"
             }
         }
@@ -380,6 +383,8 @@ extension SettingsView {
             providersContent
         case .focuslock:
             focusLockContent
+        case .bedtime:
+            BedtimeSettingsView()
         case .other:
             otherContent
         }
