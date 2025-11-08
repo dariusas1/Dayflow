@@ -5379,8 +5379,12 @@ enum AlertType: String, Codable {
     case deadlineApproaching = "deadline_approaching"
 }
 
-// Legacy FocusSession model used by FocusSessionManager
-// TODO: Reconcile with the main FocusSession struct
+// LEGACY FocusSession model - DEPRECATED
+//
+// ⚠️ Used by deprecated FocusSessionManager for lightweight Anchor/Triage/Break tracking
+// Modern code should use FocusSession model with SessionManager instead
+//
+// POST-BETA: Migrate FocusSessionWidget to SessionManager and remove this model
 struct LegacyFocusSession: Codable, Identifiable {
     let id: UUID
     let mode: FocusMode

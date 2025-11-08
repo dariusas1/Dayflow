@@ -2,7 +2,31 @@
 //  SessionManager.swift
 //  FocusLock
 //
-//  Manages focus session lifecycle and state
+//  PRIMARY SESSION MANAGER - Production Ready
+//
+//  ✅ This is the MODERN session manager for FocusLock
+//  Use this for all new session-related features.
+//
+//  FEATURES:
+//  - Full FocusSession model with database persistence
+//  - App blocking enforcement via LockController
+//  - Emergency break management with timer
+//  - Performance monitoring (CPU, memory, latency)
+//  - Resource usage tracking
+//  - Session state machine (idle, arming, active, break, ended)
+//  - UserNotifications integration
+//
+//  CURRENT USAGE:
+//  - FocusLockView, EnhancedFocusLockView (main UI)
+//  - EmergencyBreakView
+//  - PlannerEngine, TimeBlockOptimizer
+//  - JarvisChat, DailyJournalGenerator
+//  - BackgroundMonitor, PerformanceValidator
+//  - And 10+ other components
+//
+//  NOTE: There is a legacy FocusSessionManager (deprecated) that uses
+//  simplified LegacyFocusSession models. That manager will be migrated
+//  to use this SessionManager post-beta.
 //
 
 import Foundation

@@ -656,6 +656,7 @@ class BedtimeEnforcer: ObservableObject {
 
 struct BedtimeCountdownView: View {
     @ObservedObject var enforcer: BedtimeEnforcer
+    @ObservedObject var killSwitchManager = KillSwitchManager.shared
 
     var body: some View {
         ZStack {
@@ -749,6 +750,11 @@ struct BedtimeCountdownView: View {
                 .padding(.top)
             }
             .padding(40)
+
+            // Kill Switch passphrase modal
+            if killSwitchManager.showPassphraseEntry {
+                KillSwitchPassphraseView()
+            }
         }
     }
 
