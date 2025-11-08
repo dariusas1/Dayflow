@@ -314,7 +314,9 @@ class TodoExtractionEngine: ObservableObject {
         
         if dueToday {
             let today = Calendar.current.startOfDay(for: Date())
-            let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today)!
+            guard let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: today) else {
+                return []  // Safety: Return empty if calendar operation fails
+            }
             filtered = filtered.filter { todo in
                 guard let scheduled = todo.scheduledTime else { return false }
                 return scheduled >= today && scheduled < tomorrow
@@ -429,7 +431,10 @@ class TodoExtractionEngine: ObservableObject {
             
             // Skip weekends
             if weekday == 1 || weekday == 7 {
-                checkDate = calendar.date(byAdding: .day, value: 1, to: checkDate)!
+                guard let nextDay = calendar.date(byAdding: .day, value: 1, to: checkDate) else {
+                    break  // Safety: Exit loop if calendar fails
+                }
+                checkDate = nextDay
                 continue
             }
             
@@ -457,9 +462,13 @@ class TodoExtractionEngine: ObservableObject {
             
             // If after 10pm, move to next day
             if hour >= 22 {
-                checkDate = calendar.date(byAdding: .day, value: 1, to: checkDate)!
-                if let morning = calendar.date(bySettingHour: preferredHour, minute: 0, second: 0, of: checkDate) {
+                guard let nextDay = calendar.date(byAdding: .day, value: 1, to: checkDate) else {
+                    break  // Safety: Exit loop if calendar fails
+                }
+                if let morning = calendar.date(bySettingHour: preferredHour, minute: 0, second: 0, of: nextDay) {
                     checkDate = morning
+                } else {
+                    checkDate = nextDay
                 }
                 continue
             }
@@ -469,7 +478,9 @@ class TodoExtractionEngine: ObservableObject {
         }
         
         // Fallback: just return preferred hour tomorrow
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: date)!
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: date) else {
+            return date  // Safety: Return original date if calendar fails
+        }
         return calendar.date(bySettingHour: preferredHour, minute: 0, second: 0, of: tomorrow) ?? tomorrow
     }
     

@@ -492,8 +492,10 @@ class DailyJournalGenerator: ObservableObject {
         // Integrate with ActivityTap to get activity data for the day
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
-        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
-        
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
+            return []  // Safety: Return empty if calendar fails
+        }
+
         // Get activity history from ActivityTap for the day
         let activities = ActivityTap.shared.getActivityHistory(since: startOfDay, limit: 1000)
             .filter { $0.timestamp >= startOfDay && $0.timestamp < endOfDay }

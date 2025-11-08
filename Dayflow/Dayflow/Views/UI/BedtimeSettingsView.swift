@@ -12,6 +12,7 @@ struct BedtimeSettingsView: View {
 
     @State private var selectedHour: Int
     @State private var selectedMinute: Int
+    @State private var showNuclearSetup = false
 
     init() {
         let enforcer = BedtimeEnforcer.shared
@@ -123,7 +124,12 @@ struct BedtimeSettingsView: View {
                         ForEach(BedtimeEnforcer.EnforcementMode.allCases, id: \.self) { mode in
                             HStack {
                                 Button(action: {
-                                    enforcer.updateEnforcementMode(mode)
+                                    if mode == .nuclear && enforcer.nuclearModeConfirmedAt == nil {
+                                        // Show Nuclear setup wizard for first-time setup
+                                        showNuclearSetup = true
+                                    } else {
+                                        enforcer.updateEnforcementMode(mode)
+                                    }
                                 }) {
                                     HStack(spacing: 12) {
                                         Image(systemName: enforcer.enforcementMode == mode ? "circle.fill" : "circle")
@@ -233,6 +239,63 @@ struct BedtimeSettingsView: View {
                         .padding(.top, 8)
                     }
 
+                    // Nuclear mode re-arming (if applicable)
+                    if enforcer.enforcementMode == .nuclear && enforcer.requiresDailyArming {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Daily Re-Arming")
+                                .font(.custom("Nunito", size: 14))
+                                .fontWeight(.semibold)
+                                .foregroundColor(.black.opacity(0.8))
+
+                            if let lastArmed = enforcer.nuclearModeLastArmed,
+                               Calendar.current.isDateInToday(lastArmed) {
+                                // Already armed today
+                                HStack(spacing: 8) {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                    Text("Nuclear mode is armed for today")
+                                        .font(.custom("Nunito", size: 13))
+                                        .foregroundColor(.black.opacity(0.7))
+                                }
+                                .padding(12)
+                                .background(Color.green.opacity(0.1))
+                                .cornerRadius(8)
+                            } else {
+                                // Needs re-arming
+                                VStack(alignment: .leading, spacing: 12) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.orange)
+                                        Text("Nuclear mode needs to be re-armed daily")
+                                            .font(.custom("Nunito", size: 13))
+                                            .foregroundColor(.black.opacity(0.7))
+                                    }
+
+                                    Button(action: {
+                                        enforcer.armNuclearMode()
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "lock.fill")
+                                            Text("Arm Nuclear Mode for Today")
+                                        }
+                                        .font(.custom("Nunito", size: 14))
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 10)
+                                        .background(Color.red)
+                                        .cornerRadius(8)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                                .padding(12)
+                                .background(Color.orange.opacity(0.1))
+                                .cornerRadius(8)
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+
                     // Info box
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: "info.circle.fill")
@@ -263,6 +326,9 @@ struct BedtimeSettingsView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $showNuclearSetup) {
+            NuclearModeSetupView()
+        }
     }
 
     private func formatTime(hour: Int, minute: Int) -> String {

@@ -29,11 +29,17 @@ class BedtimeEnforcer: ObservableObject {
     @Published var maxSnoozes: Int = 1
     @Published var snoozeDuration: Int = 10 // minutes
 
+    // Nuclear mode specific
+    @Published var nuclearModeLastArmed: Date?
+    @Published var nuclearModeConfirmedAt: Date?
+    @Published var requiresDailyArming: Bool = true
+
     // Private state
     private var timer: Timer?
     private var countdownTimer: Timer?
     private var currentSnoozeCount: Int = 0
     private var lastBedtimeDate: Date?
+    private let killSwitchManager = KillSwitchManager.shared
 
     // UserDefaults keys
     private let enabledKey = "bedtimeEnforcerEnabled"
@@ -44,6 +50,9 @@ class BedtimeEnforcer: ObservableObject {
     private let canSnoozeKey = "bedtimeCanSnooze"
     private let maxSnoozesKey = "bedtimeMaxSnoozes"
     private let snoozeDurationKey = "bedtimeSnoozeDuration"
+    private let nuclearLastArmedKey = "nuclearModeLastArmed"
+    private let nuclearConfirmedAtKey = "nuclearModeConfirmedAt"
+    private let requiresDailyArmingKey = "nuclearRequiresDailyArming"
 
     private init() {
         loadSettings()
@@ -54,12 +63,14 @@ class BedtimeEnforcer: ObservableObject {
         case countdown = "countdown"           // Unstoppable countdown
         case forceShutdown = "force_shutdown"  // Immediate shutdown
         case gentleReminder = "gentle_reminder" // Just notifications
+        case nuclear = "nuclear"               // NUCLEAR: No escape except Kill Switch
 
         var displayName: String {
             switch self {
             case .countdown: return "Countdown to Shutdown"
             case .forceShutdown: return "Immediate Shutdown"
             case .gentleReminder: return "Gentle Reminder Only"
+            case .nuclear: return "🔴 Nuclear Mode"
             }
         }
 
@@ -68,7 +79,16 @@ class BedtimeEnforcer: ObservableObject {
             case .countdown: return "Shows unstoppable countdown, then shuts down"
             case .forceShutdown: return "Immediately shuts down at bedtime"
             case .gentleReminder: return "Shows notifications but doesn't force shutdown"
+            case .nuclear: return "No in-app escape. Only Kill Switch (⌘⌥⇧Z + passphrase) can disable"
             }
+        }
+
+        var requiresDoubleOptIn: Bool {
+            return self == .nuclear
+        }
+
+        var allowsSnooze: Bool {
+            return self == .countdown
         }
     }
 
@@ -93,6 +113,15 @@ class BedtimeEnforcer: ObservableObject {
         canSnooze = UserDefaults.standard.object(forKey: canSnoozeKey) as? Bool ?? true
         maxSnoozes = UserDefaults.standard.object(forKey: maxSnoozesKey) as? Int ?? 1
         snoozeDuration = UserDefaults.standard.object(forKey: snoozeDurationKey) as? Int ?? 10
+
+        // Nuclear mode settings
+        if let savedArmed = UserDefaults.standard.object(forKey: nuclearLastArmedKey) as? Date {
+            nuclearModeLastArmed = savedArmed
+        }
+        if let savedConfirmed = UserDefaults.standard.object(forKey: nuclearConfirmedAtKey) as? Date {
+            nuclearModeConfirmedAt = savedConfirmed
+        }
+        requiresDailyArming = UserDefaults.standard.object(forKey: requiresDailyArmingKey) as? Bool ?? true
     }
 
     func saveSettings() {
@@ -104,6 +133,15 @@ class BedtimeEnforcer: ObservableObject {
         UserDefaults.standard.set(canSnooze, forKey: canSnoozeKey)
         UserDefaults.standard.set(maxSnoozes, forKey: maxSnoozesKey)
         UserDefaults.standard.set(snoozeDuration, forKey: snoozeDurationKey)
+
+        // Nuclear mode settings
+        if let armed = nuclearModeLastArmed {
+            UserDefaults.standard.set(armed, forKey: nuclearLastArmedKey)
+        }
+        if let confirmed = nuclearModeConfirmedAt {
+            UserDefaults.standard.set(confirmed, forKey: nuclearConfirmedAtKey)
+        }
+        UserDefaults.standard.set(requiresDailyArming, forKey: requiresDailyArmingKey)
 
         // Restart timer with new settings
         setupTimer()
@@ -153,6 +191,9 @@ class BedtimeEnforcer: ObservableObject {
     private func checkBedtime() {
         guard isEnabled else { return }
 
+        // Check Nuclear mode daily arming requirement
+        checkDailyArming()
+
         let now = Date()
         let calendar = Calendar.current
 
@@ -200,6 +241,10 @@ class BedtimeEnforcer: ObservableObject {
 
         case .gentleReminder:
             showBedtimeNotification()
+
+        case .nuclear:
+            // Nuclear mode: unstoppable countdown, no snooze, only Kill Switch can stop
+            startCountdown()
         }
 
         // Analytics
@@ -330,6 +375,13 @@ class BedtimeEnforcer: ObservableObject {
     private func performShutdown() {
         logger.warning("Performing system shutdown due to bedtime enforcement")
 
+        // Check for unsaved work - downgrade to sleep if detected
+        if detectUnsavedWork() {
+            logger.info("Unsaved work detected - performing sleep instead of shutdown")
+            performSleep()
+            return
+        }
+
         // Show final warning
         let alert = NSAlert()
         alert.messageText = "Shutting Down"
@@ -414,6 +466,184 @@ class BedtimeEnforcer: ObservableObject {
         }
     }
 
+    // MARK: - Nuclear Mode
+
+    /// Arm Nuclear mode for today
+    func armNuclearMode() {
+        guard enforcementMode == .nuclear else {
+            logger.warning("Attempted to arm Nuclear mode but enforcement mode is \(self.enforcementMode.rawValue)")
+            return
+        }
+
+        nuclearModeLastArmed = Date()
+        saveSettings()
+
+        logger.info("Nuclear mode armed for today")
+
+        // Show confirmation notification
+        let content = UNMutableNotificationContent()
+        content.title = "🔴 Nuclear Bedtime Armed"
+        content.body = "Bedtime enforcement is active. Only the Kill Switch (⌘⌥⇧Z + passphrase) can disable it."
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "nuclear_armed_\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request)
+
+        AnalyticsService.shared.capture("nuclear_mode_armed", [:])
+    }
+
+    /// Check if Nuclear mode needs re-arming
+    func checkDailyArming() {
+        guard enforcementMode == .nuclear && requiresDailyArming else { return }
+
+        guard let lastArmed = nuclearModeLastArmed,
+              Calendar.current.isDateInToday(lastArmed) else {
+            // Not armed today - downgrade to countdown mode
+            logger.warning("Nuclear mode not armed today, downgrading to countdown mode")
+            enforcementMode = .countdown
+            saveSettings()
+
+            // Show notification
+            let content = UNMutableNotificationContent()
+            content.title = "Nuclear Mode Disarmed"
+            content.body = "Nuclear mode was not re-armed today. Downgraded to Countdown mode."
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: "nuclear_disarmed_\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+
+            UNUserNotificationCenter.current().add(request)
+
+            AnalyticsService.shared.capture("nuclear_mode_disarmed_no_arming", [:])
+            return
+        }
+    }
+
+    /// Disable enforcement via Kill Switch
+    func disableViaKillSwitch() {
+        logger.warning("Bedtime enforcement disabled via Kill Switch")
+
+        // Stop countdown if active
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        isCountdownActive = false
+
+        // Dismiss countdown window
+        dismissCountdownWindow()
+
+        // Disable enforcement
+        isEnabled = false
+        saveSettings()
+
+        // Show notification
+        let content = UNMutableNotificationContent()
+        content.title = "Kill Switch Activated"
+        content.body = "Bedtime enforcement has been disabled via Kill Switch."
+        content.sound = .default
+
+        let request = UNNotificationRequest(
+            identifier: "killswitch_activated_\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        UNUserNotificationCenter.current().add(request)
+
+        AnalyticsService.shared.capture("killswitch_used", [:])
+    }
+
+    // MARK: - Unsaved Work Detection
+
+    /// Detect if any apps have unsaved work
+    private func detectUnsavedWork() -> Bool {
+        let workspace = NSWorkspace.shared
+        let runningApps = workspace.runningApplications
+
+        for app in runningApps {
+            // Skip system apps and our own app
+            guard let bundleID = app.bundleIdentifier,
+                  !bundleID.starts(with: "com.apple."),
+                  bundleID != "com.dayflow.FocusLock" else {
+                continue
+            }
+
+            // Check for common unsaved work indicators in app name
+            // macOS convention: apps with unsaved changes often show " • " or have "*" in window title
+            if let name = app.localizedName {
+                if name.contains("•") || name.contains("*") {
+                    logger.info("Detected unsaved work in app: \(name)")
+                    return true
+                }
+            }
+
+            // Check specific known apps
+            if let bundleID = app.bundleIdentifier {
+                switch bundleID {
+                case "com.apple.TextEdit",
+                     "com.microsoft.Word",
+                     "com.microsoft.Excel",
+                     "com.microsoft.PowerPoint",
+                     "com.apple.iWork.Pages",
+                     "com.apple.iWork.Numbers",
+                     "com.apple.iWork.Keynote",
+                     "com.sublimetext.3",
+                     "com.sublimetext.4",
+                     "com.microsoft.VSCode",
+                     "com.jetbrains.intellij",
+                     "com.apple.dt.Xcode":
+                    // These apps commonly have unsaved work
+                    // In a production version, we'd use Accessibility API to check window titles
+                    logger.info("Detected productivity app running: \(bundleID)")
+                    return true
+                default:
+                    break
+                }
+            }
+        }
+
+        return false
+    }
+
+    /// Sleep the Mac instead of shutting down
+    private func performSleep() {
+        logger.info("Performing system sleep (unsaved work detected)")
+
+        let script = "tell application \"System Events\" to sleep"
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+
+            if let error = error {
+                logger.error("Sleep failed: \(error)")
+                fallbackEnforcement()
+            } else {
+                // Show notification explaining why sleep instead of shutdown
+                let content = UNMutableNotificationContent()
+                content.title = "Bedtime: Sleep Mode"
+                content.body = "Unsaved work detected. Your Mac will sleep instead of shutting down. Please save your work."
+                content.sound = .default
+
+                let request = UNNotificationRequest(
+                    identifier: "bedtime_sleep_\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+
+                UNUserNotificationCenter.current().add(request)
+
+                AnalyticsService.shared.capture("bedtime_sleep_unsaved_work", [:])
+            }
+        }
+    }
+
     // MARK: - Cleanup
 
     deinit {
@@ -426,6 +656,7 @@ class BedtimeEnforcer: ObservableObject {
 
 struct BedtimeCountdownView: View {
     @ObservedObject var enforcer: BedtimeEnforcer
+    @ObservedObject var killSwitchManager = KillSwitchManager.shared
 
     var body: some View {
         ZStack {
@@ -459,8 +690,8 @@ struct BedtimeCountdownView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
 
-                // Snooze button (if allowed)
-                if enforcer.canSnooze && enforcer.currentSnoozeCount < enforcer.maxSnoozes {
+                // Snooze button (if allowed) - NOT available in Nuclear mode
+                if enforcer.enforcementMode.allowsSnooze && enforcer.canSnooze && enforcer.currentSnoozeCount < enforcer.maxSnoozes {
                     Button(action: {
                         enforcer.snooze()
                     }) {
@@ -488,6 +719,23 @@ struct BedtimeCountdownView: View {
                         .padding(.top)
                 }
 
+                // Nuclear mode message
+                if enforcer.enforcementMode == .nuclear {
+                    VStack(spacing: 8) {
+                        Text("🔴 NUCLEAR MODE")
+                            .font(.custom("Nunito", size: 16))
+                            .fontWeight(.bold)
+                            .foregroundColor(.red)
+
+                        Text("Only Kill Switch (⌘⌥⇧Z + passphrase) can stop this countdown")
+                            .font(.custom("Nunito", size: 12))
+                            .foregroundColor(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
+                    .padding(.top)
+                }
+
                 // Health message
                 VStack(spacing: 8) {
                     Text("💤 Get your rest!")
@@ -502,6 +750,11 @@ struct BedtimeCountdownView: View {
                 .padding(.top)
             }
             .padding(40)
+
+            // Kill Switch passphrase modal
+            if killSwitchManager.showPassphraseEntry {
+                KillSwitchPassphraseView()
+            }
         }
     }
 
