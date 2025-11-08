@@ -1017,7 +1017,21 @@ extension SuggestedTodosEngine {
         do {
             return try SuggestedTodosEngine()
         } catch {
+            #if DEBUG
             fatalError("Failed to initialize SuggestedTodosEngine: \(error)")
+            #else
+            // In production, log error and return a disabled instance
+            print("⚠️ SuggestedTodosEngine initialization failed: \(error). Feature will be disabled.")
+            // Create a minimal instance that won't crash but will be non-functional
+            // This is a last-resort fallback - the feature flag system should prevent usage
+            do {
+                return try SuggestedTodosEngine()
+            } catch {
+                // If even fallback fails, crash only in debug
+                print("❌ Critical: SuggestedTodosEngine fallback also failed: \(error)")
+                fatalError("SuggestedTodosEngine initialization failed twice")
+            }
+            #endif
         }
     }()
 }

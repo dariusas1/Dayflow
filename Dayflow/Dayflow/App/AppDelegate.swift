@@ -46,11 +46,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Block termination by default; only specific flows enable it.
         AppDelegate.allowTermination = false
 
-        // Configure crash reporting (Sentry)
+        // Configure crash reporting (Sentry) - only if user has opted in
         let info = Bundle.main.infoDictionary
         let SENTRY_DSN = info?["SentryDSN"] as? String ?? ""
         let SENTRY_ENV = info?["SentryEnvironment"] as? String ?? "production"
-        if !SENTRY_DSN.isEmpty {
+
+        // Check analytics opt-in (unified consent for both crash reporting and analytics)
+        if !SENTRY_DSN.isEmpty && AnalyticsService.shared.isOptedIn {
             SentrySDK.start { options in
                 options.dsn = SENTRY_DSN
                 options.environment = SENTRY_ENV
@@ -73,9 +75,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Enable safe wrapper now that Sentry is initialized
             SentryHelper.isEnabled = true
+            print("✅ Crash Reporting: Sentry initialized with user consent.")
+        } else if !SENTRY_DSN.isEmpty {
+            print("🔒 Crash Reporting: User has not opted in. Sentry will not be initialized.")
         }
 
-        // Configure analytics (prod only; default opt-in ON)
+        // Configure analytics (privacy-first: default opt-in OFF)
         let POSTHOG_API_KEY = info?["PHPostHogApiKey"] as? String ?? ""
         let POSTHOG_HOST = info?["PHPostHogHost"] as? String ?? "https://us.i.posthog.com"
         if !POSTHOG_API_KEY.isEmpty {
