@@ -5,7 +5,91 @@ All notable changes to FocusLock will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - Beta Hardening - 2025-11-08
+## [Unreleased] - All Features Integrated - 2025-11-08
+
+### 🚀 Major Feature Integration
+
+**ALL ADVANCED FEATURES NOW FULLY INTEGRATED AND ENABLED BY DEFAULT**
+
+All previously "coming soon" features are now fully implemented, wired end-to-end, and enabled by default for beta launch. Users can still disable individual features if desired.
+
+#### New Features Available
+
+1. **Dashboard & Analytics** ✅
+   - Customizable dashboard tiles
+   - Natural language query processor
+   - Time distribution visualization
+   - Focus percentage tracking
+   - Real-time metrics
+
+2. **Daily Journal** ✅
+   - Automated daily summaries
+   - Mood and productivity tracking
+   - Screenshot/note attachments
+   - Markdown and PDF export
+   - Template system
+
+3. **Jarvis AI Assistant** ✅
+   - Interactive chat interface
+   - Productivity coaching
+   - Proactive suggestions
+   - Timeline integration
+
+4. **Smart Planning & Todo Management** ✅
+   - AI-powered todo suggestions
+   - Auto-extraction from emails, notes, code
+   - Time-block planning
+   - Schedule optimization
+
+5. **Task Detection & Monitoring** ✅
+   - OCR-based task detection
+   - Accessibility API integration
+   - Privacy-safe summaries
+
+6. **Focus Sessions** ✅
+   - Structured sessions with timer
+   - App/website blocking
+   - Session history
+
+7. **🌙 Bedtime Enforcement** ✅ **NEW!**
+   - Enforce healthy sleep habits
+   - Configurable bedtime
+   - Three enforcement modes:
+     - Countdown to shutdown (unstoppable)
+     - Force shutdown (immediate)
+     - Gentle reminder (notifications only)
+   - Snooze options (configurable)
+   - Warning notifications
+
+#### Feature Flag Changes
+
+- **ALL FEATURES ENABLED BY DEFAULT** for beta launch
+- Changed `isDefaultEnabled` to return `true` for all features
+- Users can still customize in Settings → FocusLock
+- Feature flag system retained for flexibility
+
+#### UI/UX Improvements
+
+- **New Settings Tab:** Bedtime enforcement configuration
+- All advanced features accessible from sidebar
+- Smooth integration with existing UI
+- Consistent design language throughout
+
+### 📁 New Files Added
+
+- `Core/FocusLock/BedtimeEnforcer.swift` - Bedtime enforcement logic
+- `Views/UI/BedtimeSettingsView.swift` - Bedtime configuration UI
+- `FEATURE_INTEGRATION_COMPLETE.md` - Complete feature documentation
+
+### 🔧 Files Modified
+
+- `Core/FocusLock/FeatureFlags.swift` - All features enabled by default
+- `Views/UI/SettingsView.swift` - Added Bedtime tab
+- All feature implementations already existed and are now fully wired
+
+---
+
+## [Previous] - Beta Hardening - 2025-11-08
 
 ### 🔴 Critical Fixes
 

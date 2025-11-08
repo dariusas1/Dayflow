@@ -24,6 +24,7 @@ enum FeatureFlag: String, CaseIterable, Codable {
     case taskDetection = "task_detection"
     case performanceAnalytics = "performance_analytics"
     case smartNotifications = "smart_notifications"
+    case bedtimeEnforcement = "bedtime_enforcement"
 
     // UI/UX Enhancements
     case adaptiveInterface = "adaptive_interface"
@@ -43,6 +44,7 @@ enum FeatureFlag: String, CaseIterable, Codable {
         case .taskDetection: return "Task Detection"
         case .performanceAnalytics: return "Performance Analytics"
         case .smartNotifications: return "Smart Notifications"
+        case .bedtimeEnforcement: return "Bedtime Enforcement"
         case .adaptiveInterface: return "Adaptive Interface"
         case .advancedOnboarding: return "Advanced Onboarding"
         case .dataInsights: return "Data Insights"
@@ -62,6 +64,7 @@ enum FeatureFlag: String, CaseIterable, Codable {
         case .taskDetection: return "Automatic task detection and categorization"
         case .performanceAnalytics: return "Detailed performance metrics and trends"
         case .smartNotifications: return "Context-aware notifications and reminders"
+        case .bedtimeEnforcement: return "Enforce healthy sleep habits with automatic bedtime shutdown"
         case .adaptiveInterface: return "Interface that adapts to your usage patterns"
         case .advancedOnboarding: return "Comprehensive onboarding for all features"
         case .dataInsights: return "Deep insights into your productivity patterns"
@@ -73,7 +76,7 @@ enum FeatureFlag: String, CaseIterable, Codable {
         switch self {
         case .suggestedTodos, .planner, .dailyJournal, .enhancedDashboard, .jarvisChat:
             return .core
-        case .focusSessions, .emergencyBreaks, .taskDetection:
+        case .focusSessions, .emergencyBreaks, .taskDetection, .bedtimeEnforcement:
             return .productivity
         case .performanceAnalytics, .smartNotifications, .dataInsights:
             return .analytics
@@ -83,16 +86,9 @@ enum FeatureFlag: String, CaseIterable, Codable {
     }
 
     var isDefaultEnabled: Bool {
-        switch self {
-        case .suggestedTodos, .planner, .dailyJournal, .enhancedDashboard:
-            return true // Core features enabled by default
-        case .jarvisChat, .focusSessions, .emergencyBreaks:
-            return false // Opt-in features
-        case .taskDetection, .performanceAnalytics, .smartNotifications:
-            return false // Advanced features
-        case .adaptiveInterface, .advancedOnboarding, .dataInsights, .gamification:
-            return false // Experimental features
-        }
+        // ALL FEATURES ENABLED BY DEFAULT FOR BETA LAUNCH
+        // Users can still disable individual features if desired
+        return true
     }
 
     var requiresOnboarding: Bool {
@@ -131,6 +127,7 @@ enum FeatureFlag: String, CaseIterable, Codable {
         case .taskDetection: return "eye"
         case .performanceAnalytics: return "speedometer"
         case .smartNotifications: return "bell.badge"
+        case .bedtimeEnforcement: return "moon.zzz.fill"
         case .adaptiveInterface: return "paintbrush"
         case .advancedOnboarding: return "graduationcap"
         case .dataInsights: return "lightbulb"
