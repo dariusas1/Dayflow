@@ -52,44 +52,47 @@ struct SuggestedTodosView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            headerView
+        FlowingGradientBackground()
+            .overlay(
+                VStack(spacing: 0) {
+                    // Header
+                    headerView
 
-            // Filters and Search
-            filterSearchView
+                    // Filters and Search
+                    filterSearchView
 
-            // Content
-            if isLoading {
-                loadingView
-            } else if filteredSuggestions.isEmpty {
-                emptyStateView
-            } else {
-                suggestionsListView
+                    // Content
+                    if isLoading {
+                        loadingView
+                    } else if filteredSuggestions.isEmpty {
+                        emptyStateView
+                    } else {
+                        suggestionsListView
+                    }
+                }
+                .padding(DesignSpacing.lg)
+            )
+            .sheet(isPresented: $showingDetail) {
+                if let suggestion = selectedSuggestion {
+                    SuggestionDetailView(suggestion: suggestion)
+                }
             }
-        }
-        .background(Color(NSColor.controlBackgroundColor))
-        .sheet(isPresented: $showingDetail) {
-            if let suggestion = selectedSuggestion {
-                SuggestionDetailView(suggestion: suggestion)
+            .onAppear {
+                loadSuggestions()
             }
-        }
-        .onAppear {
-            loadSuggestions()
-        }
     }
 
     private var headerView: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: DesignSpacing.md) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                     Text("Suggested Tasks")
-                        .font(.custom("InstrumentSerif-Regular", size: 24))
-                        .foregroundColor(Color.black)
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.title1))
+                        .foregroundColor(DesignColors.primaryText)
 
                     Text("AI-powered task suggestions based on your activity")
-                        .font(.custom("Nunito", size: 14))
-                        .foregroundColor(Color.gray)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.secondaryText)
                 }
 
                 Spacer()
@@ -97,34 +100,42 @@ struct SuggestedTodosView: View {
                 Button(action: {
                     loadSuggestions()
                 }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.custom("Nunito", size: 16))
-                        .foregroundColor(Color.blue)
-                        .frame(width: 32, height: 32)
-                        .background(Color.blue.opacity(0.1))
-                        .clipShape(Circle())
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14))
+                        Text("Refresh")
+                            .font(.custom("Nunito", size: 14))
+                    }
+                    .foregroundColor(Color(hex: "FF6B35"))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white)
+                    .cornerRadius(8)
                 }
                 .buttonStyle(PlainButtonStyle())
             }
 
-            // Quick stats
-            HStack(spacing: 20) {
-                StatItem(
-                    title: "Total",
+            // Quick stats with glassmorphism cards
+            HStack(spacing: DesignSpacing.md) {
+                UnifiedMetricCard(
+                    title: "Total Tasks",
                     value: "\(suggestionEngine.currentSuggestions.count)",
-                    color: .blue
+                    icon: "list.bullet",
+                    style: .standard
                 )
 
-                StatItem(
+                UnifiedMetricCard(
                     title: "High Priority",
                     value: "\(suggestionEngine.currentSuggestions.filter { $0.priority == .high }.count)",
-                    color: .red
+                    icon: "exclamationmark.triangle.fill",
+                    style: .elevated
                 )
 
-                StatItem(
+                UnifiedMetricCard(
                     title: "Quick Tasks",
                     value: "\(suggestionEngine.currentSuggestions.filter { ($0.estimatedDuration ?? 600) < 300 }.count)",
-                    color: .green
+                    icon: "bolt.fill",
+                    style: .standard
                 )
             }
         }
@@ -134,34 +145,17 @@ struct SuggestedTodosView: View {
     }
 
     private var filterSearchView: some View {
-        VStack(spacing: 12) {
-            // Search bar
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(Color.gray)
-
-                TextField("Search suggestions...", text: $searchText)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.custom("Nunito", size: 14))
-
-                if !searchText.isEmpty {
-                    Button(action: {
-                        searchText = ""
-                    }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(Color.gray)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(8)
+        VStack(spacing: DesignSpacing.md) {
+            // Search bar using UnifiedInput
+            UnifiedTextField(
+                "Search suggestions...",
+                text: $searchText,
+                style: .search
+            )
 
             // Filter chips
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: DesignSpacing.sm) {
                     ForEach(SuggestionFilter.allCases, id: \.self) { filter in
                         FilterChip(
                             filter: filter,
@@ -172,63 +166,59 @@ struct SuggestedTodosView: View {
                         }
                     }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, DesignSpacing.md)
             }
         }
-        .padding(.horizontal)
-        .padding(.bottom, 8)
+        .padding(.horizontal, DesignSpacing.md)
+        .padding(.bottom, DesignSpacing.md)
     }
 
     private var loadingView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: DesignSpacing.lg) {
             ProgressView()
                 .scaleEffect(1.2)
+                .tint(DesignColors.primaryOrange)
 
             Text("Analyzing your activity...")
-                .font(.custom("Nunito", size: 16))
-                .foregroundColor(Color.gray)
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                .foregroundColor(DesignColors.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyStateView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DesignSpacing.xl) {
             Image(systemName: "lightbulb")
                 .font(.system(size: 48))
-                .foregroundColor(Color.gray.opacity(0.5))
+                .foregroundColor(DesignColors.tertiaryText)
 
-            VStack(spacing: 8) {
+            VStack(spacing: DesignSpacing.sm) {
                 Text("No suggestions yet")
-                    .font(.custom("InstrumentSerif-Regular", size: 20))
-                    .foregroundColor(Color.black)
+                    .font(.custom(DesignTypography.headingFont, size: DesignTypography.title3))
+                    .foregroundColor(DesignColors.primaryText)
 
                 Text("Start using your apps and we'll suggest tasks based on your activity")
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(Color.gray)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.secondaryText)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, DesignSpacing.lg)
             }
 
-            Button(action: {
-                loadSuggestions()
-            }) {
-                Text("Refresh Suggestions")
-                    .font(.custom("Nunito", size: 16))
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                    .background(Color.blue)
-                    .cornerRadius(8)
-            }
-            .buttonStyle(PlainButtonStyle())
+            UnifiedButton.primary(
+                "Refresh Suggestions",
+                size: .medium,
+                action: {
+                    loadSuggestions()
+                }
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
+        .padding(DesignSpacing.xl)
     }
 
     private var suggestionsListView: some View {
         ScrollView {
-            LazyVStack(spacing: 12) {
+            LazyVStack(spacing: DesignSpacing.md) {
                 ForEach(filteredSuggestions, id: \.id) { suggestion in
                     SuggestionCard(
                         suggestion: suggestion,
@@ -248,7 +238,7 @@ struct SuggestedTodosView: View {
                     )
                 }
             }
-            .padding()
+            .padding(DesignSpacing.md)
         }
     }
 
@@ -340,15 +330,15 @@ struct StatItem: View {
     let color: Color
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: DesignSpacing.xs) {
             Text(value)
-                .font(.custom("Nunito", size: 18))
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.title3))
                 .fontWeight(.bold)
                 .foregroundColor(color)
 
             Text(title)
-                .font(.custom("Nunito", size: 12))
-                .foregroundColor(Color.gray)
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                .foregroundColor(DesignColors.secondaryText)
         }
     }
 }
@@ -361,36 +351,36 @@ struct FilterChip: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 4) {
+            HStack(spacing: DesignSpacing.xs) {
                 Text(filter.displayName)
-                    .font(.custom("Nunito", size: 14))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
                     .fontWeight(isSelected ? .medium : .regular)
 
                 if count > 0 {
                     Text("(\(count))")
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(Color.gray)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.secondaryText)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(isSelected ? colorForFilter(filter) : Color(NSColor.controlBackgroundColor))
-            .foregroundColor(isSelected ? .white : Color.primary)
-            .cornerRadius(16)
+            .padding(.horizontal, DesignSpacing.md)
+            .padding(.vertical, DesignSpacing.xs)
+            .background(isSelected ? colorForFilter(filter) : DesignColors.glassBackground)
+            .foregroundColor(isSelected ? .white : DesignColors.primaryText)
+            .cornerRadius(DesignRadius.pill)
         }
         .buttonStyle(PlainButtonStyle())
     }
 
     private func colorForFilter(_ filter: SuggestionFilter) -> Color {
         switch filter {
-        case .all: return .blue
-        case .highPriority: return .red
-        case .mediumPriority: return .orange
-        case .lowPriority: return .green
-        case .work: return .purple
-        case .personal: return .mint
-        case .communication: return .cyan
-        case .quick: return .pink
+        case .all: return DesignColors.primaryOrange
+        case .highPriority: return DesignColors.errorRed
+        case .mediumPriority: return DesignColors.warningYellow
+        case .lowPriority: return DesignColors.successGreen
+        case .work: return Color.purple
+        case .personal: return Color.mint
+        case .communication: return Color.cyan
+        case .quick: return Color.pink
         }
     }
 }
@@ -403,114 +393,102 @@ struct SuggestionCard: View {
     let onSnooze: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header with title and priority
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(suggestion.title)
-                        .font(.custom("Nunito", size: 16))
-                        .fontWeight(.medium)
-                        .foregroundColor(Color.black)
-                        .lineLimit(2)
+        UnifiedCard(style: .standard, size: .medium) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                // Header with title and priority
+                HStack {
+                    VStack(alignment: .leading, spacing: DesignSpacing.xs) {
+                        Text(suggestion.title)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                            .fontWeight(.medium)
+                            .foregroundColor(DesignColors.primaryText)
+                            .lineLimit(2)
 
-                    HStack(spacing: 8) {
-                        PriorityBadge(priority: suggestion.priority)
+                        HStack(spacing: DesignSpacing.sm) {
+                            PriorityBadge(priority: suggestion.priority)
 
-                        if let duration = suggestion.estimatedDuration {
-                            DurationBadge(duration: duration)
+                            if let duration = suggestion.estimatedDuration {
+                                DurationBadge(duration: duration)
+                            }
+
+                            TaskCategoryBadge(category: suggestion.suggestedAction.type)
                         }
+                    }
 
-                        TaskCategoryBadge(category: suggestion.suggestedAction.type)
+                    Spacer()
+
+                    VStack(spacing: DesignSpacing.xs) {
+                        Button(action: onTap) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 16))
+                                .foregroundColor(DesignColors.secondaryText)
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
 
-                Spacer()
+                // Description
+                if !suggestion.description.isEmpty {
+                    Text(suggestion.description)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.secondaryText)
+                        .lineLimit(3)
+                }
 
-                VStack(spacing: 4) {
-                    Button(action: onTap) {
-                        Image(systemName: "info.circle")
-                            .foregroundColor(Color.gray)
+                // Source info
+                HStack {
+                    Image(systemName: "lightbulb.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(DesignColors.warningYellow)
+
+                    Text("Suggested from \(suggestion.sourceType.displayName)")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.secondaryText)
+
+                    Spacer()
+
+                    if suggestion.confidence > 0 {
+                        let confidence = suggestion.confidence
+                        Text("\(Int(confidence * 100))% confidence")
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                            .foregroundColor(DesignColors.tertiaryText)
                     }
-                    .buttonStyle(PlainButtonStyle())
                 }
-            }
 
-            // Description
-            if !suggestion.description.isEmpty {
-                Text(suggestion.description)
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(Color.gray)
-                    .lineLimit(3)
-            }
-
-            // Source info
-            HStack {
-                Image(systemName: "lightbulb.fill")
-                    .font(.system(size: 12))
-                    .foregroundColor(Color.yellow)
-
-                Text("Suggested from \(suggestion.sourceType.displayName)")
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(Color.gray)
-
-                Spacer()
-
-                if suggestion.confidence > 0 {
-                    let confidence = suggestion.confidence
-                    Text("\(Int(confidence * 100))% confidence")
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(Color.gray)
-                }
-            }
-
-            // Action buttons
-            HStack(spacing: 8) {
-                Button(action: onAccept) {
-                    HStack {
+                // Action buttons
+                HStack(spacing: DesignSpacing.sm) {
+                    UnifiedButton.primary(
+                        "Accept",
+                        size: .small,
+                        action: onAccept
+                    ) {
                         Image(systemName: "checkmark")
-                        Text("Accept")
+                            .font(.system(size: 12))
                     }
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.medium)
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.green)
-                    .cornerRadius(6)
-                }
-                .buttonStyle(PlainButtonStyle())
 
-                Button(action: onSnooze) {
-                    HStack {
+                    UnifiedButton.secondary(
+                        "Snooze",
+                        size: .small,
+                        action: onSnooze
+                    ) {
                         Image(systemName: "clock")
-                        Text("Snooze")
+                            .font(.system(size: 12))
                     }
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(Color.gray)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .cornerRadius(6)
-                }
-                .buttonStyle(PlainButtonStyle())
 
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .font(.custom("Nunito", size: 14))
-                        .foregroundColor(Color.gray)
-                        .frame(width: 32, height: 32)
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(PlainButtonStyle())
+                    UnifiedButton.ghost(
+                        "",
+                        size: .small,
+                        action: onDismiss
+                    ) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14))
+                            .foregroundColor(DesignColors.secondaryText)
+                    }
 
-                Spacer()
+                    Spacer()
+                }
             }
         }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 2, y: 1)
     }
 }
 
@@ -519,21 +497,21 @@ struct PriorityBadge: View {
 
     var body: some View {
         Text(priority.rawValue.capitalized)
-            .font(.custom("Nunito", size: 10))
+            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
             .fontWeight(.medium)
             .foregroundColor(.white)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, DesignSpacing.xs)
             .padding(.vertical, 2)
             .background(colorForPriority(priority))
-            .cornerRadius(4)
+            .cornerRadius(DesignRadius.small)
     }
 
     private func colorForPriority(_ priority: SuggestionPriority) -> Color {
         switch priority {
-        case .urgent: return .red
-        case .high: return .red
-        case .medium: return .orange
-        case .low: return .green
+        case .urgent: return DesignColors.errorRed
+        case .high: return DesignColors.errorRed
+        case .medium: return DesignColors.primaryOrange
+        case .low: return DesignColors.successGreen
         }
     }
 }
@@ -543,13 +521,13 @@ struct DurationBadge: View {
 
     var body: some View {
         Text(durationText)
-            .font(.custom("Nunito", size: 10))
+            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
             .fontWeight(.medium)
-            .foregroundColor(Color.gray)
-            .padding(.horizontal, 6)
+            .foregroundColor(DesignColors.secondaryText)
+            .padding(.horizontal, DesignSpacing.xs)
             .padding(.vertical, 2)
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(4)
+            .background(DesignColors.glassBackground)
+            .cornerRadius(DesignRadius.small)
     }
 
     private var durationText: String {
@@ -569,23 +547,23 @@ struct TaskCategoryBadge: View {
 
     var body: some View {
         Text(category.displayName)
-            .font(.custom("Nunito", size: 10))
+            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
             .fontWeight(.medium)
             .foregroundColor(.white)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, DesignSpacing.xs)
             .padding(.vertical, 2)
             .background(colorForCategory(category))
-            .cornerRadius(4)
+            .cornerRadius(DesignRadius.small)
     }
 
     private func colorForCategory(_ category: TaskCategory) -> Color {
         switch category {
-        case .work: return .purple
-        case .personal: return .mint
-        case .learning: return .blue
-        case .health: return .pink
-        case .productivity: return .cyan
-        case .career: return .orange
+        case .work: return Color.purple
+        case .personal: return Color.mint
+        case .learning: return Color.blue
+        case .health: return Color.pink
+        case .productivity: return DesignColors.primaryOrange
+        case .career: return DesignColors.primaryOrange
         }
     }
 }

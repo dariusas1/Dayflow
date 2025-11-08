@@ -296,17 +296,17 @@ extension SettingsView {
     
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: DesignSpacing.lg) {
             Text("Settings")
-                .font(.custom("InstrumentSerif-Regular", size: 42))
-                .foregroundColor(.black.opacity(0.9))
-                .padding(.leading, 10)
+                .font(.custom(DesignTypography.displayFont, size: DesignTypography.display))
+                .foregroundColor(DesignColors.primaryText)
+                .padding(.leading, DesignSpacing.sm)
 
             Text("Manage how Dayflow runs")
-                .font(.custom("Nunito", size: 14))
-                .foregroundColor(.black.opacity(0.55))
-                .padding(.leading, 10)
-                .padding(.bottom, 12)
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                .foregroundColor(DesignColors.secondaryText)
+                .padding(.leading, DesignSpacing.sm)
+                .padding(.bottom, DesignSpacing.md)
 
             ForEach(SettingsTab.allCases) { tab in
                 sidebarButton(for: tab)
@@ -314,24 +314,24 @@ extension SettingsView {
 
             Spacer()
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: DesignSpacing.sm) {
                 Text("Dayflow v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(.black.opacity(0.45))
-                    .padding(.leading, 10)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(DesignColors.tertiaryText)
+                    .padding(.leading, DesignSpacing.sm)
                 Button {
                     NotificationCenter.default.post(name: .showWhatsNew, object: nil)
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: DesignSpacing.xs) {
                         Text("View release notes")
                         Image(systemName: "arrow.up.right")
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .font(.custom("Nunito", size: 12))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                 }
                 .buttonStyle(PlainButtonStyle())
-                .foregroundColor(Color(red: 0.45, green: 0.26, blue: 0.04))
-                .padding(.leading, 10)
+                .foregroundColor(DesignColors.primaryOrange)
+                .padding(.leading, DesignSpacing.sm)
             }
         }
         .padding(.top, 0)
@@ -342,30 +342,30 @@ extension SettingsView {
 
     private func sidebarButton(for tab: SettingsTab) -> some View {
         Button {
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(DesignAnimation.spring) {
                 selectedTab = tab
             }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                 Text(tab.title)
-                    .font(.custom("Nunito", size: 15))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.subheadline))
                     .fontWeight(.semibold)
-                    .foregroundColor(.black.opacity(selectedTab == tab ? 0.9 : 0.6))
+                    .foregroundColor(selectedTab == tab ? DesignColors.primaryText : DesignColors.secondaryText)
                 Text(tab.subtitle)
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(.black.opacity(selectedTab == tab ? 0.55 : 0.35))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(selectedTab == tab ? DesignColors.tertiaryText : DesignColors.tertiaryText.opacity(0.7))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 14)
-            .padding(.horizontal, 16)
+            .padding(.vertical, DesignSpacing.md)
+            .padding(.horizontal, DesignSpacing.md)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(selectedTab == tab ? Color.white.opacity(0.85) : Color.white.opacity(0.45))
+                RoundedRectangle(cornerRadius: DesignRadius.medium, style: .continuous)
+                    .fill(selectedTab == tab ? DesignColors.cardBackground : Color.white.opacity(0.3))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(selectedTab == tab ? Color(hex: "FFE0A5") : Color.white.opacity(0.3), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: DesignRadius.medium, style: .continuous)
+                            .stroke(selectedTab == tab ? DesignColors.primaryOrange : Color.white.opacity(0.3), lineWidth: 1)
                     )
-                    .shadow(color: selectedTab == tab ? Color.black.opacity(0.08) : Color.clear, radius: 10, x: 0, y: 6)
+                    .shadow(color: selectedTab == tab ? DesignColors.shadowColor : Color.clear, radius: DesignRadius.medium, x: 0, y: 4)
             )
         }
         .buttonStyle(PlainButtonStyle())
@@ -401,33 +401,23 @@ extension SettingsView {
                                    text: AppState.shared.isRecording ? "Recorder active" : "Recorder idle")
                     }
 
-                    HStack(spacing: 12) {
-                        DayflowSurfaceButton(
-                            action: refreshStorageMetrics,
-                            content: {
-                                HStack(spacing: 10) {
-                                    if isRefreshingStorage {
-                                        ProgressView().scaleEffect(0.75)
-                                    }
-                                    Text(isRefreshingStorage ? "Checking…" : "Run status check")
-                                        .font(.custom("Nunito", size: 13))
-                                        .fontWeight(.semibold)
-                                }
-                                .frame(minWidth: 170)
-                            },
-                            background: Color(red: 0.25, green: 0.17, blue: 0),
-                            foreground: .white,
-                            borderColor: .clear,
-                            cornerRadius: 8,
-                            horizontalPadding: 20,
-                            verticalPadding: 11,
-                            showOverlayStroke: true
-                        )
-                        .disabled(isRefreshingStorage)
+                    HStack(spacing: DesignSpacing.sm) {
+                        HStack(spacing: DesignSpacing.xs) {
+                            if isRefreshingStorage {
+                                ProgressView().scaleEffect(0.75)
+                            }
+                            UnifiedButton.primary(
+                                isRefreshingStorage ? "Checking…" : "Run status check",
+                                size: .small,
+                                disabled: isRefreshingStorage,
+                                icon: isRefreshingStorage ? nil : "arrow.clockwise",
+                                action: refreshStorageMetrics
+                            )
+                        }
 
                         if let last = lastStorageCheck {
                             Text("Last checked \(relativeDate(last))")
-                                .font(.custom("Nunito", size: 12))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                                 .foregroundColor(.black.opacity(0.45))
                         }
                     }
@@ -493,22 +483,11 @@ extension SettingsView {
                     }
                 }
                 Spacer()
-                DayflowSurfaceButton(
-                    action: action,
-                    content: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "folder")
-                            Text(actionTitle)
-                                .font(.custom("Nunito", size: 13))
-                        }
-                    },
-                    background: Color.white,
-                    foreground: Color(red: 0.25, green: 0.17, blue: 0),
-                    borderColor: Color(hex: "FFE0A5"),
-                    cornerRadius: 8,
-                    horizontalPadding: 20,
-                    verticalPadding: 10,
-                    showOverlayStroke: true
+                UnifiedButton.secondary(
+                    actionTitle,
+                    size: .small,
+                    icon: "folder",
+                    action: action
                 )
 
                 Menu {
@@ -518,19 +497,19 @@ extension SettingsView {
                         }
                     }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: DesignSpacing.xs) {
                         Image(systemName: "slider.horizontal.3")
                         Text(option.label)
-                            .font(.custom("Nunito", size: 12))
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                     }
-                    .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(Color.white)
-                    .cornerRadius(8)
+                    .foregroundColor(DesignColors.primaryOrange)
+                    .padding(.horizontal, DesignSpacing.sm)
+                    .padding(.vertical, DesignSpacing.xs)
+                    .background(DesignColors.cardBackground)
+                    .cornerRadius(DesignRadius.small)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(hex: "FFE0A5"), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: DesignRadius.small)
+                            .stroke(DesignColors.primaryOrange, lineWidth: 1)
                     )
                 }
                 .menuStyle(BorderlessButtonMenuStyle())
@@ -544,20 +523,20 @@ extension SettingsView {
     }
 
     private func statusPill(icon: String, tint: Color, text: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: DesignSpacing.xs) {
             Image(systemName: icon)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(tint)
             Text(text)
-                .font(.custom("Nunito", size: 12))
-                .foregroundColor(.black.opacity(0.65))
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                .foregroundColor(DesignColors.secondaryText)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, DesignSpacing.sm)
+        .padding(.vertical, DesignSpacing.xs)
         .background(
             Capsule()
-                .fill(Color.white.opacity(0.75))
-                .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 0.8))
+                .fill(DesignColors.cardBackground)
+                .overlay(Capsule().stroke(DesignColors.glassBorder, lineWidth: 0.8))
         )
     }
 
@@ -566,35 +545,23 @@ extension SettingsView {
     private var providersContent: some View {
         VStack(alignment: .leading, spacing: 28) {
             SettingsCard(title: "Current configuration", subtitle: "Active provider and runtime details") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: DesignSpacing.md) {
                     providerSummary
-                    DayflowSurfaceButton(
-                        action: { setupModalProvider = currentProvider },
-                        content: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "slider.horizontal.3")
-                                Text("Edit configuration")
-                                    .font(.custom("Nunito", size: 13))
-                            }
-                            .frame(minWidth: 160)
-                        },
-                        background: Color(red: 0.25, green: 0.17, blue: 0),
-                        foreground: .white,
-                        borderColor: .clear,
-                        cornerRadius: 8,
-                        horizontalPadding: 20,
-                        verticalPadding: 10,
-                        showOverlayStroke: true
+                    UnifiedButton.primary(
+                        "Edit configuration",
+                        size: .small,
+                        icon: "slider.horizontal.3",
+                        action: { setupModalProvider = currentProvider }
                     )
                 }
             }
 
             SettingsCard(title: "Connection health", subtitle: "Run a quick test for the active provider") {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: DesignSpacing.md) {
                     Text(currentProvider == "gemini" ? "Gemini API" : "Local API")
-                        .font(.custom("Nunito", size: 14))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.subheadline))
                         .fontWeight(.semibold)
-                        .foregroundColor(.black.opacity(0.72))
+                        .foregroundColor(DesignColors.primaryText)
 
                     if currentProvider == "gemini" {
                         TestConnectionView(onTestComplete: { _ in })
@@ -610,10 +577,10 @@ extension SettingsView {
                             }
                         )
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: DesignSpacing.sm) {
                             Text("Dayflow Pro diagnostics coming soon")
-                                .font(.custom("Nunito", size: 13))
-                                .foregroundColor(.black.opacity(0.55))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
                     }
                 }
@@ -870,45 +837,45 @@ extension SettingsView {
             SettingsCard(title: "Focus Session Settings", subtitle: "Configure your focus work sessions") {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Focus sessions help you stay on task by blocking distractions and tracking your time.")
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.55))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.tertiaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     // Default Session Duration
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Default Session Duration")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Set the default length for focus sessions")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
                         Text("25 min")
-                            .font(.custom("Nunito", size: 14))
-                            .foregroundColor(.black.opacity(0.7))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.05))
-                            .cornerRadius(6)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                            .foregroundColor(DesignColors.secondaryText)
+                            .padding(.horizontal, DesignSpacing.sm)
+                            .padding(.vertical, DesignSpacing.xs)
+                            .background(DesignColors.glassBackground)
+                            .cornerRadius(DesignRadius.small)
                     }
 
                     // Auto-start Breaks
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Auto-start Breaks")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Automatically start breaks after focus sessions")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
@@ -922,69 +889,69 @@ extension SettingsView {
             SettingsCard(title: "Emergency Break Settings", subtitle: "Configure break duration and behavior") {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Emergency breaks give you short pauses during intense focus sessions.")
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.55))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.tertiaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     // Break Duration
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Break Duration")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Set the length of emergency breaks")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
                         Text("5 min")
-                            .font(.custom("Nunito", size: 14))
-                            .foregroundColor(.black.opacity(0.7))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.05))
-                            .cornerRadius(6)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                            .foregroundColor(DesignColors.secondaryText)
+                            .padding(.horizontal, DesignSpacing.sm)
+                            .padding(.vertical, DesignSpacing.xs)
+                            .background(DesignColors.glassBackground)
+                            .cornerRadius(DesignRadius.small)
                     }
 
                     // Daily Break Limit
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Daily Break Limit")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Maximum number of emergency breaks per day")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
                         Text("3 breaks")
-                            .font(.custom("Nunito", size: 14))
-                            .foregroundColor(.black.opacity(0.7))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.05))
-                            .cornerRadius(6)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                            .foregroundColor(DesignColors.secondaryText)
+                            .padding(.horizontal, DesignSpacing.sm)
+                            .padding(.vertical, DesignSpacing.xs)
+                            .background(DesignColors.glassBackground)
+                            .cornerRadius(DesignRadius.small)
                     }
 
                     // Break Reason Required
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Require Break Reason")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Require a reason when taking emergency breaks")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
@@ -998,89 +965,83 @@ extension SettingsView {
             SettingsCard(title: "Data & Privacy", subtitle: "Manage your FocusLock data") {
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Control how your focus data is stored and used.")
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.55))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.tertiaryText)
                         .fixedSize(horizontal: false, vertical: true)
 
                     // Export Data
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Export FocusLock Data")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Download your focus sessions and productivity data")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
-                        Button("Export") {
-                            Task {
-                                await performExport()
+                        UnifiedButton.primary(
+                            "Export",
+                            size: .small,
+                            disabled: isExporting,
+                            action: {
+                                Task {
+                                    await performExport()
+                                }
                             }
-                        }
-                        .disabled(isExporting)
-                        .font(.custom("Nunito", size: 13))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color(red: 0.25, green: 0.17, blue: 0))
-                        .cornerRadius(8)
+                        )
                     }
 
                     // Clear Analytics Data
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Clear Analytics Data")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Remove all analytics and usage statistics")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
-                        Button("Clear") {
-                            showClearConfirmation = true
-                        }
-                        .font(.custom("Nunito", size: 13))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.red)
-                        .cornerRadius(8)
+                        UnifiedButton.ghost(
+                            "Clear",
+                            size: .small,
+                            action: {
+                                showClearConfirmation = true
+                            }
+                        )
                     }
 
                     // Reset Settings
                     HStack {
                         VStack(alignment: .leading) {
                             Text("Reset Focus Settings")
-                                .font(.custom("Nunito", size: 14))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                                 .fontWeight(.medium)
-                                .foregroundColor(.black)
+                                .foregroundColor(DesignColors.primaryText)
 
                             Text("Reset all FocusLock settings to defaults")
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.black.opacity(0.6))
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
                         }
 
                         Spacer()
 
-                        Button("Reset") {
-                            showResetConfirmation = true
-                        }
-                        .font(.custom("Nunito", size: 13))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.orange)
-                        .cornerRadius(8)
+                        UnifiedButton.secondary(
+                            "Reset",
+                            size: .small,
+                            action: {
+                                showResetConfirmation = true
+                            }
+                        )
                     }
                 }
             }
@@ -1555,30 +1516,22 @@ private struct SettingsCard<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.custom("Nunito", size: 18))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black.opacity(0.85))
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.45))
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                VStack(alignment: .leading, spacing: DesignSpacing.xs) {
+                    Text(title)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.headline))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.primaryText)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                            .foregroundColor(DesignColors.tertiaryText)
+                    }
                 }
+                content()
             }
-            content()
         }
-        .padding(28)
-        .background(
-            RoundedRectangle(cornerRadius: 18)
-                .fill(Color.white.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18)
-                        .stroke(Color.white.opacity(0.55), lineWidth: 0.8)
-                )
-                .shadow(color: Color.black.opacity(0.08), radius: 18, x: 0, y: 12)
-        )
     }
 }
 

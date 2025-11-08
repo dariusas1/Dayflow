@@ -64,16 +64,16 @@ struct DayflowButton: View {
                         if isSubtle {
                             Color.white.opacity(0.9)
                         } else {
-                            Color(red: 1, green: 0.42, blue: 0.02)
+                            DesignColors.vibrantOrange
                         }
                         
                         // Pulse effect
                         if showPulse {
                             Group {
                                 if isSubtle {
-                                    Color.gray.opacity(0.1)
+                                    DesignColors.hoverBackground
                                 } else {
-                                    Color(red: 1, green: 0.42, blue: 0.02)
+                                    DesignColors.vibrantOrange
                                         .opacity(0.3)
                                 }
                             }

@@ -107,9 +107,7 @@ struct MainView: View {
             rightContentColumn
         }
         .background(
-            Image("MainUIBackground")
-                .resizable()
-                .scaledToFill()
+            FlowingGradientBackground()
                 .ignoresSafeArea()
         )
     }
@@ -203,8 +201,8 @@ struct MainView: View {
                                 HStack(alignment: .center) {
                                     HStack(spacing: 16) {
                                         Text(formatDateForDisplay(selectedDate))
-                                            .font(.custom("InstrumentSerif-Regular", size: 36))
-                                            .foregroundColor(Color.black)
+                                            .font(.custom(DesignTypography.displayFont, size: DesignTypography.display))
+                                            .foregroundColor(DesignColors.primaryText)
                                             .frame(width: Self.maxDateTitleWidth, alignment: .leading)
 
                                         HStack(spacing: 3) {
@@ -257,11 +255,9 @@ struct MainView: View {
                                     // Recording toggle (now inline with header)
                                     HStack(spacing: 4) {
                                         Text("Record")
-                                            .font(
-                                                Font.custom("Nunito", size: 12)
-                                                    .weight(.medium)
-                                            )
-                                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                            .fontWeight(.medium)
+                                            .foregroundColor(DesignColors.primaryOrange)
 
                                         Toggle("Record", isOn: $appState.isRecording)
                                             .labelsHidden()
@@ -307,9 +303,7 @@ struct MainView: View {
                                 .frame(maxHeight: .infinity)
 
                             // Right column: activity detail card — spans full height
-                            ZStack(alignment: .topLeading) {
-                                Color.white.opacity(0.7)
-
+                            UnifiedCard(style: .standard, size: .medium, padding: DesignSpacing.md) {
                                 ActivityCard(
                                     activity: selectedActivity,
                                     maxHeight: geo.size.height,
@@ -342,20 +336,8 @@ struct MainView: View {
             }
             .padding(0)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white)
-                        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 0)
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white)
-                        .blendMode(.destinationOut)
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.white.opacity(0.22))
-                }
-                .compositingGroup()
-            )
-            .padding([.top, .trailing, .bottom], 15)
+            .mainContentContainer()
+            .padding([.top, .trailing, .bottom], DesignSpacing.lg)
         .onAppear {
             // Orchestrated entrance animations
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8, blendDuration: 0)) {
@@ -742,13 +724,13 @@ struct SidebarIconButton: View {
                         .resizable()
                         .interpolation(.high)
                         .renderingMode(.template)
-                        .foregroundColor(isSelected ? Color(hex: "F96E00") : Color(red: 0.6, green: 0.4, blue: 0.3))
+                        .foregroundColor(isSelected ? DesignColors.primaryOrange : DesignColors.secondaryText)
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 20, height: 20)
                 } else if let sys = icon.systemNameFallback {
                     Image(systemName: sys)
                         .font(.system(size: 18))
-                        .foregroundColor(isSelected ? Color(hex: "F96E00") : Color(red: 0.6, green: 0.4, blue: 0.3))
+                        .foregroundColor(isSelected ? DesignColors.primaryOrange : DesignColors.secondaryText)
                 }
 
                 // Feature badge indicator
@@ -758,8 +740,8 @@ struct SidebarIconButton: View {
                         HStack {
                             Spacer()
                             Circle()
-                                .fill(Color(red: 1, green: 0.54, blue: 0.17))
-                                .frame(width: 6, height: 6)
+                                .fill(DesignColors.primaryOrange)
+                                .frame(width: DesignSpacing.xs, height: DesignSpacing.xs)
                         }
                     }
                     .frame(width: 40, height: 40)
@@ -831,29 +813,26 @@ struct TabFilterBar: View {
         let isIdle: Bool
 
         var body: some View {
-            HStack(spacing: 10) {
+            HStack(spacing: DesignSpacing.xs) {
                 Circle()
                     .fill(Color(hex: category.colorHex))
-                    .frame(width: 10, height: 10)
+                    .frame(width: DesignSpacing.xs, height: DesignSpacing.xs)
 
                 Text(category.name)
-                    .font(
-                        Font.custom("Nunito", size: 13)
-                            .weight(.medium)
-                    )
-                    .foregroundColor(Color(red: 0.2, green: 0.2, blue: 0.2))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .fontWeight(.medium)
+                    .foregroundColor(DesignColors.primaryText)
                     .lineLimit(1)
                     .fixedSize()
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .frame(height: 26)
-            .background(.white.opacity(0.76))
-            .cornerRadius(6)
+            .padding(.horizontal, DesignSpacing.sm)
+            .padding(.vertical, DesignSpacing.xs)
+            .background(DesignColors.cardBackground.opacity(0.8))
+            .cornerRadius(DesignRadius.small)
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
+                RoundedRectangle(cornerRadius: DesignRadius.small)
                     .inset(by: 0.25)
-                    .stroke(Color(red: 0.88, green: 0.88, blue: 0.88), lineWidth: 0.5)
+                    .stroke(DesignColors.tertiaryText.opacity(0.3), lineWidth: 0.5)
             )
         }
     }
@@ -1056,22 +1035,18 @@ struct ActivityCard: View {
     
     var body: some View {
         if let activity = activity {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
                 // Header
                 HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                         Text(activity.title)
-                            .font(
-                                Font.custom("Nunito", size: 16)
-                                    .weight(.semibold)
-                            )
-                            .foregroundColor(.black)
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.headline))
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignColors.primaryText)
 
                         Text("\(timeFormatter.string(from: activity.startTime)) to \(timeFormatter.string(from: activity.endTime))")
-                            .font(
-                                Font.custom("Nunito", size: 12)
-                            )
-                            .foregroundColor(Color(red: 0.4, green: 0.4, blue: 0.4))
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                            .foregroundColor(DesignColors.secondaryText)
                     }
 
                     Spacer()
@@ -1084,19 +1059,18 @@ struct ActivityCard: View {
 
                 // Error message (if retry failed)
                 if isFailedCard(activity), let error = retryError {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
-                            .font(.system(size: 12))
+                    UnifiedCard(style: .minimal, padding: DesignSpacing.sm) {
+                        HStack(alignment: .top, spacing: DesignSpacing.xs) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(DesignColors.errorRed)
+                                .font(.system(size: 12))
 
-                        Text(error)
-                            .font(.custom("Nunito", size: 11))
-                            .foregroundColor(Color(red: 0.5, green: 0.5, blue: 0.5))
-                            .lineLimit(2)
+                            Text(error)
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                .foregroundColor(DesignColors.secondaryText)
+                                .lineLimit(2)
+                        }
                     }
-                    .padding(8)
-                    .background(Color.red.opacity(0.05))
-                    .cornerRadius(6)
                 }
 
                 // Video thumbnail placeholder
@@ -1190,39 +1164,31 @@ struct ActivityCard: View {
 
     @ViewBuilder
     private func summaryContent(for activity: TimelineActivity) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: DesignSpacing.sm) {
+            VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                 Text("SUMMARY")
-                    .font(
-                        Font.custom("Nunito", size: 12)
-                            .weight(.semibold)
-                    )
-                    .foregroundColor(Color(red: 0.55, green: 0.55, blue: 0.55))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .fontWeight(.semibold)
+                    .foregroundColor(DesignColors.tertiaryText)
 
                 renderMarkdownText(activity.summary)
-                    .font(
-                        Font.custom("Nunito", size: 12)
-                    )
-                    .foregroundColor(.black)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.primaryText)
                     .lineLimit(nil)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
 
             if !activity.detailedSummary.isEmpty && activity.detailedSummary != activity.summary {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                     Text("DETAILED SUMMARY")
-                        .font(
-                            Font.custom("Nunito", size: 12)
-                                .weight(.semibold)
-                        )
-                        .foregroundColor(Color(red: 0.55, green: 0.55, blue: 0.55))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.tertiaryText)
 
                     renderMarkdownText(activity.detailedSummary)
-                        .font(
-                            Font.custom("Nunito", size: 12)
-                        )
-                        .foregroundColor(.black)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.primaryText)
                         .lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
@@ -1279,37 +1245,23 @@ struct ActivityCard: View {
     @ViewBuilder
     private func retryButtonInline(for activity: TimelineActivity) -> some View {
         if isRetrying {
-            // Processing state - beige pill with spinner
-            HStack(alignment: .center, spacing: 4) {
-                ProgressView()
-                    .scaleEffect(0.7)
-                    .frame(width: 16, height: 16)
-
-                Text("Processing")
-                    .font(.custom("Nunito", size: 13))
-                    .foregroundColor(Color(red: 0.4, green: 0.4, blue: 0.4))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(red: 0.91, green: 0.85, blue: 0.8))
-            .cornerRadius(200)
-        } else {
-            // Retry button - orange pill
-            Button(action: { handleRetry(for: activity) }) {
-                HStack(alignment: .center, spacing: 4) {
-                    Text("Retry")
-                        .font(.custom("Nunito", size: 13).weight(.medium))
+            // Processing state - secondary button with spinner
+            Button(action: {}) {
+                HStack {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 13, weight: .medium))
+                    Text("Processing")
                 }
-                .foregroundColor(.white)
+                .font(.custom("Nunito", size: 14))
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(red: 1, green: 0.54, blue: 0.17))
-                .cornerRadius(200)
+                .padding(.vertical, 6)
             }
-            .buttonStyle(PlainButtonStyle())
+            .disabled(true)
+            .opacity(0.7)
+        } else {
+            // Retry button - primary button
+            DayflowButton(title: "Retry") {
+                handleRetry(for: activity)
+            }
         }
     }
 
@@ -1361,29 +1313,29 @@ struct MetricRow: View {
     let color: Color
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DesignSpacing.xs) {
             Text(label)
-                .font(.caption2)
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption2))
                 .fontWeight(.medium)
-                .foregroundColor(Color(red: 0.45, green: 0.45, blue: 0.45))
-            
+                .foregroundColor(DesignColors.tertiaryText)
+
             HStack {
                 Text("\(value)%")
-                    .font(.title3)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.headline))
                     .fontWeight(.semibold)
-                
+
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.gray.opacity(0.2))
-                            .frame(height: 8)
-                        
-                        RoundedRectangle(cornerRadius: 4)
+                        RoundedRectangle(cornerRadius: DesignRadius.xs)
+                            .fill(DesignColors.tertiaryText.opacity(0.2))
+                            .frame(height: DesignSpacing.xs)
+
+                        RoundedRectangle(cornerRadius: DesignRadius.xs)
                             .fill(color)
-                            .frame(width: geometry.size.width * CGFloat(value) / 100, height: 8)
+                            .frame(width: geometry.size.width * CGFloat(value) / 100, height: DesignSpacing.xs)
                     }
                 }
-                .frame(height: 8)
+                .frame(height: DesignSpacing.xs)
             }
         }
     }

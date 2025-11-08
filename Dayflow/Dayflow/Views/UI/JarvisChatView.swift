@@ -14,70 +14,67 @@ struct JarvisChatView: View {
     @FocusState private var isInputFocused: Bool
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            headerSection
-            
-            Divider()
-                .padding(.horizontal, 20)
-            
-            // Main Content
-            GeometryReader { geometry in
-                HStack(spacing: 0) {
-                    // Left side: Chat conversation
-                    chatConversationSection
-                        .frame(width: geometry.size.width * 0.65)
-                    
-                    Divider()
-                    
-                    // Right side: Contextual info and suggested actions
-                    contextualSidebar
-                        .frame(width: geometry.size.width * 0.35)
+        FlowingGradientBackground()
+            .overlay(
+                VStack(spacing: 0) {
+                    // Header
+                    headerSection
+
+                    // Main Content
+                    GeometryReader { geometry in
+                        HStack(spacing: 0) {
+                            // Left side: Chat conversation
+                            chatConversationSection
+                                .frame(width: geometry.size.width * 0.65)
+
+                            GlassmorphismContainer(style: .card) {
+                                Rectangle()
+                                    .fill(DesignColors.glassBackground)
+                                    .frame(width: 1)
+                            }
+                            .frame(width: geometry.size.width * 0.35)
+
+                            // Right side: Contextual info and suggested actions
+                            contextualSidebar
+                                .frame(width: geometry.size.width * 0.35)
+                        }
+                    }
                 }
-            }
-        }
-        .background(Color.white)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(DesignSpacing.lg)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - Header Section
     
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "brain.head.profile")
-                    .font(.system(size: 24))
-                    .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
-                
-                Text("Jarvis Chat")
-                    .font(.custom("InstrumentSerif-Regular", size: 28))
-                    .foregroundColor(.black)
-                
-                Spacer()
-                
-                // New conversation button
-                Button(action: startNewConversation) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus.bubble")
-                            .font(.system(size: 14))
-                        Text("New Chat")
-                            .font(.custom("Nunito", size: 13))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(red: 0.25, green: 0.17, blue: 0))
-                    .cornerRadius(8)
+        GlassmorphismContainer(style: .main) {
+            VStack(alignment: .leading, spacing: DesignSpacing.sm) {
+                HStack {
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 24))
+                        .foregroundColor(DesignColors.primaryOrange)
+
+                    Text("Jarvis Chat")
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.title2))
+                        .foregroundColor(DesignColors.primaryText)
+
+                    Spacer()
+
+                    // New conversation button
+                    UnifiedButton.secondary(
+                        "New Chat",
+                        size: .small,
+                        action: startNewConversation
+                    )
                 }
-                .buttonStyle(PlainButtonStyle())
+
+                Text("AI assistant for productivity insights and task management")
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.secondaryText)
             }
-            
-            Text("AI assistant for productivity insights and task management")
-                .font(.custom("Nunito", size: 14))
-                .foregroundColor(.black.opacity(0.6))
+            .padding(DesignSpacing.lg)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
     }
     
     // MARK: - Chat Conversation Section
@@ -129,113 +126,102 @@ struct JarvisChatView: View {
     }
     
     private var emptyConversationView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DesignSpacing.xl) {
             Spacer()
-            
+
             Image(systemName: "brain.head.profile")
                 .font(.system(size: 60))
-                .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0).opacity(0.3))
-            
-            VStack(spacing: 8) {
+                .foregroundColor(DesignColors.primaryOrange.opacity(0.3))
+
+            VStack(spacing: DesignSpacing.md) {
                 Text("Start a conversation")
-                    .font(.custom("InstrumentSerif-Regular", size: 22))
-                    .foregroundColor(.black)
-                
+                    .font(.custom(DesignTypography.headingFont, size: DesignTypography.title3))
+                    .foregroundColor(DesignColors.primaryText)
+
                 Text("Ask about your productivity, tasks, or get insights")
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(.black.opacity(0.6))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.secondaryText)
                     .multilineTextAlignment(.center)
             }
-            
+
             // Quick start suggestions
-            VStack(spacing: 8) {
+            VStack(spacing: DesignSpacing.sm) {
                 quickStartButton("What should I focus on today?")
                 quickStartButton("Show my productivity trends")
                 quickStartButton("Help me plan my week")
             }
-            .padding(.top, 12)
-            
+            .padding(.top, DesignSpacing.md)
+
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 40)
+        .padding(.horizontal, DesignSpacing.xl)
     }
     
     private func quickStartButton(_ text: String) -> some View {
-        Button(action: {
-            messageInput = text
-            sendMessage()
-        }) {
-            HStack {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 12))
-                Text(text)
-                    .font(.custom("Nunito", size: 13))
-                Spacer()
+        UnifiedButton.ghost(
+            text,
+            size: .small,
+            action: {
+                messageInput = text
+                sendMessage()
             }
-            .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.05))
-            .cornerRadius(8)
-        }
-        .buttonStyle(PlainButtonStyle())
+        )
     }
     
     private var messageInputSection: some View {
-        HStack(spacing: 12) {
-            TextField("Ask Jarvis anything...", text: $messageInput)
-                .textFieldStyle(PlainTextFieldStyle())
-                .font(.custom("Nunito", size: 14))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.05))
-                .cornerRadius(8)
-                .focused($isInputFocused)
-                .onSubmit {
-                    sendMessage()
-                }
-            
+        HStack(spacing: DesignSpacing.md) {
+            UnifiedTextField(
+                "Ask Jarvis anything...",
+                text: $messageInput,
+                style: .standard
+            )
+            .focused($isInputFocused)
+            .onSubmit {
+                sendMessage()
+            }
+
             Button(action: sendMessage) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 28))
-                    .foregroundColor(messageInput.isEmpty ? .gray : Color(red: 0.25, green: 0.17, blue: 0))
+                    .foregroundColor(messageInput.isEmpty ? DesignColors.secondaryText : DesignColors.primaryOrange)
             }
             .buttonStyle(PlainButtonStyle())
             .disabled(messageInput.isEmpty || jarvisChat.isProcessing)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(DesignSpacing.md)
+        .padding(.vertical, DesignSpacing.md)
     }
     
     // MARK: - Contextual Sidebar
     
     private var contextualSidebar: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Suggested Actions
-                if !jarvisChat.suggestedActions.isEmpty {
-                    suggestedActionsSection
+        GlassmorphismContainer(style: .card) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignSpacing.lg) {
+                    // Suggested Actions
+                    if !jarvisChat.suggestedActions.isEmpty {
+                        suggestedActionsSection
+                    }
+
+                    // Contextual Information
+                    if !jarvisChat.contextualInfo.isEmpty {
+                        contextualInfoSection
+                    }
                 }
-                
-                // Contextual Information
-                if !jarvisChat.contextualInfo.isEmpty {
-                    contextualInfoSection
-                }
+                .padding(DesignSpacing.md)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .background(Color.black.opacity(0.02))
+        .padding(DesignSpacing.md)
     }
     
     private var suggestedActionsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSpacing.md) {
             Text("Suggested Actions")
-                .font(.custom("Nunito", size: 14))
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                 .fontWeight(.semibold)
-                .foregroundColor(.black.opacity(0.8))
-            
+                .foregroundColor(DesignColors.primaryText)
+
             ForEach(jarvisChat.suggestedActions) { action in
                 SuggestedActionCard(action: action) {
                     executeSuggestedAction(action)
@@ -245,12 +231,12 @@ struct JarvisChatView: View {
     }
     
     private var contextualInfoSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: DesignSpacing.md) {
             Text("Context")
-                .font(.custom("Nunito", size: 14))
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                 .fontWeight(.semibold)
-                .foregroundColor(.black.opacity(0.8))
-            
+                .foregroundColor(DesignColors.primaryText)
+
             ForEach(jarvisChat.contextualInfo) { info in
                 ContextualInfoCard(info: info)
             }
@@ -299,63 +285,70 @@ struct JarvisChatView: View {
 
 struct MessageBubble: View {
     let message: ChatMessage
-    
+
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             if message.role == .user {
                 Spacer(minLength: 60)
             }
-            
-            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+
+            VStack(alignment: message.role == .user ? .trailing : .leading, spacing: DesignSpacing.xs) {
                 // Message content
                 Text(message.content)
-                    .font(.custom("Nunito", size: 14))
-                    .foregroundColor(message.role == .user ? .white : .black.opacity(0.9))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(message.role == .user ? .white : DesignColors.primaryText)
+                    .padding(.horizontal, DesignSpacing.md)
+                    .padding(.vertical, DesignSpacing.sm)
                     .background(
                         message.role == .user
-                            ? Color(red: 0.25, green: 0.17, blue: 0)
-                            : Color.black.opacity(0.08)
+                            ? LinearGradient(
+                                gradient: Gradient(colors: [
+                                    DesignColors.primaryOrange,
+                                    DesignColors.primaryOrange.opacity(0.8)
+                                ]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                            : DesignColors.glassBackground
                     )
-                    .cornerRadius(12)
-                
+                    .cornerRadius(DesignRadius.medium)
+
                 // Tool calls and citations
                 if !message.toolCalls.isEmpty {
                     toolCallsView
                 }
-                
+
                 // Timestamp
                 Text(formatTimestamp(message.timestamp))
-                    .font(.custom("Nunito", size: 11))
-                    .foregroundColor(.black.opacity(0.4))
-                    .padding(.horizontal, 4)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(DesignColors.tertiaryText)
+                    .padding(.horizontal, DesignSpacing.xs)
             }
-            
+
             if message.role == .assistant {
                 Spacer(minLength: 60)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, DesignSpacing.md)
     }
     
     private var toolCallsView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: DesignSpacing.xs) {
             ForEach(message.toolCalls.indices, id: \.self) { index in
-                HStack(spacing: 6) {
+                HStack(spacing: DesignSpacing.xs) {
                     Image(systemName: "wrench.and.screwdriver")
-                        .font(.system(size: 10))
+                        .font(.system(size: 10, weight: .medium))
                     Text(message.toolCalls[index].name)
-                        .font(.custom("Nunito", size: 11))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                 }
-                .foregroundColor(.black.opacity(0.5))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.05))
-                .cornerRadius(6)
+                .foregroundColor(DesignColors.secondaryText)
+                .padding(.horizontal, DesignSpacing.sm)
+                .padding(.vertical, DesignSpacing.xs)
+                .background(DesignColors.glassBackground.opacity(0.5))
+                .cornerRadius(DesignRadius.small)
             }
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, DesignSpacing.xs)
     }
     
     private func formatTimestamp(_ date: Date) -> String {
@@ -370,38 +363,33 @@ struct MessageBubble: View {
 struct SuggestedActionCard: View {
     let action: ChatAction
     let onTap: () -> Void
-    
+
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
+        UnifiedCard(style: .interactive, size: .medium) {
+            VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                 HStack {
                     Image(systemName: getIconForTool(action.toolName))
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(red: 0.25, green: 0.17, blue: 0))
-                    
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(DesignColors.primaryOrange)
+
                     Text(action.toolName)
-                        .font(.custom("Nunito", size: 12))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                         .fontWeight(.medium)
-                        .foregroundColor(.black.opacity(0.8))
-                    
+                        .foregroundColor(DesignColors.primaryText)
+
                     Spacer()
                 }
-                
+
                 Text(action.description)
-                    .font(.custom("Nunito", size: 11))
-                    .foregroundColor(.black.opacity(0.6))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(DesignColors.secondaryText)
                     .multilineTextAlignment(.leading)
+                    .lineLimit(3)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Color.white)
-            .cornerRadius(8)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.black.opacity(0.1), lineWidth: 1)
-            )
         }
-        .buttonStyle(PlainButtonStyle())
+        .onTapGesture {
+            onTap()
+        }
     }
     
     private func getIconForTool(_ toolName: String) -> String {
@@ -424,41 +412,35 @@ struct SuggestedActionCard: View {
 
 struct ContextualInfoCard: View {
     let info: ContextualInfo
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: getIconForType(info.type))
-                    .font(.system(size: 12))
-                    .foregroundColor(getColorForType(info.type))
-                
-                Text(info.title)
-                    .font(.custom("Nunito", size: 12))
-                    .fontWeight(.medium)
-                    .foregroundColor(.black.opacity(0.8))
-                
-                Spacer()
-                
-                // Relevance indicator
-                Circle()
-                    .fill(getRelevanceColor(info.relevance))
-                    .frame(width: 6, height: 6)
+        UnifiedCard(style: .minimal, size: .medium) {
+            VStack(alignment: .leading, spacing: DesignSpacing.xs) {
+                HStack {
+                    Image(systemName: getIconForType(info.type))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(getColorForType(info.type))
+
+                    Text(info.title)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .fontWeight(.medium)
+                        .foregroundColor(DesignColors.primaryText)
+
+                    Spacer()
+
+                    // Relevance indicator
+                    Circle()
+                        .fill(getRelevanceColor(info.relevance))
+                        .frame(width: 6, height: 6)
+                }
+
+                Text(info.content)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(DesignColors.secondaryText)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(3)
             }
-            
-            Text(info.content)
-                .font(.custom("Nunito", size: 11))
-                .foregroundColor(.black.opacity(0.6))
-                .multilineTextAlignment(.leading)
-                .lineLimit(3)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.white)
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.black.opacity(0.1), lineWidth: 1)
-        )
     }
     
     private func getIconForType(_ type: ContextualInfo.ContextType) -> String {
@@ -483,21 +465,21 @@ struct ContextualInfoCard: View {
         case .recentFocus:
             return Color.purple
         case .upcomingTasks:
-            return Color.orange
+            return DesignColors.primaryOrange
         case .timeContext:
             return Color.green
         case .productivity:
-            return Color(red: 0.25, green: 0.17, blue: 0)
+            return DesignColors.primaryOrange
         }
     }
     
     private func getRelevanceColor(_ relevance: Double) -> Color {
         if relevance > 0.75 {
-            return Color.green
+            return DesignColors.successGreen
         } else if relevance > 0.5 {
-            return Color.orange
+            return DesignColors.primaryOrange
         } else {
-            return Color.gray
+            return DesignColors.secondaryText
         }
     }
 }

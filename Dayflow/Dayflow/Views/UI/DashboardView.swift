@@ -54,118 +54,108 @@ struct DashboardView: View {
     )
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Header - matching MainView style
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("Dashboard")
-                        .font(.custom("InstrumentSerif-Regular", size: 36))
-                        .foregroundColor(.black)
+        FlowingGradientBackground()
+            .overlay(
+                VStack(spacing: 0) {
+                    // Header with glassmorphism
+                    GlassmorphismContainer(style: .main) {
+                        VStack(alignment: .leading, spacing: DesignSpacing.lg) {
+                            HStack {
+                                Text("Dashboard")
+                                    .font(.custom(DesignTypography.headingFont, size: DesignTypography.title1))
+                                    .foregroundColor(DesignColors.primaryText)
 
-                    Spacer()
+                                Spacer()
 
-                    HStack(spacing: 12) {
-                        // Customization button
-                        Button(action: { showingCustomization = true }) {
-                            Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.black)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .help("Customize Dashboard")
+                                HStack(spacing: DesignSpacing.md) {
+                                    // Customization button
+                                    Button(action: { showingCustomization = true }) {
+                                        Image(systemName: "slider.horizontal.3")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(DesignColors.primaryOrange)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .help("Customize Dashboard")
 
-                        // Refresh button
-                        Button(action: refreshData) {
-                            Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(.gray)
-                                .rotationEffect(.degrees(isRefreshing ? 360 : 0))
-                                .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .help("Refresh Data")
-                    }
-                }
-
-                // Search bar - matching MainView input style
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.gray)
-                        .font(.system(size: 14))
-
-                    TextField("Ask about your productivity...", text: $searchText)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .font(.custom("Nunito", size: 14))
-                        .onSubmit {
-                            handleSearch()
-                        }
-
-                    if !searchText.isEmpty {
-                        Button(action: { searchText = "" }) {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.gray)
-                                .font(.system(size: 14))
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.white)
-                .cornerRadius(10)
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 12)
-
-            // Tab selector
-            DashboardTabSelector(selectedTab: $selectedTab)
-                .padding(.horizontal, 12)
-                .padding(.top, 4)
-
-            // Content based on selected tab with smooth transitions
-            ZStack {
-                Group {
-                    if selectedTab == .overview {
-                        DashboardOverviewView(
-                            engine: dashboardEngine,
-                            configuration: $configuration,
-                            onInsightTap: { insight in
-                                showingInsightDetail = insight
+                                    // Refresh button
+                                    Button(action: refreshData) {
+                                        Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(DesignColors.secondaryText)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    .help("Refresh Data")
+                                    .rotationEffect(.degrees(isRefreshing ? 360 : 0))
+                                    .animation(isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: isRefreshing)
+                                }
                             }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    } else if selectedTab == .charts {
-                        DashboardChartsView(
-                            engine: dashboardEngine,
-                            configuration: configuration
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    } else if selectedTab == .insights {
-                        DashboardInsightsView(
-                            engine: dashboardEngine,
-                            onInsightTap: { insight in
-                                showingInsightDetail = insight
+
+                            // Search bar
+                            UnifiedTextField(
+                                "Ask about your productivity...",
+                                text: $searchText,
+                                style: .search
+                            )
+                            .onSubmit {
+                                handleSearch()
                             }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
-                    } else if selectedTab == .trends {
-                        DashboardTrendsView(
-                            engine: dashboardEngine,
-                            configuration: configuration
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        }
+                        .padding(DesignSpacing.lg)
                     }
+                    .padding(.horizontal, DesignSpacing.lg)
+                    .padding(.top, DesignSpacing.lg)
+
+                    // Tab selector
+                    GlassmorphismContainer(style: .card) {
+                        DashboardTabSelector(selectedTab: $selectedTab)
+                    }
+                    .padding(.horizontal, DesignSpacing.lg)
+                    .padding(.top, DesignSpacing.md)
+
+                    // Content based on selected tab with smooth transitions
+                    ZStack {
+                        Group {
+                            if selectedTab == .overview {
+                                DashboardOverviewView(
+                                    engine: dashboardEngine,
+                                    configuration: $configuration,
+                                    onInsightTap: { insight in
+                                        showingInsightDetail = insight
+                                    }
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            } else if selectedTab == .charts {
+                                DashboardChartsView(
+                                    engine: dashboardEngine,
+                                    configuration: configuration
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            } else if selectedTab == .insights {
+                                DashboardInsightsView(
+                                    engine: dashboardEngine,
+                                    onInsightTap: { insight in
+                                        showingInsightDetail = insight
+                                    }
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            } else if selectedTab == .trends {
+                                DashboardTrendsView(
+                                    engine: dashboardEngine,
+                                    configuration: configuration
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            }
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.3), value: selectedTab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            }
-            .animation(.easeInOut(duration: 0.3), value: selectedTab)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(DesignSpacing.lg)
+            )
         .onAppear {
             dashboardEngine.startAutoRefresh()
             initializeAvailableWidgets()
@@ -596,32 +586,34 @@ struct MetricCard: View {
     let trend: TrendData.TrendDirection
 
     var body: some View {
-        UnifiedCard(padding: 16, cornerRadius: 12) {
-            VStack(spacing: 8) {
-                HStack {
-                    Image(systemName: icon)
-                        .font(.system(size: 16))
-                        .foregroundColor(color)
+        VStack(spacing: 8) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.system(size: 16))
+                    .foregroundColor(color)
 
-                    Spacer()
+                Spacer()
 
-                    HStack(spacing: 2) {
-                        Image(systemName: trend.arrow)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(trend.color)
-                    }
+                HStack(spacing: 2) {
+                    Image(systemName: trend.arrow)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(trend.color)
                 }
-
-                Text(value)
-                    .font(.custom("Nunito", size: 20))
-                    .fontWeight(.bold)
-                    .foregroundColor(.black)
-
-                Text(title)
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(.gray)
             }
+
+            Text(value)
+                .font(.custom("Nunito", size: 20))
+                .fontWeight(.bold)
+                .foregroundColor(.black)
+
+            Text(title)
+                .font(.custom("Nunito", size: 12))
+                .foregroundColor(.gray)
         }
+        .padding(16)
+        .background(Color.white)
+        .cornerRadius(12)
+        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 }
 

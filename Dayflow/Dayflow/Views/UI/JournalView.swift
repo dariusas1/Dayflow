@@ -29,62 +29,48 @@ struct JournalView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Background matching MainView
-            Image("MainUIBackground")
-                .resizable()
-                .scaledToFill()
-                .ignoresSafeArea()
-            
-            // Main white panel container
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    // Header Section - matching MainView style
-                    headerSection
+        FlowingGradientBackground()
+            .overlay(
+                ScrollView {
+                    VStack(alignment: .leading, spacing: DesignSpacing.xl) {
+                        // Header Section
+                        headerSection
 
-                    // Auto-generation info banner
-                    autoGenerationInfoBanner
+                        // Auto-generation info banner
+                        autoGenerationInfoBanner
 
-                    // Date Selector
-                    dateSelectorSection
+                        // Date Selector
+                        dateSelectorSection
 
-                    // Loading State
-                    if generator.isGenerating {
-                        loadingSection
+                        // Loading State
+                        if generator.isGenerating {
+                            loadingSection
+                        }
+
+                        // Error State
+                        if let error = generator.generationError {
+                            errorSection(error)
+                        }
+
+                        // Journal Content
+                        if let journal = generator.generatedJournal {
+                            journalContentSection(journal)
+                        }
+
+                        // Empty State
+                        if !generator.isGenerating && generator.generatedJournal == nil {
+                            emptyStateSection
+                        }
+
+                        // History Section
+                        if !journalHistory.isEmpty {
+                            journalHistorySection
+                        }
                     }
-
-                    // Error State
-                    if let error = generator.generationError {
-                        errorSection(error)
-                    }
-
-                    // Journal Content
-                    if let journal = generator.generatedJournal {
-                        journalContentSection(journal)
-                    }
-
-                    // Empty State
-                    if !generator.isGenerating && generator.generatedJournal == nil {
-                        emptyStateSection
-                    }
-
-                    // History Section
-                    if !journalHistory.isEmpty {
-                        journalHistorySection
-                    }
+                    .padding(DesignSpacing.xl)
                 }
-                .padding(30)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white)
-                        .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 0)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             )
-            .padding([.top, .trailing, .bottom], 15)
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showingTemplateSelector) {
                 JournalTemplateView(
@@ -109,44 +95,47 @@ struct JournalView: View {
     // MARK: - Header Section
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Daily Journal")
-                    .font(.custom("InstrumentSerif-Regular", size: 36))
-                    .foregroundColor(.black)
+        GlassmorphismContainer(style: .main) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                HStack {
+                    Text("Daily Journal")
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.title1))
+                        .foregroundColor(DesignColors.primaryText)
 
-                Spacer()
+                    Spacer()
 
-                // Toolbar actions integrated into header
-                HStack(spacing: 12) {
-                    Button(action: { showingPreferences = true }) {
-                        Image(systemName: "slider.horizontal.3")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .help("Preferences")
-
-                    Menu {
-                        Button("Export", systemImage: "square.and.arrow.up") {
-                            showingExportOptions = true
+                    // Toolbar actions integrated into header
+                    HStack(spacing: DesignSpacing.md) {
+                        Button(action: { showingPreferences = true }) {
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(DesignColors.primaryOrange)
                         }
-                        Button("History", systemImage: "clock") {
-                            // Show history
+                        .buttonStyle(PlainButtonStyle())
+                        .help("Preferences")
+
+                        Menu {
+                            Button("Export", systemImage: "square.and.arrow.up") {
+                                showingExportOptions = true
+                            }
+                            Button("History", systemImage: "clock") {
+                                // Show history
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(DesignColors.primaryOrange)
                         }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .buttonStyle(PlainButtonStyle())
                 }
-            }
 
-            Text("Your daily activities transformed into meaningful reflections")
-                .font(.custom("Nunito", size: 16))
-                .foregroundColor(.black.opacity(0.7))
-                .fontWeight(.medium)
+                Text("Your daily activities transformed into meaningful reflections")
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.secondaryText)
+                    .fontWeight(.medium)
+            }
+            .padding(DesignSpacing.lg)
         }
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.1), value: animateContent)
@@ -155,41 +144,28 @@ struct JournalView: View {
     // MARK: - Auto-Generation Info Banner
     
     private var autoGenerationInfoBanner: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "moon.stars.fill")
-                .font(.system(size: 20))
-                .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Automatic Journal Generation")
-                    .font(.custom("Nunito", size: 14))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
-                
-                Text("Your journal is automatically created each day at midnight based on your activities")
-                    .font(.custom("Nunito", size: 12))
-                    .foregroundColor(.black.opacity(0.7))
-                    .lineSpacing(2)
+        UnifiedCard(style: .minimal, size: .medium) {
+            HStack(spacing: DesignSpacing.md) {
+                Image(systemName: "moon.stars.fill")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundColor(DesignColors.primaryOrange)
+
+                VStack(alignment: .leading, spacing: DesignSpacing.xs) {
+                    Text("Automatic Journal Generation")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.primaryText)
+
+                    Text("Your journal is automatically created each day at midnight based on your activities")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.secondaryText)
+                        .lineSpacing(2)
+                }
+
+                Spacer()
             }
-            
-            Spacer()
+            .padding(DesignSpacing.lg)
         }
-        .padding(20)
-        .background(
-            ZStack {
-                Color.white
-                LinearGradient(
-                    stops: [
-                        Gradient.Stop(color: Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.08), location: 0.00),
-                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        )
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.15), value: animateContent)
     }
@@ -197,50 +173,47 @@ struct JournalView: View {
     // MARK: - Date Selector Section
 
     private var dateSelectorSection: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Button(action: { changeDate(by: -1) }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(spacing: DesignSpacing.md) {
+                HStack {
+                    Button(action: { changeDate(by: -1) }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(DesignColors.primaryOrange)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+
+                    Spacer()
+
+                    VStack(spacing: DesignSpacing.xs) {
+                        Text(selectedDate.formatted(date: .abbreviated, time: .omitted))
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                            .fontWeight(.semibold)
+                            .foregroundColor(DesignColors.primaryText)
+
+                        Text(selectedDate.formatted(.dateTime.weekday(.wide)))
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                            .foregroundColor(DesignColors.secondaryText)
+                    }
+
+                    Spacer()
+
+                    Button(action: { changeDate(by: 1) }) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(DesignColors.primaryOrange)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
 
-                Spacer()
-
-                VStack(spacing: 4) {
-                    Text(selectedDate.formatted(date: .abbreviated, time: .omitted))
-                        .font(.custom("Nunito", size: 16))
-                        .fontWeight(.semibold)
-                        .foregroundColor(.black)
-
-                    Text(selectedDate.formatted(.dateTime.weekday(.wide)))
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.6))
+                // Quick date buttons
+                HStack(spacing: DesignSpacing.md) {
+                    quickDateButton("Today", isToday: true)
+                    quickDateButton("Yesterday", isToday: false)
+                    quickDateButton("This Week", isToday: false)
                 }
-
-                Spacer()
-
-                Button(action: { changeDate(by: 1) }) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            .padding(.horizontal)
-
-            // Quick date buttons
-            HStack(spacing: 12) {
-                quickDateButton("Today", isToday: true)
-                quickDateButton("Yesterday", isToday: false)
-                quickDateButton("This Week", isToday: false)
             }
         }
-        .padding()
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.2), value: animateContent)
     }
@@ -256,24 +229,24 @@ struct JournalView: View {
             }
         }) {
             Text(title)
-                .font(.custom("Nunito", size: 12))
+                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                 .fontWeight(.medium)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.horizontal, DesignSpacing.md)
+                .padding(.vertical, DesignSpacing.sm)
                 .background(
                     ZStack {
-                        Color.white.opacity(0.69)
+                        DesignColors.glassBackground.opacity(0.7)
                         LinearGradient(
                             stops: [
-                                Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
-                                Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
+                                Gradient.Stop(color: DesignColors.gradientStart, location: 0.00),
+                                Gradient.Stop(color: DesignColors.gradientEnd.opacity(0), location: 1.00),
                             ],
                             startPoint: UnitPoint(x: 1.15, y: 3.61),
                             endPoint: UnitPoint(x: 0.02, y: 0)
                         )
                     }
                 )
-                .foregroundColor(.black)
+                .foregroundColor(DesignColors.primaryText)
                 .cornerRadius(16)
         }
         .buttonStyle(PlainButtonStyle())
@@ -283,70 +256,55 @@ struct JournalView: View {
     // MARK: - Loading Section
 
     private var loadingSection: some View {
-        VStack(spacing: 20) {
-            // Enhanced progress indicator
-                        ZStack {
-                Circle()
-                    .stroke(Color(red: 1, green: 0.42, blue: 0.02).opacity(0.2), lineWidth: 4)
-                    .frame(width: 60, height: 60)
-                
-                Circle()
-                    .trim(from: 0, to: generator.currentProgress)
-                    .stroke(Color(red: 1, green: 0.42, blue: 0.02), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear, value: generator.currentProgress)
-                
-                    Image(systemName: "sparkles")
-                    .font(.system(size: 24))
-                    .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
-            }
-
-            VStack(spacing: 8) {
-                Text("Generating Your Journal")
-                    .font(.custom("Nunito", size: 18))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
-
-            Text(generator.progressMessage)
-                .font(.custom("Nunito", size: 14))
-                .foregroundColor(.black.opacity(0.6))
-                .multilineTextAlignment(.center)
-            }
-
-            // Animated loading dots
-            HStack(spacing: 8) {
-                ForEach(0..<3) { index in
+        UnifiedCard(style: .elevated, size: .large) {
+            VStack(spacing: DesignSpacing.lg) {
+                // Enhanced progress indicator
+                ZStack {
                     Circle()
-                        .fill(Color(red: 1, green: 0.42, blue: 0.02))
-                        .frame(width: 8, height: 8)
-                        .scaleEffect(loadingScale(for: index))
-                        .animation(
-                            .easeInOut(duration: 0.6)
-                            .repeatForever()
-                            .delay(Double(index) * 0.2),
-                            value: generator.isGenerating
-                        )
+                        .stroke(DesignColors.primaryOrange.opacity(0.2), lineWidth: 4)
+                        .frame(width: 60, height: 60)
+
+                    Circle()
+                        .trim(from: 0, to: generator.currentProgress)
+                        .stroke(DesignColors.primaryOrange, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .frame(width: 60, height: 60)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear, value: generator.currentProgress)
+
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 24))
+                        .foregroundColor(DesignColors.primaryOrange)
+                }
+
+                VStack(spacing: DesignSpacing.sm) {
+                    Text("Generating Your Journal")
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.title3))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.primaryText)
+
+                    Text(generator.progressMessage)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
+
+                // Animated loading dots
+                HStack(spacing: DesignSpacing.sm) {
+                    ForEach(0..<3) { index in
+                        Circle()
+                            .fill(DesignColors.primaryOrange)
+                            .frame(width: 8, height: 8)
+                            .scaleEffect(loadingScale(for: index))
+                            .animation(
+                                .easeInOut(duration: 0.6)
+                                .repeatForever()
+                                .delay(Double(index) * 0.2),
+                                value: generator.isGenerating
+                            )
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity)
-        .padding(40)
-        .background(
-            ZStack {
-                Color.white
-                LinearGradient(
-                    stops: [
-                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95), location: 0.00),
-                        Gradient.Stop(color: Color.white, location: 1.00),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        )
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
     private func loadingScale(for index: Int) -> CGFloat {
@@ -356,43 +314,37 @@ struct JournalView: View {
     // MARK: - Error Section
 
     private func errorSection(_ error: Error) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.title)
-                .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(spacing: DesignSpacing.md) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.title)
+                    .foregroundColor(DesignColors.errorRed)
 
-            Text("Generation Failed")
-                .font(.custom("Nunito", size: 18))
-                .fontWeight(.semibold)
-                .foregroundColor(.black)
+                Text("Generation Failed")
+                    .font(.custom(DesignTypography.headingFont, size: DesignTypography.title3))
+                    .fontWeight(.semibold)
+                    .foregroundColor(DesignColors.primaryText)
 
-            Text(error.localizedDescription)
-                .font(.custom("Nunito", size: 14))
-                .foregroundColor(.black.opacity(0.6))
-                .multilineTextAlignment(.center)
+                Text(error.localizedDescription)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                    .foregroundColor(DesignColors.secondaryText)
+                    .multilineTextAlignment(.center)
 
-            Button("Try Again") {
-                Task {
-                    await generator.generateJournalWithHighlights(
-                        for: selectedDate,
-                        template: selectedTemplate,
-                        preferences: journalPreferences
-                    )
-                }
+                UnifiedButton.primary(
+                    "Try Again",
+                    size: .medium,
+                    action: {
+                        Task {
+                            await generator.generateJournalWithHighlights(
+                                for: selectedDate,
+                                template: selectedTemplate,
+                                preferences: journalPreferences
+                            )
+                        }
+                    }
+                )
             }
-            .font(.custom("Nunito", size: 14))
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color(red: 1, green: 0.42, blue: 0.02))
-            .cornerRadius(8)
-            .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 1)
         }
-        .padding(24)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     // MARK: - Journal Content Section
@@ -422,18 +374,18 @@ struct JournalView: View {
 
     private func journalHeader(_ journal: DailyJournal) -> some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: DesignSpacing.sm) {
                 Text(journal.date.formatted(date: .long, time: .omitted))
-                    .font(.custom("InstrumentSerif-Regular", size: 22))
-                    .foregroundColor(.black)
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.title1))
+                    .foregroundColor(DesignColors.primaryText)
 
-                HStack(spacing: 8) {
+                HStack(spacing: DesignSpacing.sm) {
                     Image(systemName: journal.template.icon)
                         .font(.system(size: 12))
-                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                        .foregroundColor(DesignColors.primaryOrange)
                     Text(journal.template.displayName)
-                        .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.black.opacity(0.6))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.secondaryText)
                         .fontWeight(.medium)
                 }
             }
@@ -442,90 +394,93 @@ struct JournalView: View {
 
             // Edit button
             Button(action: { isEditingJournal.toggle() }) {
-                HStack(spacing: 6) {
+                HStack(spacing: DesignSpacing.xs) {
                     Image(systemName: isEditingJournal ? "checkmark.circle.fill" : "pencil.circle.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 16))
                     Text(isEditingJournal ? "Done" : "Edit")
-                        .font(.custom("Nunito", size: 13))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                         .fontWeight(.semibold)
                 }
-                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1))
-                .cornerRadius(8)
+                .foregroundColor(DesignColors.primaryOrange)
+                .padding(.horizontal, DesignSpacing.sm)
+                .padding(.vertical, DesignSpacing.xs)
+                .background(DesignColors.primaryOrange.opacity(0.1))
+                .cornerRadius(DesignRadius.small)
             }
             .buttonStyle(PlainButtonStyle())
         }
-        .padding(20)
+        .padding(DesignSpacing.lg)
         .background(
             ZStack {
-                Color.white
+                DesignColors.cardBackground
                 LinearGradient(
                     stops: [
-                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34).opacity(0.05), location: 0.00),
-                        Gradient.Stop(color: Color.white, location: 1.00),
+                        Gradient.Stop(color: DesignColors.gradientStart.opacity(0.05), location: 0.00),
+                        Gradient.Stop(color: DesignColors.cardBackground, location: 1.00),
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             }
         )
-        .cornerRadius(12)
+        .cornerRadius(DesignRadius.medium)
         .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 2)
     }
 
     private func journalContentView(_ journal: DailyJournal) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if isEditingJournal {
-                TextEditor(text: .constant(journal.content))
-                    .font(.custom("Nunito", size: 15))
-                    .padding()
-                    .background(Color.white)
-                    .cornerRadius(8)
-            } else {
-                Text(journal.content)
-                    .font(.custom("Nunito", size: 15))
-                    .foregroundColor(.black.opacity(0.85))
-                    .lineSpacing(6)
-                    .textSelection(.enabled)
+        UnifiedCard(style: .minimal, size: .large) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                if isEditingJournal {
+                    TextEditor(text: .constant(journal.content))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .padding(DesignSpacing.md)
+                        .background(DesignColors.cardBackground)
+                        .cornerRadius(DesignRadius.small)
+                } else {
+                    Text(journal.content)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.secondaryText)
+                        .lineSpacing(6)
+                        .textSelection(.enabled)
+                }
             }
         }
-        .padding(24)
+        .padding(DesignSpacing.lg)
         .background(
             ZStack {
-                Color.white
+                DesignColors.cardBackground
                 LinearGradient(
                     stops: [
-                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0.3), location: 0.00),
-                        Gradient.Stop(color: Color.white, location: 1.00),
+                        Gradient.Stop(color: DesignColors.gradientEnd.opacity(0.3), location: 0.00),
+                        Gradient.Stop(color: DesignColors.cardBackground, location: 1.00),
                     ],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
             }
         )
-        .cornerRadius(12)
+        .cornerRadius(DesignRadius.medium)
         .shadow(color: .black.opacity(0.08), radius: 4, x: 0, y: 2)
     }
 
     private func highlightsSection(_ highlights: [JournalHighlight]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Button(action: { showingHighlights.toggle() }) {
-                    HStack {
-                        Image(systemName: showingHighlights ? "chevron.down" : "chevron.right")
-                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                        Text("Key Highlights (\(highlights.count))")
-                            .font(.custom("Nunito", size: 16))
-                            .fontWeight(.semibold)
-                            .foregroundColor(.black)
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                HStack {
+                    Button(action: { showingHighlights.toggle() }) {
+                        HStack {
+                            Image(systemName: showingHighlights ? "chevron.down" : "chevron.right")
+                                .foregroundColor(DesignColors.primaryOrange)
+                            Text("Key Highlights (\(highlights.count))")
+                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                                .fontWeight(.semibold)
+                                .foregroundColor(DesignColors.primaryText)
+                        }
                     }
-                }
-                .buttonStyle(PlainButtonStyle())
+                    .buttonStyle(PlainButtonStyle())
 
-                Spacer()
-            }
+                    Spacer()
+                }
 
             if showingHighlights {
                 LazyVStack(spacing: 8) {
@@ -534,46 +489,47 @@ struct JournalView: View {
                     }
                 }
             }
-        }
-        .padding(20)
-        .background(
-            ZStack {
-                Color.white
-                LinearGradient(
-                    stops: [
-                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34).opacity(0.05), location: 0.00),
-                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
             }
-        )
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+            .padding(DesignSpacing.lg)
+            .background(
+                ZStack {
+                    DesignColors.cardBackground
+                    LinearGradient(
+                        stops: [
+                            Gradient.Stop(color: DesignColors.gradientStart.opacity(0.05), location: 0.00),
+                            Gradient.Stop(color: DesignColors.gradientEnd.opacity(0), location: 1.00),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+            )
+            .cornerRadius(DesignRadius.medium)
+            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        }
     }
 
     private func highlightRow(_ highlight: JournalHighlight) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: DesignSpacing.md) {
             ZStack {
                 Circle()
-                    .fill(Color(red: 1, green: 0.42, blue: 0.02).opacity(0.1))
+                    .fill(DesignColors.primaryOrange.opacity(0.1))
                     .frame(width: 36, height: 36)
-                
+
             Image(systemName: highlight.category.icon)
                     .font(.system(size: 16))
-                .foregroundColor(Color(red: 1, green: 0.42, blue: 0.02))
+                .foregroundColor(DesignColors.primaryOrange)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                 Text(highlight.title)
-                    .font(.custom("Nunito", size: 15))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
                     .fontWeight(.bold)
-                    .foregroundColor(.black)
+                    .foregroundColor(DesignColors.primaryText)
 
                 Text(highlight.content)
-                    .font(.custom("Nunito", size: 13))
-                    .foregroundColor(.black.opacity(0.7))
+                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                    .foregroundColor(DesignColors.secondaryText)
                     .lineSpacing(2)
                     .lineLimit(2)
             }
@@ -598,163 +554,129 @@ struct JournalView: View {
     }
 
     private func sentimentSection(_ sentiment: SentimentAnalysis) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "heart.fill")
-                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                HStack {
+                    Image(systemName: "heart.fill")
+                        .foregroundColor(DesignColors.primaryOrange)
 
-                Text("Emotional Insights")
-                    .font(.custom("Nunito", size: 16))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
+                    Text("Emotional Insights")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.callout))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.primaryText)
 
-                Spacer()
+                    Spacer()
 
-                Text(sentiment.overallSentiment.emotion.capitalized)
-                    .font(.custom("Nunito", size: 11))
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        ZStack {
-                            Color.white.opacity(0.69)
-                            LinearGradient(
-                                stops: [
-                                    Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
-                                    Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
-                                ],
-                                startPoint: UnitPoint(x: 1.15, y: 3.61),
-                                endPoint: UnitPoint(x: 0.02, y: 0)
-                            )
+                    Text(sentiment.overallSentiment.emotion.capitalized)
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .fontWeight(.medium)
+                        .padding(.horizontal, DesignSpacing.sm)
+                        .padding(.vertical, DesignSpacing.xs)
+                        .background(
+                            ZStack {
+                                DesignColors.glassBackground.opacity(0.7)
+                                LinearGradient(
+                                    stops: [
+                                        Gradient.Stop(color: DesignColors.gradientStart, location: 0.00),
+                                        Gradient.Stop(color: DesignColors.gradientEnd.opacity(0), location: 1.00),
+                                    ],
+                                    startPoint: UnitPoint(x: 1.15, y: 3.61),
+                                    endPoint: UnitPoint(x: 0.02, y: 0)
+                                )
+                            }
+                        )
+                        .foregroundColor(DesignColors.primaryText)
+                        .cornerRadius(DesignRadius.small)
+                }
+
+                // Top emotions
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: DesignSpacing.sm) {
+                        ForEach(sentiment.emotionalBreakdown.prefix(3), id: \.emotion) { emotion in
+                            HStack(spacing: DesignSpacing.xs) {
+                                Text(emotion.emotion.capitalized)
+                                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                Text(String(format: "%.0f%%", emotion.intensity * 100))
+                                    .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                    .fontWeight(.semibold)
+                            }
+                            .padding(.horizontal, DesignSpacing.sm)
+                            .padding(.vertical, DesignSpacing.xs)
+                            .background(DesignColors.primaryOrange.opacity(0.1))
+                            .foregroundColor(DesignColors.primaryOrange)
+                            .cornerRadius(DesignRadius.small)
                         }
-                    )
-                    .foregroundColor(.black)
-                    .cornerRadius(8)
-            }
-
-            // Top emotions
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(sentiment.emotionalBreakdown.prefix(3), id: \.emotion) { emotion in
-                        HStack(spacing: 4) {
-                            Text(emotion.emotion.capitalized)
-                                .font(.custom("Nunito", size: 11))
-                            Text(String(format: "%.0f%%", emotion.intensity * 100))
-                                .font(.custom("Nunito", size: 11))
-                                .fontWeight(.semibold)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1))
-                        .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                        .cornerRadius(6)
                     }
                 }
             }
         }
-        .padding(20)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func journalActionsSection(_ journal: DailyJournal) -> some View {
-        HStack(spacing: 16) {
-            Button("Share Journal") {
-                showingExportOptions = true
-            }
-            .font(.custom("Nunito", size: 14))
-            .fontWeight(.semibold)
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(
-                ZStack {
-                    Color(red: 1, green: 0.42, blue: 0.02)
-                    LinearGradient(
-                        stops: [
-                            Gradient.Stop(color: Color.white.opacity(0.2), location: 0.00),
-                            Gradient.Stop(color: Color.clear, location: 1.00),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+        HStack(spacing: DesignSpacing.md) {
+            UnifiedButton.primary(
+                "Share Journal",
+                size: .medium,
+                action: {
+                    showingExportOptions = true
                 }
             )
-            .cornerRadius(10)
-            .shadow(color: Color(red: 1, green: 0.42, blue: 0.02).opacity(0.3), radius: 4, x: 0, y: 2)
-            .buttonStyle(PlainButtonStyle())
         }
     }
 
     // MARK: - Empty State Section
 
     private var emptyStateSection: some View {
-        VStack(spacing: 24) {
-            // Animated icon
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            stops: [
-                                Gradient.Stop(color: Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.1), location: 0.00),
-                                Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(spacing: DesignSpacing.xl) {
+                // Animated icon
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                stops: [
+                                    Gradient.Stop(color: DesignColors.primaryOrange.opacity(0.1), location: 0.00),
+                                    Gradient.Stop(color: DesignColors.gradientEnd.opacity(0), location: 1.00),
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
                         )
-                    )
-                    .frame(width: 120, height: 120)
-                
-                Image(systemName: "moon.stars.fill")
-                    .font(.system(size: 48))
-                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.5))
-            }
+                        .frame(width: 120, height: 120)
 
-            VStack(spacing: 12) {
-                Text("No Journal for This Date")
-                    .font(.custom("InstrumentSerif-Regular", size: 24))
-                    .foregroundColor(.black)
+                    Image(systemName: "moon.stars.fill")
+                        .font(.system(size: 48))
+                        .foregroundColor(DesignColors.primaryOrange.opacity(0.5))
+                }
 
-                Text("Journals are automatically generated at midnight each day.\n\nYour daily reflections will appear here once the system processes your activities and creates a personalized summary.")
-                    .font(.custom("Nunito", size: 15))
-                    .foregroundColor(.black.opacity(0.7))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(4)
-                    .padding(.horizontal, 60)
+                VStack(spacing: DesignSpacing.md) {
+                    Text("No Journal for This Date")
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.title2))
+                        .foregroundColor(DesignColors.primaryText)
+
+                    Text("Journals are automatically generated at midnight each day.\n\nYour daily reflections will appear here once the system processes your activities and creates a personalized summary.")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.body))
+                        .foregroundColor(DesignColors.secondaryText)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .padding(.horizontal, DesignSpacing.xl)
+                }
+
+                // Info box
+                HStack(spacing: DesignSpacing.sm) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundColor(DesignColors.primaryOrange)
+
+                    Text("Use the date selector above to view past journal entries")
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                        .foregroundColor(DesignColors.secondaryText)
+                }
+                .padding(.horizontal, DesignSpacing.lg)
+                .padding(.vertical, DesignSpacing.sm)
+                .background(DesignColors.primaryOrange.opacity(0.05))
+                .cornerRadius(DesignRadius.small)
             }
-            
-            // Info box
-            HStack(spacing: 10) {
-                Image(systemName: "info.circle.fill")
-                    .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                
-                Text("Use the date selector above to view past journal entries")
-                    .font(.custom("Nunito", size: 13))
-                    .foregroundColor(.black.opacity(0.6))
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(Color(red: 0.62, green: 0.44, blue: 0.36).opacity(0.05))
-            .cornerRadius(8)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 70)
-        .background(
-            ZStack {
-                Color.white
-                LinearGradient(
-                    stops: [
-                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95), location: 0.00),
-                        Gradient.Stop(color: Color.white, location: 1.00),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
-        )
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
         .opacity(animateContent ? 1.0 : 0.0)
         .animation(.easeInOut(duration: 0.6).delay(0.5), value: animateContent)
     }
@@ -762,33 +684,32 @@ struct JournalView: View {
     // MARK: - Journal History Section
 
     private var journalHistorySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Recent Journals")
-                    .font(.custom("Nunito", size: 18))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
+        UnifiedCard(style: .standard, size: .large) {
+            VStack(alignment: .leading, spacing: DesignSpacing.md) {
+                HStack {
+                    Text("Recent Journals")
+                        .font(.custom(DesignTypography.headingFont, size: DesignTypography.callout))
+                        .fontWeight(.semibold)
+                        .foregroundColor(DesignColors.primaryText)
 
-                Spacer()
+                    Spacer()
 
-                Button("View All") {
-                    // Navigate to full history
+                    UnifiedButton.ghost(
+                        "View All",
+                        size: .small,
+                        action: {
+                            // Navigate to full history
+                        }
+                    )
                 }
-                .font(.custom("Nunito", size: 12))
-                .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
-                .buttonStyle(PlainButtonStyle())
-            }
 
-            LazyVStack(spacing: 8) {
-                ForEach(journalHistory.prefix(3)) { journal in
-                    historyRow(journal)
+                LazyVStack(spacing: DesignSpacing.sm) {
+                    ForEach(journalHistory.prefix(3)) { journal in
+                        historyRow(journal)
+                    }
                 }
             }
         }
-        .padding(20)
-        .background(Color.white)
-        .cornerRadius(12)
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 
     private func historyRow(_ journal: DailyJournal) -> some View {
@@ -796,20 +717,20 @@ struct JournalView: View {
             selectedDate = journal.date
             generator.generatedJournal = journal
         }) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: DesignSpacing.md) {
+                VStack(alignment: .leading, spacing: DesignSpacing.xs) {
                     Text(journal.date.formatted(date: .abbreviated, time: .omitted))
-                        .font(.custom("Nunito", size: 14))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                         .fontWeight(.semibold)
-                        .foregroundColor(.black)
+                        .foregroundColor(DesignColors.primaryText)
 
                     HStack {
                         Image(systemName: journal.template.icon)
-                            .font(.custom("Nunito", size: 10))
-                            .foregroundColor(Color(red: 0.62, green: 0.44, blue: 0.36))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(DesignColors.primaryOrange)
                         Text(journal.template.displayName)
-                            .font(.custom("Nunito", size: 10))
-                            .foregroundColor(.black.opacity(0.6))
+                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                            .foregroundColor(DesignColors.secondaryText)
                     }
                 }
 
@@ -817,31 +738,31 @@ struct JournalView: View {
 
                 if !journal.sentiment.emotionalBreakdown.isEmpty {
                     Text(journal.sentiment.overallSentiment.displayName)
-                        .font(.custom("Nunito", size: 10))
+                        .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
                         .fontWeight(.medium)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+                        .padding(.horizontal, DesignSpacing.sm)
+                        .padding(.vertical, DesignSpacing.xs)
                         .background(
                             ZStack {
-                                Color.white.opacity(0.69)
+                                DesignColors.glassBackground.opacity(0.8)
                                 LinearGradient(
-                                    stops: [
-                                        Gradient.Stop(color: Color(red: 1, green: 0.77, blue: 0.34), location: 0.00),
-                                        Gradient.Stop(color: Color(red: 1, green: 0.98, blue: 0.95).opacity(0), location: 1.00),
-                                    ],
-                                    startPoint: UnitPoint(x: 1.15, y: 3.61),
-                                    endPoint: UnitPoint(x: 0.02, y: 0)
+                                    gradient: Gradient(colors: [
+                                        DesignColors.primaryOrange.opacity(0.7),
+                                        DesignColors.gradientEnd.opacity(0)
+                                    ]),
+                                    startPoint: .topTrailing,
+                                    endPoint: .bottomLeading
                                 )
                             }
                         )
-                        .foregroundColor(.black)
-                        .cornerRadius(4)
+                        .foregroundColor(DesignColors.primaryText)
+                        .cornerRadius(DesignRadius.small)
                 }
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 12)
-            .background(Color.white.opacity(0.5))
-            .cornerRadius(8)
+            .padding(.vertical, DesignSpacing.sm)
+            .padding(.horizontal, DesignSpacing.md)
+            .background(DesignColors.glassBackground.opacity(0.5))
+            .cornerRadius(DesignRadius.medium)
         }
         .buttonStyle(PlainButtonStyle())
     }
