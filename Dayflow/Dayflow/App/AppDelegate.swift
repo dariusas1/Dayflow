@@ -180,9 +180,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupFocusLock()
         
         // Initialize MemoryStore asynchronously (lazy load)
+        // This must complete before JarvisChat and other features can use it
         Task {
             await HybridMemoryStore.shared.completeInitialization()
-            print("AppDelegate: MemoryStore initialization complete")
+            print("AppDelegate: HybridMemoryStore initialization complete")
+        }
+
+        // Initialize SuggestedTodosEngine asynchronously
+        // This must complete before using task suggestion features
+        Task {
+            await SuggestedTodosEngine.shared.completeInitialization()
+            print("AppDelegate: SuggestedTodosEngine initialization complete")
         }
 
         // Observe recording state

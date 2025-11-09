@@ -336,12 +336,17 @@ actor HybridMemoryStore: MemoryStore {
     private let embeddingGenerator = VectorEmbeddingGenerator()
     private let logger = Logger(subsystem: "FocusLock", category: "HybridMemoryStore")
 
+    // Initialization state management
+    private var isInitialized = false
+    private var initializationTask: Task<Bool, Never>?
+    private let initLock = NSLock()
+
     // Performance tracking
     private var embeddingGenerationTimes: [TimeInterval] = []
     private var searchTimes: [TimeInterval] = []
 
     init() throws {
-        // Initialize database
+        // Initialize database queue ONLY - defer all database setup to async
         let dbPath = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("FocusLock")
@@ -352,45 +357,129 @@ actor HybridMemoryStore: MemoryStore {
 
         let queue = try DatabaseQueue(path: dbPath.path)
         databaseQueue = queue
-        // Setup database synchronously during init
-        try setupDatabase(queue: queue)
+        // DO NOT call setupDatabase() here - it blocks initialization
+        // setupDatabase will be called in completeInitialization() async method
     }
 
-    // Public method to complete async initialization
+    // Public method to complete async initialization - idempotent and thread-safe
+    // Can be called multiple times safely; only runs once
     public func completeInitialization() async {
-        // Load embedding model first (non-blocking, async)
+        // Fast path: already initialized
+        if isInitialized {
+            logger.debug("MemoryStore already initialized, skipping")
+            return
+        }
+
+        // Check if initialization is in progress
+        initLock.lock()
+
+        // Already initialized by another thread
+        if isInitialized {
+            initLock.unlock()
+            return
+        }
+
+        // Check if initialization is already in progress
+        if let existingTask = initializationTask {
+            // CRITICAL: Unlock BEFORE await to prevent deadlock
+            // (NSLock does not suspend during await, blocking other threads)
+            initLock.unlock()
+            await existingTask.value
+            return
+        }
+
+        // Start new initialization task (non-isolated, only runs performInitialization)
+        let task = Task<Bool, Never> { [weak self] in
+            guard let self else { return false }
+            return await self.performInitialization()
+        }
+        self.initializationTask = task
+
+        // Release lock BEFORE awaiting task (lock already stored the task)
+        initLock.unlock()
+
+        // Wait for initialization to complete (lock is already released)
+        let success = await task.value
+
+        // ✅ Move state mutations to actor context (after awaiting task)
+        initLock.lock()
+        initializationTask = nil
+        if success {
+            isInitialized = true
+        }
+        initLock.unlock()
+
+        if !success {
+            logger.error("MemoryStore initialization failed, will retry on next call")
+        }
+    }
+
+    private func performInitialization() async -> Bool {
+        // Setup database asynchronously (non-blocking)
+        do {
+            try await setupDatabaseAsync()
+            logger.info("Database setup complete")
+        } catch {
+            logger.error("Failed to setup database: \(error.localizedDescription)")
+            return false  // ✅ Return false on failure
+        }
+
+        // Load embedding model (async, non-blocking)
         await embeddingGenerator.loadEmbeddingModel()
-        
+
         // Then load existing items and rebuild index (can be done lazily)
         await loadExistingItems()
-        
+
         logger.info("MemoryStore initialization complete")
+        return true  // ✅ Return true only on success
+    }
+
+    // Ensure this instance is initialized before using database
+    // Works with both shared singleton and any instance (e.g., in tests)
+    func ensureInitialized() async {
+        await completeInitialization()
+    }
+
+    // Shared database schema setup logic to eliminate duplication
+    nonisolated private func setupDatabaseSchema(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                embeddings BLOB,
+                metadata TEXT,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
+            ON memory_items(timestamp)
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_memory_items_source
+            ON memory_items(source)
+        """)
     }
 
     nonisolated private func setupDatabase(queue: DatabaseQueue) throws {
         try queue.write { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    embeddings BLOB,
-                    metadata TEXT,
-                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-                )
-            """)
+            try setupDatabaseSchema(db)
+        }
+    }
 
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
-                ON memory_items(timestamp)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_source
-                ON memory_items(source)
-            """)
+    // Async-safe version for use in completeInitialization()
+    private func setupDatabaseAsync() async throws {
+        try await databaseQueue.write { [weak self] db in
+            // ✅ Proper guard let for explicit error handling
+            guard let self = self else {
+                throw DatabaseError.initializationFailed
+            }
+            try self.setupDatabaseSchema(db)
         }
     }
 
@@ -690,7 +779,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getAllStoredItems() async throws -> [MemoryItem] {
-        let rows = try databaseQueue.read { db -> [Row] in
+        let rows = try await databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items ORDER BY timestamp DESC
@@ -700,7 +789,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getItemsWithEmbeddings() async throws -> [MemoryItem] {
-        let rows = try databaseQueue.read { db -> [Row] in
+        let rows = try await databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items
@@ -776,5 +865,6 @@ actor HybridMemoryStore: MemoryStore {
     enum DatabaseError: Error {
         case invalidData
         case storageError
+        case initializationFailed
     }
 }
