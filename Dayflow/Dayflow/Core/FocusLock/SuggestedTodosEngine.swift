@@ -95,8 +95,16 @@ class SuggestedTodosEngine: ObservableObject {
 
         // Start new initialization task
         let task = Task {
-            await performInitialization()
-            self.isInitialized = true
+            let success = await performInitialization()
+            if success {
+                self.isInitialized = true
+            } else {
+                // ✅ On failure, clear initializationTask to allow retries
+                self.initLock.lock()
+                self.initializationTask = nil
+                self.initLock.unlock()
+            }
+            return success
         }
         self.initializationTask = task
 
@@ -104,15 +112,24 @@ class SuggestedTodosEngine: ObservableObject {
         initLock.unlock()
 
         // Wait for initialization to complete (lock is already released)
-        await task.value
+        let success = await task.value
+
+        if !success {
+            // ✅ Clear task on failure so next call can retry
+            initLock.lock()
+            initializationTask = nil
+            initLock.unlock()
+            logger.error("SuggestedTodosEngine initialization failed, will retry on next call")
+        }
     }
 
-    private func performInitialization() async {
+    private func performInitialization() async -> Bool {
         do {
             try await setupDatabaseAsync()
             logger.info("Database setup complete")
         } catch {
             logger.error("Failed to setup database: \(error.localizedDescription)")
+            return false  // ✅ Return false on failure
         }
 
         await loadUserPreferencesAsync()
@@ -123,6 +140,7 @@ class SuggestedTodosEngine: ObservableObject {
         startBackgroundProcessing()
 
         logger.info("SuggestedTodosEngine initialization complete")
+        return true  // ✅ Return true only on success
     }
 
     /// Ensure this instance is initialized before using engine
@@ -326,7 +344,7 @@ class SuggestedTodosEngine: ObservableObject {
 
     private func setupDatabaseAsync() async throws {
         try await databaseQueue.write { [weak self] db in
-            // Ensure self is available and throw explicit error if not
+            // ✅ Proper guard let for explicit error handling
             guard let self = self else {
                 throw SuggestionEngineError.initializationFailed
             }

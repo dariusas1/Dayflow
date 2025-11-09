@@ -390,8 +390,16 @@ actor HybridMemoryStore: MemoryStore {
 
         // Start new initialization task
         let task = Task {
-            await performInitialization()
-            self.isInitialized = true
+            let success = await performInitialization()
+            if success {
+                self.isInitialized = true
+            } else {
+                // ✅ On failure, clear initializationTask to allow retries
+                self.initLock.lock()
+                self.initializationTask = nil
+                self.initLock.unlock()
+            }
+            return success
         }
         self.initializationTask = task
 
@@ -399,16 +407,25 @@ actor HybridMemoryStore: MemoryStore {
         initLock.unlock()
 
         // Wait for initialization to complete (lock is already released)
-        await task.value
+        let success = await task.value
+
+        if !success {
+            // ✅ Clear task on failure so next call can retry
+            initLock.lock()
+            initializationTask = nil
+            initLock.unlock()
+            logger.error("MemoryStore initialization failed, will retry on next call")
+        }
     }
 
-    private func performInitialization() async {
+    private func performInitialization() async -> Bool {
         // Setup database asynchronously (non-blocking)
         do {
             try await setupDatabaseAsync()
             logger.info("Database setup complete")
         } catch {
             logger.error("Failed to setup database: \(error.localizedDescription)")
+            return false  // ✅ Return false on failure
         }
 
         // Load embedding model (async, non-blocking)
@@ -418,6 +435,7 @@ actor HybridMemoryStore: MemoryStore {
         await loadExistingItems()
 
         logger.info("MemoryStore initialization complete")
+        return true  // ✅ Return true only on success
     }
 
     // Ensure this instance is initialized before using database
@@ -461,10 +479,11 @@ actor HybridMemoryStore: MemoryStore {
     // Async-safe version for use in completeInitialization()
     private func setupDatabaseAsync() async throws {
         try await databaseQueue.write { [weak self] db in
-            // Call the nonisolated helper to avoid weak self reference issues
-            try self?.setupDatabaseSchema(db) ?? {
+            // ✅ Proper guard let for explicit error handling
+            guard let self = self else {
                 throw DatabaseError.initializationFailed
-            }()
+            }
+            try self.setupDatabaseSchema(db)
         }
     }
 
