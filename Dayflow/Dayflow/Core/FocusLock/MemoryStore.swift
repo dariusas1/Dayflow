@@ -338,7 +338,7 @@ actor HybridMemoryStore: MemoryStore {
 
     // Initialization state management
     private var isInitialized = false
-    private var initializationTask: Task<Void, Never>?
+    private var initializationTask: Task<Bool, Never>?
     private let initLock = NSLock()
 
     // Performance tracking
@@ -388,18 +388,10 @@ actor HybridMemoryStore: MemoryStore {
             return
         }
 
-        // Start new initialization task
-        let task = Task {
-            let success = await performInitialization()
-            if success {
-                self.isInitialized = true
-            } else {
-                // ✅ On failure, clear initializationTask to allow retries
-                self.initLock.lock()
-                self.initializationTask = nil
-                self.initLock.unlock()
-            }
-            return success
+        // Start new initialization task (non-isolated, only runs performInitialization)
+        let task = Task<Bool, Never> { [weak self] in
+            guard let self else { return false }
+            return await self.performInitialization()
         }
         self.initializationTask = task
 
@@ -409,11 +401,15 @@ actor HybridMemoryStore: MemoryStore {
         // Wait for initialization to complete (lock is already released)
         let success = await task.value
 
+        // ✅ Move state mutations to actor context (after awaiting task)
+        initLock.lock()
+        initializationTask = nil
+        if success {
+            isInitialized = true
+        }
+        initLock.unlock()
+
         if !success {
-            // ✅ Clear task on failure so next call can retry
-            initLock.lock()
-            initializationTask = nil
-            initLock.unlock()
             logger.error("MemoryStore initialization failed, will retry on next call")
         }
     }
