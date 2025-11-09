@@ -77,14 +77,18 @@ class SuggestedTodosEngine: ObservableObject {
 
         // Check if initialization is in progress
         initLock.lock()
-        defer { initLock.unlock() }
 
+        // Already initialized by another thread
         if isInitialized {
+            initLock.unlock()
             return
         }
 
+        // Check if initialization is already in progress
         if let existingTask = initializationTask {
-            // Wait for existing initialization to complete
+            // CRITICAL: Unlock BEFORE await to prevent deadlock
+            // (NSLock does not suspend during await, blocking other threads)
+            initLock.unlock()
             await existingTask.value
             return
         }
@@ -96,9 +100,11 @@ class SuggestedTodosEngine: ObservableObject {
         }
         self.initializationTask = task
 
+        // Release lock BEFORE awaiting task (lock already stored the task)
         initLock.unlock()
+
+        // Wait for initialization to complete (lock is already released)
         await task.value
-        initLock.lock()
     }
 
     private func performInitialization() async {
@@ -119,9 +125,10 @@ class SuggestedTodosEngine: ObservableObject {
         logger.info("SuggestedTodosEngine initialization complete")
     }
 
-    /// Ensure initialized before using engine - call this in methods that need the engine ready
+    /// Ensure this instance is initialized before using engine
+    /// Works with both shared singleton and any instance (e.g., in tests)
     func ensureInitialized() async {
-        await SuggestedTodosEngine.shared.completeInitialization()
+        await completeInitialization()
     }
 
     // MARK: - Public Interface
@@ -319,7 +326,11 @@ class SuggestedTodosEngine: ObservableObject {
 
     private func setupDatabaseAsync() async throws {
         try await databaseQueue.write { [weak self] db in
-            try self?.setupDatabaseSchema(db)
+            // Ensure self is available and throw explicit error if not
+            guard let self = self else {
+                throw SuggestionEngineError.initializationFailed
+            }
+            try self.setupDatabaseSchema(db)
         }
     }
 
@@ -1076,6 +1087,13 @@ private extension Formatter {
         configure(self)
         return self
     }
+}
+
+// MARK: - Error Types
+
+enum SuggestionEngineError: Error {
+    case initializationFailed
+    case databaseError(String)
 }
 
 // MARK: - Singleton Instance

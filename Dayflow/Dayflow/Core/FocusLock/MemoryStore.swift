@@ -372,14 +372,18 @@ actor HybridMemoryStore: MemoryStore {
 
         // Check if initialization is in progress
         initLock.lock()
-        defer { initLock.unlock() }
 
+        // Already initialized by another thread
         if isInitialized {
+            initLock.unlock()
             return
         }
 
+        // Check if initialization is already in progress
         if let existingTask = initializationTask {
-            // Wait for existing initialization to complete
+            // CRITICAL: Unlock BEFORE await to prevent deadlock
+            // (NSLock does not suspend during await, blocking other threads)
+            initLock.unlock()
             await existingTask.value
             return
         }
@@ -391,9 +395,11 @@ actor HybridMemoryStore: MemoryStore {
         }
         self.initializationTask = task
 
+        // Release lock BEFORE awaiting task (lock already stored the task)
         initLock.unlock()
+
+        // Wait for initialization to complete (lock is already released)
         await task.value
-        initLock.lock()
     }
 
     private func performInitialization() async {
@@ -414,9 +420,10 @@ actor HybridMemoryStore: MemoryStore {
         logger.info("MemoryStore initialization complete")
     }
 
-    // Ensure initialized before using database - call this in methods that need the store ready
-    nonisolated func ensureInitialized() async {
-        await HybridMemoryStore.shared.completeInitialization()
+    // Ensure this instance is initialized before using database
+    // Works with both shared singleton and any instance (e.g., in tests)
+    func ensureInitialized() async {
+        await completeInitialization()
     }
 
     // Shared database schema setup logic to eliminate duplication
@@ -454,7 +461,10 @@ actor HybridMemoryStore: MemoryStore {
     // Async-safe version for use in completeInitialization()
     private func setupDatabaseAsync() async throws {
         try await databaseQueue.write { [weak self] db in
-            try self?.setupDatabaseSchema(db)
+            // Call the nonisolated helper to avoid weak self reference issues
+            try self?.setupDatabaseSchema(db) ?? {
+                throw DatabaseError.initializationFailed
+            }()
         }
     }
 
@@ -840,5 +850,6 @@ actor HybridMemoryStore: MemoryStore {
     enum DatabaseError: Error {
         case invalidData
         case storageError
+        case initializationFailed
     }
 }
