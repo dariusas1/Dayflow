@@ -341,7 +341,7 @@ actor HybridMemoryStore: MemoryStore {
     private var searchTimes: [TimeInterval] = []
 
     init() throws {
-        // Initialize database
+        // Initialize database queue ONLY - defer all database setup to async
         let dbPath = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("FocusLock")
@@ -352,23 +352,60 @@ actor HybridMemoryStore: MemoryStore {
 
         let queue = try DatabaseQueue(path: dbPath.path)
         databaseQueue = queue
-        // Setup database synchronously during init
-        try setupDatabase(queue: queue)
+        // DO NOT call setupDatabase() here - it blocks initialization
+        // setupDatabase will be called in completeInitialization() async method
     }
 
     // Public method to complete async initialization
+    // MUST be called before using the store
     public func completeInitialization() async {
-        // Load embedding model first (non-blocking, async)
+        // Setup database asynchronously (non-blocking)
+        do {
+            try await setupDatabaseAsync()
+            logger.info("Database setup complete")
+        } catch {
+            logger.error("Failed to setup database: \(error.localizedDescription)")
+        }
+
+        // Load embedding model (async, non-blocking)
         await embeddingGenerator.loadEmbeddingModel()
-        
+
         // Then load existing items and rebuild index (can be done lazily)
         await loadExistingItems()
-        
+
         logger.info("MemoryStore initialization complete")
     }
 
     nonisolated private func setupDatabase(queue: DatabaseQueue) throws {
         try queue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS memory_items (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    timestamp INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    embeddings BLOB,
+                    metadata TEXT,
+                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+                )
+            """)
+
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
+                ON memory_items(timestamp)
+            """)
+
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_memory_items_source
+                ON memory_items(source)
+            """)
+        }
+    }
+
+    // Async-safe version for use in completeInitialization()
+    private func setupDatabaseAsync() async throws {
+        try await databaseQueue.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS memory_items (
                     id TEXT PRIMARY KEY,
@@ -690,7 +727,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getAllStoredItems() async throws -> [MemoryItem] {
-        let rows = try databaseQueue.read { db -> [Row] in
+        let rows = try await databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items ORDER BY timestamp DESC
@@ -700,7 +737,7 @@ actor HybridMemoryStore: MemoryStore {
     }
 
     private func getItemsWithEmbeddings() async throws -> [MemoryItem] {
-        let rows = try databaseQueue.read { db -> [Row] in
+        let rows = try await databaseQueue.read { db -> [Row] in
             try Row.fetchAll(db, sql: """
                 SELECT id, content, timestamp, source, embeddings, metadata
                 FROM memory_items

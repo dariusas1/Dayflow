@@ -46,7 +46,7 @@ class SuggestedTodosEngine: ObservableObject {
         // Initialize performance stats
         generationStats = GenerationStats()
 
-        // Initialize database
+        // Initialize database queue ONLY - defer all database setup to async
         let dbPath = try FileManager.default
             .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("FocusLock")
@@ -56,15 +56,28 @@ class SuggestedTodosEngine: ObservableObject {
 
         databaseQueue = try DatabaseQueue(path: dbPath.path)
 
-        try setupDatabase()
-        loadUserPreferences()
-        loadSuggestionHistory()
-        initializeNLPComponents()
+        // DO NOT call setupDatabase() or other initialization here
+        // All initialization deferred to completeInitialization() async method
+        logger.info("SuggestedTodosEngine instance created (async initialization pending)")
+    }
+
+    /// Complete async initialization - MUST be called before using the engine
+    public func completeInitialization() async {
+        do {
+            try await setupDatabaseAsync()
+            logger.info("Database setup complete")
+        } catch {
+            logger.error("Failed to setup database: \(error.localizedDescription)")
+        }
+
+        await loadUserPreferencesAsync()
+        await loadSuggestionHistoryAsync()
+        await initializeNLPComponentsAsync()
 
         // Start background processing
         startBackgroundProcessing()
 
-        logger.info("SuggestedTodosEngine initialized successfully")
+        logger.info("SuggestedTodosEngine initialization complete")
     }
 
     // MARK: - Public Interface
@@ -128,34 +141,33 @@ class SuggestedTodosEngine: ObservableObject {
     }
 
     func getSuggestions(limit: Int = 10, priority: SuggestionPriority? = nil, category: String? = nil) async -> [SuggestedTodo] {
-        return await withCheckedContinuation { continuation in
-            do {
-                try databaseQueue.read { db in
-                    var query = "SELECT * FROM suggested_todos WHERE is_dismissed = 0"
-                    var arguments = StatementArguments()
+        do {
+            // Use proper async/await instead of withCheckedContinuation
+            let rows = try await databaseQueue.read { db -> [Row] in
+                var query = "SELECT * FROM suggested_todos WHERE is_dismissed = 0"
+                var arguments = StatementArguments()
 
-                    if let priority = priority {
-                        query += " AND priority = ?"
-                        arguments += [priority.rawValue]
-                    }
-
-                    if let category = category {
-                        query += " AND context_tags LIKE ?"
-                        arguments += ["%\(category)%"]
-                    }
-
-                    query += " ORDER BY urgency_score DESC, relevance_score DESC, created_at DESC LIMIT ?"
-                    arguments += [limit]
-
-                    let rows = try Row.fetchAll(db, sql: query, arguments: arguments)
-                    let suggestions = rows.compactMap { try? parseSuggestedTodo(from: $0) }
-
-                    continuation.resume(returning: suggestions)
+                if let priority = priority {
+                    query += " AND priority = ?"
+                    arguments += [priority.rawValue]
                 }
-            } catch {
-                logger.error("Failed to get suggestions: \(error.localizedDescription)")
-                continuation.resume(returning: [])
+
+                if let category = category {
+                    query += " AND context_tags LIKE ?"
+                    arguments += ["%\(category)%"]
+                }
+
+                query += " ORDER BY urgency_score DESC, relevance_score DESC, created_at DESC LIMIT ?"
+                arguments += [limit]
+
+                return try Row.fetchAll(db, sql: query, arguments: arguments)
             }
+
+            let suggestions = rows.compactMap { try? parseSuggestedTodo(from: $0) }
+            return suggestions
+        } catch {
+            logger.error("Failed to get suggestions: \(error.localizedDescription)")
+            return []
         }
     }
 
@@ -214,6 +226,93 @@ class SuggestedTodosEngine: ObservableObject {
     }
 
     // MARK: - Private Methods
+
+    // MARK: - Async Initialization Methods
+
+    private func setupDatabaseAsync() async throws {
+        try await databaseQueue.write { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS suggested_todos (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    priority TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source_content TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_activity_id TEXT,
+                    context_tags TEXT, -- JSON array
+                    estimated_duration INTEGER,
+                    deadline INTEGER,
+                    created_at INTEGER NOT NULL,
+                    last_shown INTEGER,
+                    user_feedback_score REAL,
+                    user_feedback_timestamp INTEGER,
+                    user_feedback_comment TEXT,
+                    is_accepted INTEGER,
+                    is_dismissed INTEGER NOT NULL DEFAULT 0,
+                    dismiss_reason TEXT,
+                    learning_score REAL NOT NULL DEFAULT 0.5,
+                    urgency_score REAL NOT NULL,
+                    relevance_score REAL NOT NULL
+                )
+            """)
+
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_suggested_todos_created_at
+                ON suggested_todos(created_at)
+            """)
+
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_suggested_todos_priority
+                ON suggested_todos(priority)
+            """)
+
+            try db.execute(sql: """
+                CREATE INDEX IF NOT EXISTS idx_suggested_todos_dismissed
+                ON suggested_todos(is_dismissed)
+            """)
+        }
+    }
+
+    private func loadUserPreferencesAsync() async {
+        do {
+            let prefsPath = try FileManager.default
+                .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                .appendingPathComponent("FocusLock")
+                .appendingPathComponent("UserPreferences.json")
+
+            if let data = try? Data(contentsOf: prefsPath) {
+                userPreferences = try JSONDecoder().decode(UserPreferenceProfile.self, from: data)
+                logger.info("Loaded user preferences from disk")
+            }
+        } catch {
+            logger.error("Failed to load user preferences: \(error.localizedDescription)")
+            userPreferences = UserPreferenceProfile()
+        }
+    }
+
+    private func loadSuggestionHistoryAsync() async {
+        let suggestions = await getSuggestions(limit: 1000)
+        suggestionHistory = suggestions
+        logger.info("Loaded \(suggestions.count) suggestions from database")
+    }
+
+    private func initializeNLPComponentsAsync() async {
+        do {
+            // Initialize NLTagger for NLP processing
+            nlpTagger = NLTagger(tagSchemes: [.tokenType, .nameType, .lexicalClass])
+            logger.info("Successfully initialized NLTagger")
+
+            // Initialize action classifier if available
+            try loadActionClassifier()
+
+        } catch {
+            logger.error("Failed to initialize NLP components: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Original Synchronous Methods (Deprecated - use async versions)
 
     private func setupDatabase() throws {
         try databaseQueue.write { db in
