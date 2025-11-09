@@ -1326,11 +1326,11 @@ struct MetricRow: View {
 
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: DesignRadius.xs)
+                        RoundedRectangle(cornerRadius: DesignRadius.small)
                             .fill(DesignColors.tertiaryText.opacity(0.2))
                             .frame(height: DesignSpacing.xs)
 
-                        RoundedRectangle(cornerRadius: DesignRadius.xs)
+                        RoundedRectangle(cornerRadius: DesignRadius.small)
                             .fill(color)
                             .frame(width: geometry.size.width * CGFloat(value) / 100, height: DesignSpacing.xs)
                     }

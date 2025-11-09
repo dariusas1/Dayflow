@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftUI
 import AppKit
 import UserNotifications
 import os.log
@@ -37,7 +38,7 @@ class BedtimeEnforcer: ObservableObject {
     // Private state
     private var timer: Timer?
     private var countdownTimer: Timer?
-    private var currentSnoozeCount: Int = 0
+    var currentSnoozeCount: Int = 0 // Internal for BedtimeCountdownView access
     private var lastBedtimeDate: Date?
     private let killSwitchManager = KillSwitchManager.shared
 

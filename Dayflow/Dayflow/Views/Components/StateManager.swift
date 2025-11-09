@@ -117,7 +117,7 @@ struct LoadingWrapper<Content: View>: View {
         }
         .onChange(of: isLoading) { _, newValue in
             if !newValue {
-                withAnimation(DesignAnimation.standard) {
+                withAnimation(.easeInOut(duration: DesignAnimation.standard)) {
                     showContent = true
                 }
             } else {

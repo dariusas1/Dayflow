@@ -21,7 +21,7 @@ enum VideoProcessingError: Error {
     case fileSaveFailed(Error?)
 }
 
-actor VideoProcessingService {
+actor VideoProcessingService: @unchecked Sendable {
     private let fileManager = FileManager.default
     private let temporaryDirectoryURL: URL
     private let persistentTimelapsesRootURL: URL

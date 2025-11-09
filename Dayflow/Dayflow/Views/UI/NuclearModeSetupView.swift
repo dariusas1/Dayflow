@@ -12,7 +12,7 @@ struct NuclearModeSetupView: View {
     @ObservedObject var killSwitchManager = KillSwitchManager.shared
 
     @State private var step: SetupStep = .warning
-    @State private var understands Consequences = false
+    @State private var understandsConsequences = false
     @State private var secondConfirmation = false
     @State private var passphrase: String = ""
     @State private var passphraseConfirm: String = ""

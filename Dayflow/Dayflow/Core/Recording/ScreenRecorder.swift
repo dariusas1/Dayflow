@@ -86,7 +86,7 @@ private enum RecorderState: Equatable {
     }
 }
 
-final class ScreenRecorder: NSObject, SCStreamOutput {
+final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     @MainActor
     init(autoStart: Bool = true) {

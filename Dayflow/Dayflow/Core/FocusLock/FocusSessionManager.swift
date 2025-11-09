@@ -350,19 +350,19 @@ class FocusSessionManager: ObservableObject {
         // Note: This uses UserDefaults as a temporary solution until SessionManager reconciliation
         if let data = UserDefaults.standard.data(forKey: "focus_session_history"),
            let decoded = try? JSONDecoder().decode([LegacyFocusSession].self, from: data) {
-            sessionHistory = decoded
-            logger.info("Loaded \(sessionHistory.count) sessions from history")
+            self.sessionHistory = decoded
+            logger.info("Loaded \(self.sessionHistory.count) sessions from history")
         } else {
-            sessionHistory = []
+            self.sessionHistory = []
             logger.info("No session history found, starting fresh")
         }
     }
 
     private func saveSessionHistory() {
         // Save to UserDefaults
-        if let encoded = try? JSONEncoder().encode(sessionHistory) {
+        if let encoded = try? JSONEncoder().encode(self.sessionHistory) {
             UserDefaults.standard.set(encoded, forKey: "focus_session_history")
-            logger.debug("Saved \(sessionHistory.count) sessions to history")
+            logger.debug("Saved \(self.sessionHistory.count) sessions to history")
         } else {
             logger.error("Failed to encode session history")
         }

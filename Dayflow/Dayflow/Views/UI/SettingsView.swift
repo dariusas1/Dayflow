@@ -368,7 +368,7 @@ extension SettingsView {
                         RoundedRectangle(cornerRadius: DesignRadius.medium, style: .continuous)
                             .stroke(selectedTab == tab ? DesignColors.primaryOrange : Color.white.opacity(0.3), lineWidth: 1)
                     )
-                    .shadow(color: selectedTab == tab ? DesignColors.shadowColor : Color.clear, radius: DesignRadius.medium, x: 0, y: 4)
+                    .shadow(color: selectedTab == tab ? Color.black.opacity(0.1) : Color.clear, radius: DesignRadius.medium, x: 0, y: 4)
             )
         }
         .buttonStyle(PlainButtonStyle())
@@ -415,7 +415,6 @@ extension SettingsView {
                                 isRefreshingStorage ? "Checking…" : "Run status check",
                                 size: .small,
                                 disabled: isRefreshingStorage,
-                                icon: isRefreshingStorage ? nil : "arrow.clockwise",
                                 action: refreshStorageMetrics
                             )
                         }
@@ -491,7 +490,6 @@ extension SettingsView {
                 UnifiedButton.secondary(
                     actionTitle,
                     size: .small,
-                    icon: "folder",
                     action: action
                 )
 
@@ -541,7 +539,7 @@ extension SettingsView {
         .background(
             Capsule()
                 .fill(DesignColors.cardBackground)
-                .overlay(Capsule().stroke(DesignColors.glassBorder, lineWidth: 0.8))
+                .overlay(Capsule().stroke(DesignColors.tertiaryText, lineWidth: 0.8))
         )
     }
 
@@ -555,7 +553,6 @@ extension SettingsView {
                     UnifiedButton.primary(
                         "Edit configuration",
                         size: .small,
-                        icon: "slider.horizontal.3",
                         action: { setupModalProvider = currentProvider }
                     )
                 }

@@ -188,7 +188,7 @@ struct NavigationEnhancer: ViewModifier {
                 isNavigating = true
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    withAnimation(DesignAnimation.standard) {
+                    withAnimation(.easeInOut(duration: DesignAnimation.standard)) {
                         isNavigating = false
                     }
                 }
@@ -229,7 +229,8 @@ struct SmoothList<Content: View, Data: RandomAccessCollection>: View where Data.
                     .opacity(visibleItems.contains(item.id) ? 1.0 : 0.0)
                     .offset(y: visibleItems.contains(item.id) ? 0 : 20)
                     .onAppear {
-                        withAnimation(DesignAnimation.stagger.delay(Double(visibleItems.count) * 0.05)) {
+                        let delay = Double(visibleItems.count) * 0.05
+                        withAnimation(.spring(response: 0.5, dampingFraction: 0.75).delay(delay)) {
                             visibleItems.insert(item.id)
                         }
                     }
@@ -269,7 +270,7 @@ struct ContentLoader<Data: RandomAccessCollection, Content: View>: View where Da
 #Preview("Page Container") {
     PageContainer(title: "Dashboard", showLoadingIndicator: true) {
         VStack(spacing: DesignSpacing.lg) {
-            MetricCard(
+            UnifiedMetricCard(
                 title: "Focus Time",
                 value: "4h 32m",
                 subtitle: "Today",
@@ -277,7 +278,7 @@ struct ContentLoader<Data: RandomAccessCollection, Content: View>: View where Da
                 style: .elevated
             )
 
-            MetricCard(
+            UnifiedMetricCard(
                 title: "Tasks Completed",
                 value: "12",
                 subtitle: "This week",

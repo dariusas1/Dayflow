@@ -461,29 +461,19 @@ struct SuggestionCard: View {
                         "Accept",
                         size: .small,
                         action: onAccept
-                    ) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12))
-                    }
+                    )
 
                     UnifiedButton.secondary(
                         "Snooze",
                         size: .small,
                         action: onSnooze
-                    ) {
-                        Image(systemName: "clock")
-                            .font(.system(size: 12))
-                    }
+                    )
 
                     UnifiedButton.ghost(
                         "",
                         size: .small,
                         action: onDismiss
-                    ) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 14))
-                            .foregroundColor(DesignColors.secondaryText)
-                    }
+                    )
 
                     Spacer()
                 }

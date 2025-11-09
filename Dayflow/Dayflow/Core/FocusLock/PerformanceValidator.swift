@@ -126,7 +126,7 @@ class PerformanceValidator {
 
         // Simulate active session
         let sessionManager = SessionManager.shared
-        await sessionManager.startSession(taskName: "Performance Test Task")
+        sessionManager.startSession(taskName: "Performance Test Task")
 
         // Monitor for 60 seconds
         let startTime = Date()
@@ -142,7 +142,7 @@ class PerformanceValidator {
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
         }
 
-        await sessionManager.endSession()
+        sessionManager.endSession()
 
         guard !measurements.isEmpty else {
             testResults.append(PerformanceTestResult(testName: testName, passed: false, cpuUsage: 0, memoryUsage: 0))
@@ -247,7 +247,7 @@ class PerformanceValidator {
 
         do {
             try await detectorFuser.startFusion()
-            await sessionManager.startSession(taskName: "Memory Growth Test")
+            sessionManager.startSession(taskName: "Memory Growth Test")
 
             // Monitor for 5 minutes
             let startTime = Date()
@@ -261,7 +261,7 @@ class PerformanceValidator {
             await MainActor.run {
                 detectorFuser.stopFusion()
             }
-            await sessionManager.endSession()
+            sessionManager.endSession()
 
             // Analyze memory growth
             let memoryGrowth = memoryMeasurements.last!.memory - baseline.memoryMB
@@ -503,7 +503,7 @@ class PerformanceValidator {
         logger.info("Testing: \(testName)")
 
         let sessionManager = SessionManager.shared
-        await sessionManager.startSession(taskName: "Health Score Test")
+        sessionManager.startSession(taskName: "Health Score Test")
 
         // Wait for health score to stabilize
         try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
@@ -515,7 +515,7 @@ class PerformanceValidator {
             sessionManager.currentPerformanceMetrics
         }
 
-        await sessionManager.endSession()
+        sessionManager.endSession()
 
         // Health score should be reasonable for a simple test session
         let result = PerformanceTestResult(
@@ -537,7 +537,7 @@ class PerformanceValidator {
         logger.info("Testing: \(testName)")
 
         let sessionManager = SessionManager.shared
-        await sessionManager.startSession(taskName: "Performance Threshold Test")
+        sessionManager.startSession(taskName: "Performance Threshold Test")
 
         // Collect metrics for analysis
         var metrics: [SessionPerformanceMetrics] = []
@@ -552,7 +552,7 @@ class PerformanceValidator {
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
 
-        await sessionManager.endSession()
+        sessionManager.endSession()
 
         guard !metrics.isEmpty else {
             testResults.append(PerformanceTestResult(
@@ -614,7 +614,7 @@ class PerformanceValidator {
 
         do {
             // Start all systems simultaneously
-            await sessionManager.startSession(taskName: "Concurrent Test")
+            sessionManager.startSession(taskName: "Concurrent Test")
             try await detectorFuser.startFusion()
             try await ocrDetector.startDetection()
 
@@ -632,7 +632,7 @@ class PerformanceValidator {
             await MainActor.run {
                 detectorFuser.stopFusion()
             }
-            await sessionManager.endSession()
+            sessionManager.endSession()
 
             let cpuIncrease = peak.cpuPercent - baseline.cpuPercent
             let memoryIncrease = peak.memoryMB - baseline.memoryMB
@@ -668,7 +668,7 @@ class PerformanceValidator {
         logger.info("Testing: \(testName)")
 
         let sessionManager = SessionManager.shared
-        await sessionManager.startSession(taskName: "Long Running Test")
+        sessionManager.startSession(taskName: "Long Running Test")
 
         let startTime = Date()
         var memoryMeasurements: [Double] = []
@@ -684,7 +684,7 @@ class PerformanceValidator {
             try? await Task.sleep(nanoseconds: 60_000_000_000) // 1 minute
         }
 
-        await sessionManager.endSession()
+        sessionManager.endSession()
 
         guard !memoryMeasurements.isEmpty else {
             testResults.append(PerformanceTestResult(
@@ -730,9 +730,9 @@ class PerformanceValidator {
         // Rapidly switch between tasks for 60 seconds
         while Date().timeIntervalSince(startTime) < 60 {
             let task = tasks[switchCount % tasks.count]
-            await sessionManager.startSession(taskName: task)
+            sessionManager.startSession(taskName: task)
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-            await sessionManager.endSession()
+            sessionManager.endSession()
             switchCount += 1
         }
 

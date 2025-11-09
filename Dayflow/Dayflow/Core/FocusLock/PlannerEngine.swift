@@ -1811,7 +1811,7 @@ class ReschedulingEngine {
     }
 }
 
-class CalendarManager {
+class CalendarManager: @unchecked Sendable {
     private let eventStore = EKEventStore()
     private let logger = Logger(subsystem: "FocusLock", category: "CalendarManager")
     private var calendars: [EKCalendar] = []
@@ -2338,31 +2338,32 @@ class TaskImporter {
         query.predicate = NSPredicate(format: "kMDItemContentType == 'com.apple.mail.email' && (kMDItemTextContent CONTAINS[cd] 'TODO' || kMDItemTextContent CONTAINS[cd] 'FIXME' || kMDItemTextContent CONTAINS[cd] 'ACTION')")
         
         query.searchScopes = [NSMetadataQueryUserHomeScope]
-        
+
         // Wait for query to complete using async/await
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+
             var observer: NSObjectProtocol?
-            
             observer = NotificationCenter.default.addObserver(
                 forName: .NSMetadataQueryDidFinishGathering,
                 object: query,
                 queue: .main
             ) { _ in
                 query.stop()
-                if let observer = observer {
-                    NotificationCenter.default.removeObserver(observer)
+                if let obs = observer {
+                    NotificationCenter.default.removeObserver(obs)
+                    observer = nil
                 }
                 continuation.resume()
             }
-            
+
             query.start()
-            
+
             // Timeout after 10 seconds
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
                 query.stop()
-                if let observer = observer {
-                    NotificationCenter.default.removeObserver(observer)
+                if let obs = observer {
+                    NotificationCenter.default.removeObserver(obs)
                 }
                 continuation.resume()
             }

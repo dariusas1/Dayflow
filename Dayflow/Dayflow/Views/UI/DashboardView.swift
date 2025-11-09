@@ -660,7 +660,7 @@ struct MiniInsightCard: View {
     let onTap: () -> Void
 
     var body: some View {
-        UnifiedCard(padding: 12, cornerRadius: 10, hoverEnabled: true) {
+        UnifiedCard(style: .interactive, size: .small, padding: 12) {
             HStack(spacing: 8) {
                 Image(systemName: insight.icon)
                     .font(.system(size: 16))
@@ -670,12 +670,12 @@ struct MiniInsightCard: View {
                     Text(insight.title)
                         .font(.custom("Nunito", size: 14))
                         .fontWeight(.medium)
-                        .foregroundColor(.black)
+                        .foregroundColor(DesignColors.primaryText)
                         .lineLimit(1)
 
                     Text(insight.description)
                         .font(.custom("Nunito", size: 11))
-                        .foregroundColor(.gray)
+                        .foregroundColor(DesignColors.secondaryText)
                         .lineLimit(2)
                 }
 
@@ -729,7 +729,7 @@ struct MiniRecommendationCard: View {
     let recommendation: Recommendation
 
     var body: some View {
-        UnifiedCard(padding: 12, cornerRadius: 10, hoverEnabled: true) {
+        UnifiedCard(style: .interactive, size: .small, padding: 12) {
             HStack(spacing: 10) {
                 Image(systemName: recommendation.category.icon)
                     .font(.system(size: 16))
@@ -739,12 +739,12 @@ struct MiniRecommendationCard: View {
                     Text(recommendation.title)
                         .font(.custom("Nunito", size: 14))
                         .fontWeight(.medium)
-                        .foregroundColor(.black)
+                        .foregroundColor(DesignColors.primaryText)
                         .lineLimit(1)
 
                     Text(recommendation.description)
                         .font(.custom("Nunito", size: 12))
-                        .foregroundColor(.gray)
+                        .foregroundColor(DesignColors.secondaryText)
                         .lineLimit(1)
                 }
 
@@ -831,58 +831,59 @@ struct TrendSummaryCard: View {
     let trend: TrendData
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(trend.metricName)
-                    .font(.custom("Nunito", size: 18))
-                    .fontWeight(.semibold)
-                    .foregroundColor(.black)
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Image(systemName: trend.trendDirection.arrow)
-                        .foregroundColor(trend.trendDirection.color)
-                    Text(String(format: "%.1f%%", trend.trendStrength * 100))
-                        .font(.custom("Nunito", size: 16))
-                        .fontWeight(.medium)
-                        .foregroundColor(trend.trendDirection.color)
-                }
-            }
-
-            Text(trend.metricName)
-                .font(.custom("Nunito", size: 14))
-                .foregroundColor(.gray)
-
-            // Mini chart
-            MiniTrendView(trend: trend)
-                .frame(height: 80)
-
-            if !trend.insights.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Key Insights")
-                        .font(.custom("Nunito", size: 14))
-                        .fontWeight(.medium)
+        UnifiedCard(style: .standard) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text(trend.metricName)
+                        .font(.custom("Nunito", size: 18))
+                        .fontWeight(.semibold)
                         .foregroundColor(.black)
 
-                    ForEach(trend.insights.prefix(2), id: \.id) { insight in
-                        HStack {
-                            Circle()
-                                .fill(trend.trendDirection.color)
-                                .frame(width: 4, height: 4)
+                    Spacer()
 
-                            Text(insight.description)
-                                .font(.custom("Nunito", size: 12))
-                                .foregroundColor(.gray)
-                                .lineLimit(2)
+                    HStack(spacing: 4) {
+                        Image(systemName: trend.trendDirection.arrow)
+                            .foregroundColor(trend.trendDirection.color)
+                        Text(String(format: "%.1f%%", trend.trendStrength * 100))
+                            .font(.custom("Nunito", size: 16))
+                            .fontWeight(.medium)
+                            .foregroundColor(trend.trendDirection.color)
+                    }
+                }
 
-                            Spacer()
+                Text(trend.metricName)
+                    .font(.custom("Nunito", size: 14))
+                    .foregroundColor(.gray)
+
+                // Mini chart
+                MiniTrendView(trend: trend)
+                    .frame(height: 80)
+
+                if !trend.insights.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Key Insights")
+                            .font(.custom("Nunito", size: 14))
+                            .fontWeight(.medium)
+                            .foregroundColor(.black)
+
+                        ForEach(trend.insights.prefix(2), id: \.id) { insight in
+                            HStack {
+                                Circle()
+                                    .fill(trend.trendDirection.color)
+                                    .frame(width: 4, height: 4)
+
+                                Text(insight.description)
+                                    .font(.custom("Nunito", size: 12))
+                                    .foregroundColor(.gray)
+                                    .lineLimit(2)
+
+                                Spacer()
+                            }
                         }
                     }
                 }
             }
         }
-        .unifiedCardStyle()
     }
 }
 
@@ -1102,7 +1103,6 @@ struct DashboardWidgetView: View {
                 }
             }
         }
-        .unifiedCardStyle(padding: 20, cornerRadius: 16, shadowRadius: 4, shadowOffset: CGSize(width: 0, height: 4))
         .frame(maxWidth: .infinity, minHeight: widget.size.height)
     }
 }

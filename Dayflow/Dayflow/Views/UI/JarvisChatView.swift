@@ -299,17 +299,20 @@ struct MessageBubble: View {
                     .foregroundColor(message.role == .user ? .white : DesignColors.primaryText)
                     .padding(.horizontal, DesignSpacing.md)
                     .padding(.vertical, DesignSpacing.sm)
-                    .background(
-                        message.role == .user
-                            ? LinearGradient(
-                                gradient: Gradient(colors: [
-                                    DesignColors.primaryOrange,
-                                    DesignColors.primaryOrange.opacity(0.8)
-                                ]),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                            : DesignColors.glassBackground
+                    .background(message.role == .user ?
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                DesignColors.primaryOrange,
+                                DesignColors.primaryOrange.opacity(0.8)
+                            ]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ) :
+                        LinearGradient(
+                            gradient: Gradient(colors: [DesignColors.glassBackground, DesignColors.glassBackground]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
                     )
                     .cornerRadius(DesignRadius.medium)
 

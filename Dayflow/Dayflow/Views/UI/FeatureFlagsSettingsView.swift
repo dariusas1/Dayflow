@@ -930,7 +930,7 @@ struct JournalEntryCard: View {
     let entry: DailyJournalView.JournalEntry
 
     var body: some View {
-        UnifiedCard(padding: 16, cornerRadius: 12, hoverEnabled: true) {
+        UnifiedCard(style: .standard) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text(entry.mood.emoji)

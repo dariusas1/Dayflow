@@ -201,9 +201,8 @@ class KillSwitchManager: ObservableObject {
 
     // MARK: - Cleanup
 
-    deinit {
-        unregisterGlobalHotkey()
-    }
+    // Note: Deinit cleanup removed due to MainActor isolation constraints
+    // The OS will clean up event handlers when the app terminates
 }
 
 // MARK: - String Extension for FourCharCode

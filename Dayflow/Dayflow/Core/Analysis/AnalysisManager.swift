@@ -23,7 +23,7 @@ protocol AnalysisManaging {
 }
 
 
-final class AnalysisManager: AnalysisManaging {
+final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
     static let shared = AnalysisManager()
     private let videoProcessingService: VideoProcessingService
     

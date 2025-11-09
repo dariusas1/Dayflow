@@ -61,11 +61,10 @@ struct LoadingState: View {
             .onDisappear {
                 stopAnimation()
             }
-            .accessibleElement(children: .ignore)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Loading indicator")
             .accessibilityValue(message ?? "Loading...")
             .accessibilityAddTraits(.updatesFrequently)
-            .announcementChange("Loading started")
         }
     }
 
@@ -290,19 +289,19 @@ struct PageTransition<Content: View>: View {
         .onChange(of: isLoading) { _, newValue in
             if newValue {
                 // Show loading state
-                withAnimation(DesignAnimation.standard) {
+                withAnimation(.easeInOut(duration: DesignAnimation.standard)) {
                     contentOpacity = 0.3
                     loadingOpacity = 1.0
                 }
             } else {
                 // Hide loading state
-                withAnimation(DesignAnimation.standard) {
+                withAnimation(.easeInOut(duration: DesignAnimation.standard)) {
                     contentOpacity = 1.0
                     loadingOpacity = 0.0
                 }
             }
         }
-        .animation(DesignAnimation.standard, value: isLoading)
+        .animation(.easeInOut(duration: DesignAnimation.standard), value: isLoading)
     }
 }
 
@@ -335,9 +334,8 @@ struct QuickLoader: View {
                     rotation = 360
                 }
             }
-            .accessibleElement(children: .ignore)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel("Loading indicator")
-            .accessibilityAddTraits(.updatesFrequently)
     }
 }
 
@@ -367,9 +365,8 @@ struct LoadingDots: View {
                 animationPhase = 1.0
             }
         }
-        .accessibleElement(children: .combine)
+        .accessibilityElement(children: .combine)
         .accessibilityLabel("Loading animation with \(count) dots")
-        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func scale(for index: Int) -> CGFloat {

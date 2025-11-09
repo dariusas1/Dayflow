@@ -275,12 +275,9 @@ class ProactiveCoachEngine: ObservableObject {
     
     private func checkEnergyMismatch() async {
         guard let session = currentFocusSession else { return }
-        
-        // Get current energy level from coaching context
-        let coachingContext = JarvisCoachPersona.shared.coachingContext
-        
+
         // If in Anchor Block but energy is low
-        if session.mode == .anchor && coachingContext.userEnergyLevel < 5 {
+        if session.mode == .anchor && JarvisCoachPersona.shared.coachingContext.userEnergyLevel < 5 {
             let hasActiveAlert = activeAlerts.contains { 
                 $0.alertType == .energyMismatch && !$0.isDismissed
             }
@@ -289,9 +286,9 @@ class ProactiveCoachEngine: ObservableObject {
             
             let alert = ProactiveAlert(
                 alertType: .energyMismatch,
-                message: "You're in an Anchor Block but your energy is low (\(String(format: "%.1f", coachingContext.userEnergyLevel))/10). Consider switching to Triage Block or taking a break.",
+                message: "You're in an Anchor Block but your energy is low (\(String(format: "%.1f", JarvisCoachPersona.shared.coachingContext.userEnergyLevel))/10). Consider switching to Triage Block or taking a break.",
                 severity: .warning,
-                context: "Energy: \(coachingContext.userEnergyLevel)/10, Mode: Anchor"
+                context: "Energy: \(JarvisCoachPersona.shared.coachingContext.userEnergyLevel)/10, Mode: Anchor"
             )
             
             saveAlert(alert)

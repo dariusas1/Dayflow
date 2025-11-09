@@ -364,10 +364,10 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         
         config.prepareDatabase { db in
             if !db.configuration.readonly {
-                try db.execute(sql: "PRAGMA journal_mode = WAL")
-                try db.execute(sql: "PRAGMA synchronous = NORMAL")
+                try? db.execute(sql: "PRAGMA journal_mode = WAL")
+                try? db.execute(sql: "PRAGMA synchronous = NORMAL")
             }
-            try db.execute(sql: "PRAGMA busy_timeout = 5000")
+            try? db.execute(sql: "PRAGMA busy_timeout = 5000")
         }
         
         // Track connection pool usage for monitoring
@@ -1054,7 +1054,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
             // Calculate the day string using 4 AM boundary rules
             let (dayString, _, _) = startDate.getDayInfoFor4AMBoundary()
 
-            try db.execute(sql: """
+            try? db.execute(sql: """
                 INSERT INTO timeline_cards(
                     batch_id, start, end, start_ts, end_ts, day, title,
                     summary, category, subcategory, detailed_summary, metadata
@@ -1269,8 +1269,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 )
             }
         }
-        let result = cards ?? []
-        return result
+        return cards ?? []
     }
 
     func fetchRecentTimelineCardsForDebug(limit: Int) -> [TimelineCardDebugEntry] {
@@ -1457,7 +1456,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
             }
 
             // Soft delete existing cards in the range using timestamp columns
-            try db.execute(sql: """
+            try? db.execute(sql: """
                 UPDATE timeline_cards
                 SET is_deleted = 1
                 WHERE ((start_ts < ? AND end_ts > ?)

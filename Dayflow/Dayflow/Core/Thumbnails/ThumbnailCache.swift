@@ -9,7 +9,7 @@ import Foundation
 import AppKit
 import AVFoundation
 
-final class ThumbnailCache {
+final class ThumbnailCache: @unchecked Sendable {
     static let shared = ThumbnailCache()
 
     private let cache = NSCache<NSString, NSImage>()
