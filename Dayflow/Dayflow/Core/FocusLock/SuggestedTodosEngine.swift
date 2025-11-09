@@ -42,6 +42,11 @@ class SuggestedTodosEngine: ObservableObject {
     private var processingTimes: [TimeInterval] = []
     private var generationStats: GenerationStats
 
+    // Initialization state management
+    private var isInitialized = false
+    private var initializationTask: Task<Void, Never>?
+    private let initLock = NSLock()
+
     private init() throws {
         // Initialize performance stats
         generationStats = GenerationStats()
@@ -61,8 +66,42 @@ class SuggestedTodosEngine: ObservableObject {
         logger.info("SuggestedTodosEngine instance created (async initialization pending)")
     }
 
-    /// Complete async initialization - MUST be called before using the engine
+    /// Complete async initialization - idempotent and thread-safe
+    /// Can be called multiple times safely; only runs once
     public func completeInitialization() async {
+        // Fast path: already initialized
+        if isInitialized {
+            logger.debug("SuggestedTodosEngine already initialized, skipping")
+            return
+        }
+
+        // Check if initialization is in progress
+        initLock.lock()
+        defer { initLock.unlock() }
+
+        if isInitialized {
+            return
+        }
+
+        if let existingTask = initializationTask {
+            // Wait for existing initialization to complete
+            await existingTask.value
+            return
+        }
+
+        // Start new initialization task
+        let task = Task {
+            await performInitialization()
+            self.isInitialized = true
+        }
+        self.initializationTask = task
+
+        initLock.unlock()
+        await task.value
+        initLock.lock()
+    }
+
+    private func performInitialization() async {
         do {
             try await setupDatabaseAsync()
             logger.info("Database setup complete")
@@ -78,6 +117,11 @@ class SuggestedTodosEngine: ObservableObject {
         startBackgroundProcessing()
 
         logger.info("SuggestedTodosEngine initialization complete")
+    }
+
+    /// Ensure initialized before using engine - call this in methods that need the engine ready
+    func ensureInitialized() async {
+        await SuggestedTodosEngine.shared.completeInitialization()
     }
 
     // MARK: - Public Interface
@@ -229,49 +273,53 @@ class SuggestedTodosEngine: ObservableObject {
 
     // MARK: - Async Initialization Methods
 
+    private func setupDatabaseSchema(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS suggested_todos (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT,
+                priority TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source_content TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_activity_id TEXT,
+                context_tags TEXT, -- JSON array
+                estimated_duration INTEGER,
+                deadline INTEGER,
+                created_at INTEGER NOT NULL,
+                last_shown INTEGER,
+                user_feedback_score REAL,
+                user_feedback_timestamp INTEGER,
+                user_feedback_comment TEXT,
+                is_accepted INTEGER,
+                is_dismissed INTEGER NOT NULL DEFAULT 0,
+                dismiss_reason TEXT,
+                learning_score REAL NOT NULL DEFAULT 0.5,
+                urgency_score REAL NOT NULL,
+                relevance_score REAL NOT NULL
+            )
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_suggested_todos_created_at
+            ON suggested_todos(created_at)
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_suggested_todos_priority
+            ON suggested_todos(priority)
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_suggested_todos_dismissed
+            ON suggested_todos(is_dismissed)
+        """)
+    }
+
     private func setupDatabaseAsync() async throws {
-        try await databaseQueue.write { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS suggested_todos (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    priority TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    source_content TEXT NOT NULL,
-                    source_type TEXT NOT NULL,
-                    source_activity_id TEXT,
-                    context_tags TEXT, -- JSON array
-                    estimated_duration INTEGER,
-                    deadline INTEGER,
-                    created_at INTEGER NOT NULL,
-                    last_shown INTEGER,
-                    user_feedback_score REAL,
-                    user_feedback_timestamp INTEGER,
-                    user_feedback_comment TEXT,
-                    is_accepted INTEGER,
-                    is_dismissed INTEGER NOT NULL DEFAULT 0,
-                    dismiss_reason TEXT,
-                    learning_score REAL NOT NULL DEFAULT 0.5,
-                    urgency_score REAL NOT NULL,
-                    relevance_score REAL NOT NULL
-                )
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_created_at
-                ON suggested_todos(created_at)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_priority
-                ON suggested_todos(priority)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_dismissed
-                ON suggested_todos(is_dismissed)
-            """)
+        try await databaseQueue.write { [weak self] db in
+            try self?.setupDatabaseSchema(db)
         }
     }
 
@@ -282,10 +330,17 @@ class SuggestedTodosEngine: ObservableObject {
                 .appendingPathComponent("FocusLock")
                 .appendingPathComponent("UserPreferences.json")
 
-            if let data = try? Data(contentsOf: prefsPath) {
-                userPreferences = try JSONDecoder().decode(UserPreferenceProfile.self, from: data)
-                logger.info("Loaded user preferences from disk")
+            // Check if file exists before attempting to load
+            guard FileManager.default.fileExists(atPath: prefsPath.path) else {
+                logger.debug("User preferences file does not exist yet. Using default.")
+                userPreferences = UserPreferenceProfile()
+                return
             }
+
+            // Load file with proper error handling
+            let data = try Data(contentsOf: prefsPath)
+            userPreferences = try JSONDecoder().decode(UserPreferenceProfile.self, from: data)
+            logger.info("Loaded user preferences from disk")
         } catch {
             logger.error("Failed to load user preferences: \(error.localizedDescription)")
             userPreferences = UserPreferenceProfile()
@@ -312,94 +367,7 @@ class SuggestedTodosEngine: ObservableObject {
         }
     }
 
-    // MARK: - Original Synchronous Methods (Deprecated - use async versions)
-
-    private func setupDatabase() throws {
-        try databaseQueue.write { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS suggested_todos (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    priority TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    source_content TEXT NOT NULL,
-                    source_type TEXT NOT NULL,
-                    source_activity_id TEXT,
-                    context_tags TEXT, -- JSON array
-                    estimated_duration INTEGER,
-                    deadline INTEGER,
-                    created_at INTEGER NOT NULL,
-                    last_shown INTEGER,
-                    user_feedback_score REAL,
-                    user_feedback_timestamp INTEGER,
-                    user_feedback_comment TEXT,
-                    is_accepted INTEGER,
-                    is_dismissed INTEGER NOT NULL DEFAULT 0,
-                    dismiss_reason TEXT,
-                    learning_score REAL NOT NULL DEFAULT 0.5,
-                    urgency_score REAL NOT NULL,
-                    relevance_score REAL NOT NULL
-                )
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_created_at
-                ON suggested_todos(created_at)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_priority
-                ON suggested_todos(priority)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_suggested_todos_dismissed
-                ON suggested_todos(is_dismissed)
-            """)
-        }
-    }
-
-    private func loadUserPreferences() {
-        do {
-            let prefsPath = try FileManager.default
-                .url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-                .appendingPathComponent("FocusLock")
-                .appendingPathComponent("UserPreferences.json")
-
-            if let data = try? Data(contentsOf: prefsPath) {
-                userPreferences = try JSONDecoder().decode(UserPreferenceProfile.self, from: data)
-                logger.info("Loaded user preferences from disk")
-            }
-        } catch {
-            logger.error("Failed to load user preferences: \(error.localizedDescription)")
-            userPreferences = UserPreferenceProfile()
-        }
-    }
-
-    private func loadSuggestionHistory() {
-        Task {
-            let suggestions = await getSuggestions(limit: 1000)
-            suggestionHistory = suggestions
-            logger.info("Loaded \(suggestions.count) suggestions from database")
-        }
-    }
-
-    private func initializeNLPComponents() {
-        Task {
-            do {
-                // Initialize NLTagger for NLP processing
-                nlpTagger = NLTagger(tagSchemes: [.tokenType, .nameType, .lexicalClass])
-                logger.info("Successfully initialized NLTagger")
-
-                // Initialize action classifier if available
-                try loadActionClassifier()
-
-            } catch {
-                logger.error("Failed to initialize NLP components: \(error.localizedDescription)")
-            }
-        }
-    }
+    // MARK: - Private Database Schema Setup (shared logic)
 
     private func loadActionClassifier() throws {
         // In a production environment, you would load a custom Core ML model

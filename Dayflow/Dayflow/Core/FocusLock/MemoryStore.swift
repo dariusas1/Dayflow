@@ -336,6 +336,11 @@ actor HybridMemoryStore: MemoryStore {
     private let embeddingGenerator = VectorEmbeddingGenerator()
     private let logger = Logger(subsystem: "FocusLock", category: "HybridMemoryStore")
 
+    // Initialization state management
+    private var isInitialized = false
+    private var initializationTask: Task<Void, Never>?
+    private let initLock = NSLock()
+
     // Performance tracking
     private var embeddingGenerationTimes: [TimeInterval] = []
     private var searchTimes: [TimeInterval] = []
@@ -356,9 +361,42 @@ actor HybridMemoryStore: MemoryStore {
         // setupDatabase will be called in completeInitialization() async method
     }
 
-    // Public method to complete async initialization
-    // MUST be called before using the store
+    // Public method to complete async initialization - idempotent and thread-safe
+    // Can be called multiple times safely; only runs once
     public func completeInitialization() async {
+        // Fast path: already initialized
+        if isInitialized {
+            logger.debug("MemoryStore already initialized, skipping")
+            return
+        }
+
+        // Check if initialization is in progress
+        initLock.lock()
+        defer { initLock.unlock() }
+
+        if isInitialized {
+            return
+        }
+
+        if let existingTask = initializationTask {
+            // Wait for existing initialization to complete
+            await existingTask.value
+            return
+        }
+
+        // Start new initialization task
+        let task = Task {
+            await performInitialization()
+            self.isInitialized = true
+        }
+        self.initializationTask = task
+
+        initLock.unlock()
+        await task.value
+        initLock.lock()
+    }
+
+    private func performInitialization() async {
         // Setup database asynchronously (non-blocking)
         do {
             try await setupDatabaseAsync()
@@ -376,58 +414,47 @@ actor HybridMemoryStore: MemoryStore {
         logger.info("MemoryStore initialization complete")
     }
 
+    // Ensure initialized before using database - call this in methods that need the store ready
+    nonisolated func ensureInitialized() async {
+        await HybridMemoryStore.shared.completeInitialization()
+    }
+
+    // Shared database schema setup logic to eliminate duplication
+    nonisolated private func setupDatabaseSchema(_ db: Database) throws {
+        try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS memory_items (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                embeddings BLOB,
+                metadata TEXT,
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
+            ON memory_items(timestamp)
+        """)
+
+        try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_memory_items_source
+            ON memory_items(source)
+        """)
+    }
+
     nonisolated private func setupDatabase(queue: DatabaseQueue) throws {
         try queue.write { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    embeddings BLOB,
-                    metadata TEXT,
-                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-                )
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
-                ON memory_items(timestamp)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_source
-                ON memory_items(source)
-            """)
+            try setupDatabaseSchema(db)
         }
     }
 
     // Async-safe version for use in completeInitialization()
     private func setupDatabaseAsync() async throws {
-        try await databaseQueue.write { db in
-            try db.execute(sql: """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    timestamp INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    embeddings BLOB,
-                    metadata TEXT,
-                    created_at INTEGER DEFAULT (strftime('%s', 'now')),
-                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-                )
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_timestamp
-                ON memory_items(timestamp)
-            """)
-
-            try db.execute(sql: """
-                CREATE INDEX IF NOT EXISTS idx_memory_items_source
-                ON memory_items(source)
-            """)
+        try await databaseQueue.write { [weak self] db in
+            try self?.setupDatabaseSchema(db)
         }
     }
 
