@@ -1,0 +1,50 @@
+# Workflow Status Template
+# This tracks progress through BMM methodology phases
+# Phase 3/4 (Implementation) is tracked separately in sprint-status.yaml
+
+# generated: 2025-11-12T17:10:11.552Z
+# project: FocusLock
+# project_type: software
+# selected_track: method
+# field_type: brownfield
+# workflow_path: method-brownfield.yaml
+
+# STATUS DEFINITIONS:
+# ==================
+# Initial Status (before completion):
+#   - required: Must be completed to progress
+#   - optional: Can be completed but not required
+#   - recommended: Strongly suggested but not required
+#   - conditional: Required only if certain conditions met (e.g., if_has_ui)
+#
+# Completion Status:
+#   - {file-path}: File created/found (e.g., "docs/product-brief.md")
+#   - skipped: Optional/conditional workflow that was skipped
+
+generated: "2025-11-12T17:10:11.552Z"
+project: "FocusLock"
+project_type: "software"
+selected_track: "method"
+field_type: "brownfield"
+workflow_path: "method-brownfield.yaml"
+
+workflow_status: "  # Phase 0: Discovery (Optional)
+  brainstorm-project: optional  # agent: analyst
+
+  # Phase 1: Prerequisites
+  document-project: docs/project-overview.md  # agent: analyst - COMPLETED
+
+  # Phase 2: Planning
+  prd: docs/PRD.md  # agent: pm - COMPLETED
+  validate-prd: optional  # agent: pm
+  create-design: docs/ux-design-specification.md  # agent: ux-designer - COMPLETED
+
+  # Phase 3: Solutioning
+  create-architecture: docs/architecture.md  # agent: architect - COMPLETED
+  validate-architecture: optional  # agent: architect
+  solutioning-gate-check: docs/solutioning-gate-check-report.md  # agent: architect - COMPLETED
+
+  # Phase 4: Implementation
+  sprint-planning: required  # agent: sm
+  create-epics-and-stories: docs/epics.md  # agent: pm - COMPLETED
+"

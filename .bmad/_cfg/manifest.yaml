@@ -1,0 +1,18 @@
+installation:
+  version: 6.0.0-alpha.8
+  installDate: '2025-11-12T17:10:11.565Z'
+  lastUpdated: '2025-11-12T17:10:11.565Z'
+modules:
+  - core
+  - bmb
+  - bmm
+  - cis
+ides:
+  - claude-code
+  - codex
+  - cursor
+  - opencode
+  - windsurf
+  - cline
+  - kilo
+  - roo

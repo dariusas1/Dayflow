@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusLock - Living Interface</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:wght@400;600&family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --warm-white: #FFFAF5;
+            --living-orange: #FF8A2B;
+            --breathing-orange: #FFB366;
+            --deep-orange: #E67E22;
+            --soft-shadow: rgba(255, 138, 43, 0.15);
+            --warm-gray: #2C2C2C;
+            --muted-gray: #666666;
+            --light-gray: #F5F5F5;
+            --memory-bubble: rgba(255, 184, 102, 0.1);
+            --flow-state: linear-gradient(135deg, #FF8A2B, #FFB366, #FFD4A3);
+            --organic-radius: 24px;
+            --breathing-duration: 4s;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--warm-white);
+            color: var(--warm-gray);
+            overflow-x: hidden;
+            position: relative;
+            min-height: 100vh;
+        }
+
+        /* Breathing Background */
+        .living-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(ellipse at 20% 30%, var(--memory-bubble) 0%, transparent 50%),
+                        radial-gradient(ellipse at 80% 70%, rgba(255, 138, 43, 0.08) 0%, transparent 50%),
+                        radial-gradient(ellipse at 40% 80%, rgba(255, 179, 102, 0.06) 0%, transparent 50%);
+            animation: breathe var(--breathing-duration) ease-in-out infinite;
+            z-index: -1;
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); opacity: 0.7; }
+            50% { transform: scale(1.05); opacity: 1; }
+        }
+
+        /* Memory Bubbles */
+        .memory-bubble {
+            position: absolute;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--breathing-orange), transparent);
+            opacity: 0;
+            animation: float-bubble 8s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        .memory-bubble.active {
+            opacity: 0.3;
+        }
+
+        @keyframes float-bubble {
+            0% { transform: translateY(100vh) scale(0); }
+            20% { transform: translateY(70vh) scale(1); }
+            80% { transform: translateY(30vh) scale(1); }
+            100% { transform: translateY(0) scale(0); }
+        }
+
+        /* Main Container */
+        .app-container {
+            display: flex;
+            height: 100vh;
+            position: relative;
+        }
+
+        /* Contextual Sidebar */
+        .contextual-sidebar {
+            width: 80px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 138, 43, 0.1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 0;
+            gap: 16px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .contextual-sidebar::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: 50%;
+            width: 2px;
+            height: 200%;
+            background: linear-gradient(to bottom, transparent, var(--living-orange), transparent);
+            animation: pulse-flow 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse-flow {
+            0%, 100% { opacity: 0.3; transform: translateX(-50%) translateY(0); }
+            50% { opacity: 0.8; transform: translateX(-50%) translateY(20px); }
+        }
+
+        .nav-item {
+            width: 48px;
+            height: 48px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            background: transparent;
+            border: none;
+            color: var(--muted-gray);
+        }
+
+        .nav-item:hover {
+            background: var(--memory-bubble);
+            transform: scale(1.1);
+            color: var(--living-orange);
+        }
+
+        .nav-item.active {
+            background: var(--flow-state);
+            color: white;
+            box-shadow: 0 8px 32px var(--soft-shadow);
+        }
+
+        .nav-item.active::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            border-radius: 20px;
+            background: var(--flow-state);
+            opacity: 0.3;
+            z-index: -1;
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-ring {
+            0%, 100% { transform: scale(1); opacity: 0.3; }
+            50% { transform: scale(1.1); opacity: 0.1; }
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Flow State Header */
+        .flow-header {
+            padding: 32px 48px 24px;
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 138, 43, 0.08);
+            position: relative;
+        }
+
+        .flow-title {
+            font-family: 'Instrument Serif', serif;
+            font-size: 42px;
+            font-weight: 600;
+            color: var(--warm-gray);
+            margin-bottom: 8px;
+            position: relative;
+            display: inline-block;
+        }
+
+        .flow-title::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 0;
+            width: 0;
+            height: 3px;
+            background: var(--flow-state);
+            border-radius: 2px;
+            animation: title-underline 2s ease-out forwards;
+        }
+
+        @keyframes title-underline {
+            to { width: 100%; }
+        }
+
+        .flow-subtitle {
+            color: var(--muted-gray);
+            font-size: 16px;
+            font-weight: 400;
+            opacity: 0;
+            animation: fade-in-up 0.6s ease-out 0.3s forwards;
+        }
+
+        @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Contextual Spaces */
+        .contextual-spaces {
+            flex: 1;
+            padding: 32px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .space-card {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-radius: var(--organic-radius);
+            padding: 24px;
+            border: 1px solid rgba(255, 138, 43, 0.1);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            transform: translateY(20px);
+            opacity: 0;
+            animation: card-emerge 0.6s ease-out forwards;
+        }
+
+        .space-card:nth-child(1) { animation-delay: 0.1s; }
+        .space-card:nth-child(2) { animation-delay: 0.2s; }
+        .space-card:nth-child(3) { animation-delay: 0.3s; }
+        .space-card:nth-child(4) { animation-delay: 0.4s; }
+
+        @keyframes card-emerge {
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .space-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: var(--flow-state);
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.3s ease;
+        }
+
+        .space-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .space-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 60px var(--soft-shadow);
+            border-color: var(--living-orange);
+        }
+
+        .space-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 16px;
+            background: var(--flow-state);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            font-size: 24px;
+            color: white;
+            position: relative;
+        }
+
+        .space-icon::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            border-radius: 18px;
+            background: var(--flow-state);
+            opacity: 0.2;
+            z-index: -1;
+            animation: icon-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes icon-pulse {
+            0%, 100% { transform: scale(1); opacity: 0.2; }
+            50% { transform: scale(1.05); opacity: 0.1; }
+        }
+
+        .space-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--warm-gray);
+            margin-bottom: 8px;
+        }
+
+        .space-description {
+            color: var(--muted-gray);
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 16px;
+        }
+
+        .space-metrics {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .metric {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--light-gray);
+            border-radius: 20px;
+            font-size: 12px;
+            color: var(--muted-gray);
+            transition: all 0.2s ease;
+        }
+
+        .metric:hover {
+            background: var(--memory-bubble);
+            color: var(--living-orange);
+            transform: scale(1.05);
+        }
+
+        /* Voice Interaction Zone */
+        .voice-zone {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: var(--flow-state);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 8px 32px var(--soft-shadow);
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+
+        .voice-zone:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 48px var(--soft-shadow);
+        }
+
+        .voice-zone.listening {
+            animation: voice-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes voice-pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 8px 32px var(--soft-shadow); }
+            50% { transform: scale(1.15); box-shadow: 0 16px 64px var(--soft-shadow); }
+        }
+
+        .voice-icon {
+            width: 24px;
+            height: 24px;
+            background: white;
+            border-radius: 50%;
+            position: relative;
+        }
+
+        .voice-waves {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            border: 2px solid white;
+            opacity: 0;
+            animation: wave-expand 2s ease-out infinite;
+        }
+
+        .voice-zone.listening .voice-waves {
+            opacity: 1;
+        }
+
+        @keyframes wave-expand {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+        }
+
+        /* Temporal Navigation */
+        .temporal-nav {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 30px;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 8px 32px var(--soft-shadow);
+            border: 1px solid rgba(255, 138, 43, 0.1);
+            z-index: 100;
+        }
+
+        .temporal-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: var(--light-gray);
+            color: var(--muted-gray);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .temporal-btn:hover {
+            background: var(--memory-bubble);
+            color: var(--living-orange);
+            transform: scale(1.1);
+        }
+
+        .temporal-display {
+            font-family: 'Instrument Serif', serif;
+            font-size: 16px;
+            color: var(--warm-gray);
+            min-width: 120px;
+            text-align: center;
+        }
+
+        /* Organic Data Visualization */
+        .organic-chart {
+            margin-top: 16px;
+            height: 80px;
+            position: relative;
+            overflow: hidden;
+            border-radius: 12px;
+            background: var(--light-gray);
+        }
+
+        .chart-flow {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 100%;
+            background: linear-gradient(to top, var(--living-orange), var(--breathing-orange));
+            clip-path: polygon(
+                0% 80%, 10% 70%, 20% 75%, 30% 60%, 40% 65%, 
+                50% 50%, 60% 55%, 70% 45%, 80% 50%, 90% 40%, 100% 45%, 
+                100% 100%, 0% 100%
+            );
+            animation: flow-breathe 4s ease-in-out infinite;
+        }
+
+        @keyframes flow-breathe {
+            0%, 100% { transform: scaleY(1); }
+            50% { transform: scaleY(1.1); }
+        }
+
+        /* Delightful Micro-interactions */
+        .delightful-hover {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .delightful-hover::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 184, 102, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s ease, height 0.6s ease;
+        }
+
+        .delightful-hover:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        /* Keyboard Power User Hints */
+        .keyboard-hint {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: rgba(44, 44, 44, 0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .keyboard-hint.visible {
+            opacity: 1;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .contextual-sidebar {
+                width: 60px;
+            }
+            
+            .contextual-spaces {
+                grid-template-columns: 1fr;
+                padding: 16px;
+            }
+            
+            .flow-header {
+                padding: 20px;
+            }
+            
+            .flow-title {
+                font-size: 32px;
+            }
+            
+            .temporal-nav {
+                bottom: 16px;
+                padding: 8px 16px;
+            }
+            
+            .voice-zone {
+                bottom: 80px;
+                right: 16px;
+                width: 56px;
+                height: 56px;
+            }
+        }
+
+        /* Loading States */
+        .loading-skeleton {
+            background: linear-gradient(90deg, var(--light-gray) 25%, var(--memory-bubble) 50%, var(--light-gray) 75%);
+            background-size: 200% 100%;
+            animation: loading-shimmer 1.5s ease-in-out infinite;
+        }
+
+        @keyframes loading-shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* Focus States */
+        .focus-ring {
+            outline: none;
+            position: relative;
+        }
+
+        .focus-ring::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            border-radius: inherit;
+            border: 2px solid var(--living-orange);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .focus-ring:focus::after {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <!-- Living Background -->
+    <div class="living-background"></div>
+    
+    <!-- Memory Bubbles -->
+    <div class="memory-bubble" style="width: 120px; height: 120px; left: 10%; animation-delay: 0s;"></div>
+    <div class="memory-bubble" style="width: 80px; height: 80px; left: 30%; animation-delay: 2s;"></div>
+    <div class="memory-bubble" style="width: 150px; height: 150px; left: 60%; animation-delay: 4s;"></div>
+    <div class="memory-bubble" style="width: 100px; height: 100px; left: 85%; animation-delay: 6s;"></div>
+
+    <!-- Main App Container -->
+    <div class="app-container">
+        <!-- Contextual Sidebar -->
+        <nav class="contextual-sidebar">
+            <button class="nav-item active" data-space="focus" title="Focus Space">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2L2 7L12 12L22 7L12 2Z"></path>
+                    <path d="M2 17L12 22L22 17"></path>
+                    <path d="M2 12L12 17L22 12"></path>
+                </svg>
+            </button>
+            <button class="nav-item" data-space="flow" title="Flow State">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M12 6v6l4 2"></path>
+                </svg>
+            </button>
+            <button class="nav-item" data-space="memory" title="Memory Palace">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                    <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                </svg>
+            </button>
+            <button class="nav-item" data-space="insights" title="Insights">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="20" x2="18" y2="10"></line>
+                    <line x1="12" y1="20" x2="12" y2="4"></line>
+                    <line x1="6" y1="20" x2="6" y2="14"></line>
+                </svg>
+            </button>
+            <button class="nav-item" data-space="jarvis" title="Jarvis AI">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"></path>
+                    <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"></path>
+                </svg>
+            </button>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Flow State Header -->
+            <header class="flow-header">
+                <h1 class="flow-title">Welcome back, Founder</h1>
+                <p class="flow-subtitle">Your focus flows like water. Let's make today remarkable.</p>
+            </header>
+
+            <!-- Contextual Spaces -->
+            <div class="contextual-spaces" id="spaces">
+                <!-- Focus Space Card -->
+                <div class="space-card delightful-hover" data-space-content="focus">
+                    <div class="space-icon">🎯</div>
+                    <h3 class="space-title">Deep Focus Session</h3>
+                    <p class="space-description">Enter a state of profound concentration. Your digital sanctuary awaits.</p>
+                    <div class="space-metrics">
+                        <span class="metric">⚡ 2h 45m streak</span>
+                        <span class="metric">🔥 92% focus</span>
+                        <span class="metric">💡 3 insights</span>
+                    </div>
+                    <div class="organic-chart">
+                        <div class="chart-flow"></div>
+                    </div>
+                </div>
+
+                <!-- Flow State Card -->
+                <div class="space-card delightful-hover" data-space-content="flow">
+                    <div class="space-icon">🌊</div>
+                    <h3 class="space-title">Flow State Visualization</h3>
+                    <p class="space-description">Watch your productivity patterns come alive in organic motion.</p>
+                    <div class="space-metrics">
+                        <span class="metric">📊 Peak at 10am</span>
+                        <span class="metric">🎯 4 deep tasks</span>
+                        <span class="metric">✨ Creative mode</span>
+                    </div>
+                    <div class="organic-chart">
+                        <div class="chart-flow"></div>
+                    </div>
+                </div>
+
+                <!-- Memory Palace Card -->
+                <div class="space-card delightful-hover" data-space-content="memory">
+                    <div class="space-icon">🏰</div>
+                    <h3 class="space-title">Memory Palace</h3>
+                    <p class="space-description">Your AI companion remembers everything. Context that understands you.</p>
+                    <div class="space-metrics">
+                        <span class="metric">🧠 1,247 memories</span>
+                        <span class="metric">🔗 89 connections</span>
+                        <span class="metric">💭 Active context</span>
+                    </div>
+                    <div class="organic-chart">
+                        <div class="chart-flow"></div>
+                    </div>
+                </div>
+
+                <!-- Insights Card -->
+                <div class="space-card delightful-hover" data-space-content="insights">
+                    <div class="space-icon">✨</div>
+                    <h3 class="space-title">Personal Insights</h3>
+                    <p class="space-description">Discover patterns in your work style. Optimize your genius zones.</p>
+                    <div class="space-metrics">
+                        <span class="metric">📈 +23% productivity</span>
+                        <span class="metric">⏰ Best: 9-11am</span>
+                        <span class="metric">🎯 Goal: 85% focus</span>
+                    </div>
+                    <div class="organic-chart">
+                        <div class="chart-flow"></div>
+                    </div>
+                </div>
+
+                <!-- Jarvis AI Card -->
+                <div class="space-card delightful-hover" data-space-content="jarvis">
+                    <div class="space-icon">🤖</div>
+                    <h3 class="space-title">Jarvis AI Companion</h3>
+                    <p class="space-description">Your intelligent partner understands context, anticipates needs, and learns your patterns.</p>
+                    <div class="space-metrics">
+                        <span class="metric">💬 Natural chat</span>
+                        <span class="metric">🧠 Context aware</span>
+                        <span class="metric">⚡ Instant help</span>
+                    </div>
+                    <div class="organic-chart">
+                        <div class="chart-flow"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Voice Interaction Zone -->
+    <div class="voice-zone" id="voiceZone">
+        <div class="voice-icon">
+            <div class="voice-waves"></div>
+        </div>
+    </div>
+
+    <!-- Temporal Navigation -->
+    <div class="temporal-nav">
+        <button class="temporal-btn" id="prevBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
+        </button>
+        <div class="temporal-display" id="temporalDisplay">Today</div>
+        <button class="temporal-btn" id="nextBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"></polyline>
+            </svg>
+        </button>
+    </div>
+
+    <!-- Keyboard Hint -->
+    <div class="keyboard-hint" id="keyboardHint">
+        Press ⌘K for quick actions • ⌘/ for voice • Space to focus
+    </div>
+
+    <script>
+        // Initialize the living interface
+        class FocusLockInterface {
+            constructor() {
+                this.currentSpace = 'focus';
+                this.isListening = false;
+                this.currentDate = new Date();
+                this.memoryBubbles = [];
+                this.init();
+            }
+
+            init() {
+                this.setupNavigation();
+                this.setupVoiceInteraction();
+                this.setupTemporalNavigation();
+                this.setupKeyboardShortcuts();
+                this.startBreathingLife();
+                this.initializeMemoryBubbles();
+                this.setupDelightfulInteractions();
+            }
+
+            setupNavigation() {
+                const navItems = document.querySelectorAll('.nav-item');
+                navItems.forEach(item => {
+                    item.addEventListener('click', () => {
+                        const space = item.dataset.space;
+                        this.switchToSpace(space);
+                    });
+                });
+            }
+
+            switchToSpace(space) {
+                // Update active nav
+                document.querySelectorAll('.nav-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                document.querySelector(`[data-space="${space}"]`).classList.add('active');
+
+                // Animate content transition
+                const cards = document.querySelectorAll('.space-card');
+                cards.forEach((card, index) => {
+                    card.style.animation = 'none';
+                    setTimeout(() => {
+                        card.style.animation = `card-emerge 0.6s ease-out forwards`;
+                        card.style.animationDelay = `${index * 0.1}s`;
+                    }, 10);
+                });
+
+                // Update header based on space
+                this.updateHeaderForSpace(space);
+                this.currentSpace = space;
+            }
+
+            updateHeaderForSpace(space) {
+                const title = document.querySelector('.flow-title');
+                const subtitle = document.querySelector('.flow-subtitle');
+                
+                const spaceContent = {
+                    focus: {
+                        title: "Deep Focus Mode",
+                        subtitle: "Eliminate distractions. Enter your flow state."
+                    },
+                    flow: {
+                        title: "Flow Patterns",
+                        subtitle: "Your productivity rhythm visualized in real-time."
+                    },
+                    memory: {
+                        title: "Memory Palace",
+                        subtitle: "Your AI companion remembers what matters."
+                    },
+                    insights: {
+                        title: "Personal Insights",
+                        subtitle: "Understand your patterns. Optimize your genius."
+                    },
+                    jarvis: {
+                        title: "Jarvis AI",
+                        subtitle: "Your intelligent companion is ready to help."
+                    }
+                };
+
+                const content = spaceContent[space];
+                title.style.animation = 'none';
+                subtitle.style.animation = 'none';
+                
+                setTimeout(() => {
+                    title.textContent = content.title;
+                    subtitle.textContent = content.subtitle;
+                    title.style.animation = 'title-underline 2s ease-out forwards';
+                    subtitle.style.animation = 'fade-in-up 0.6s ease-out 0.3s forwards';
+                }, 100);
+            }
+
+            setupVoiceInteraction() {
+                const voiceZone = document.getElementById('voiceZone');
+                voiceZone.addEventListener('click', () => {
+                    this.toggleVoiceListening();
+                });
+            }
+
+            toggleVoiceListening() {
+                const voiceZone = document.getElementById('voiceZone');
+                this.isListening = !this.isListening;
+                
+                if (this.isListening) {
+                    voiceZone.classList.add('listening');
+                    this.startVoiceRecognition();
+                } else {
+                    voiceZone.classList.remove('listening');
+                    this.stopVoiceRecognition();
+                }
+            }
+
+            startVoiceRecognition() {
+                // Simulate voice recognition
+                console.log('Voice recognition started...');
+                // In real implementation, would use Web Speech API
+                setTimeout(() => {
+                    if (this.isListening) {
+                        this.toggleVoiceListening();
+                        this.showVoiceFeedback("Command received: 'Start focus session'");
+                    }
+                }, 3000);
+            }
+
+            stopVoiceRecognition() {
+                console.log('Voice recognition stopped...');
+            }
+
+            showVoiceFeedback(message) {
+                // Create temporary feedback element
+                const feedback = document.createElement('div');
+                feedback.style.cssText = `
+                    position: fixed;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    background: rgba(44, 44, 44, 0.95);
+                    color: white;
+                    padding: 16px 24px;
+                    border-radius: 12px;
+                    font-size: 14px;
+                    z-index: 1000;
+                    animation: fade-in-up 0.3s ease-out;
+                `;
+                feedback.textContent = message;
+                document.body.appendChild(feedback);
+                
+                setTimeout(() => {
+                    feedback.style.animation = 'fade-in-up 0.3s ease-out reverse';
+                    setTimeout(() => feedback.remove(), 300);
+                }, 2000);
+            }
+
+            setupTemporalNavigation() {
+                const prevBtn = document.getElementById('prevBtn');
+                const nextBtn = document.getElementById('nextBtn');
+                const display = document.getElementById('temporalDisplay');
+
+                prevBtn.addEventListener('click', () => {
+                    this.currentDate.setDate(this.currentDate.getDate() - 1);
+                    this.updateTemporalDisplay();
+                });
+
+                nextBtn.addEventListener('click', () => {
+                    const today = new Date();
+                    if (this.currentDate < today) {
+                        this.currentDate.setDate(this.currentDate.getDate() + 1);
+                        this.updateTemporalDisplay();
+                    }
+                });
+
+                this.updateTemporalDisplay();
+            }
+
+            updateTemporalDisplay() {
+                const display = document.getElementById('temporalDisplay');
+                const today = new Date();
+                const yesterday = new Date(today);
+                yesterday.setDate(yesterday.getDate() - 1);
+
+                if (this.currentDate.toDateString() === today.toDateString()) {
+                    display.textContent = 'Today';
+                } else if (this.currentDate.toDateString() === yesterday.toDateString()) {
+                    display.textContent = 'Yesterday';
+                } else {
+                    display.textContent = this.currentDate.toLocaleDateString('en-US', { 
+                        weekday: 'short', 
+                        month: 'short', 
+                        day: 'numeric' 
+                    });
+                }
+            }
+
+            setupKeyboardShortcuts() {
+                const keyboardHint = document.getElementById('keyboardHint');
+                
+                document.addEventListener('keydown', (e) => {
+                    // Show keyboard hint on first keypress
+                    if (!keyboardHint.classList.contains('visible')) {
+                        keyboardHint.classList.add('visible');
+                        setTimeout(() => {
+                            keyboardHint.classList.remove('visible');
+                        }, 3000);
+                    }
+
+                    // Handle shortcuts
+                    if (e.metaKey && e.key === 'k') {
+                        e.preventDefault();
+                        this.showQuickActions();
+                    }
+                    
+                    if (e.metaKey && e.key === '/') {
+                        e.preventDefault();
+                        this.toggleVoiceListening();
+                    }
+                    
+                    if (e.key === ' ' && e.target === document.body) {
+                        e.preventDefault();
+                        this.enterFocusMode();
+                    }
+                });
+            }
+
+            showQuickActions() {
+                this.showVoiceFeedback("Quick Actions: Type to search...");
+            }
+
+            enterFocusMode() {
+                this.showVoiceFeedback("Focus Mode activated");
+                document.body.style.animation = 'pulse-focus 0.5s ease-out';
+                setTimeout(() => {
+                    document.body.style.animation = '';
+                }, 500);
+            }
+
+            startBreathingLife() {
+                // Activate memory bubbles periodically
+                setInterval(() => {
+                    const bubbles = document.querySelectorAll('.memory-bubble');
+                    const randomBubble = bubbles[Math.floor(Math.random() * bubbles.length)];
+                    randomBubble.classList.add('active');
+                    setTimeout(() => {
+                        randomBubble.classList.remove('active');
+                    }, 2000);
+                }, 3000);
+            }
+
+            initializeMemoryBubbles() {
+                // Add floating memory bubbles
+                const bubbles = document.querySelectorAll('.memory-bubble');
+                bubbles.forEach(bubble => {
+                    bubble.style.left = Math.random() * 100 + '%';
+                    bubble.style.animationDelay = Math.random() * 8 + 's';
+                });
+            }
+
+            setupDelightfulInteractions() {
+                // Add hover effects to cards
+                const cards = document.querySelectorAll('.space-card');
+                cards.forEach(card => {
+                    card.addEventListener('mouseenter', () => {
+                        this.createRippleEffect(card);
+                    });
+                });
+            }
+
+            createRippleEffect(element) {
+                const ripple = document.createElement('div');
+                ripple.style.cssText = `
+                    position: absolute;
+                    border-radius: 50%;
+                    background: rgba(255, 184, 102, 0.3);
+                    transform: translate(-50%, -50%);
+                    pointer-events: none;
+                    animation: ripple-expand 0.6s ease-out;
+                `;
+                
+                const rect = element.getBoundingClientRect();
+                ripple.style.width = '20px';
+                ripple.style.height = '20px';
+                ripple.style.left = '50%';
+                ripple.style.top = '50%';
+                
+                element.appendChild(ripple);
+                
+                setTimeout(() => ripple.remove(), 600);
+            }
+        }
+
+        // Add custom animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes ripple-expand {
+                to {
+                    width: 300px;
+                    height: 300px;
+                    opacity: 0;
+                }
+            }
+            
+            @keyframes pulse-focus {
+                0%, 100% { filter: brightness(1); }
+                50% { filter: brightness(1.1); }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // Initialize the interface
+        const focusLock = new FocusLockInterface();
+
+        // Add some life to the interface
+        setInterval(() => {
+            // Randomly animate charts
+            const charts = document.querySelectorAll('.chart-flow');
+            charts.forEach(chart => {
+                chart.style.animationDuration = (3 + Math.random() * 2) + 's';
+            });
+        }, 5000);
+
+        // Welcome message
+        setTimeout(() => {
+            focusLock.showVoiceFeedback("Welcome back! Your focus sanctuary is ready.");
+        }, 1000);
+    </script>
+</body>
+</html>

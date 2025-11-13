@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FocusLock - Soulful Interactive Prototype</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'InstrumentSerif', 'Inter', sans-serif;
+            background: linear-gradient(135deg, #fff8f1, #fef9f3);
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Breathing Background Animation */
+        .breathing-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at 30% 40%, rgba(255, 138, 0, 0.1) 0%, transparent 70%),
+                        radial-gradient(circle at 70% 80%, rgba(255, 204, 84, 0.08) 0%, transparent 70%);
+            animation: breathe 8s ease-in-out infinite;
+            z-index: -1;
+        }
+
+        @keyframes breathe {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.05); }
+        }
+
+        /* Main App Container */
+        .app-container {
+            display: flex;
+            height: 100vh;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Contextual Spaces Sidebar */
+        .spaces-sidebar {
+            width: 320px;
+            background: linear-gradient(135deg, rgba(255, 138, 0, 0.95), rgba(255, 204, 84, 0.9));
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .spaces-header {
+            padding: 24px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .app-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            font-family: 'InstrumentSerif', serif;
+            font-size: 1.4rem;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        .logo-breathing {
+            width: 36px;
+            height: 36px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 16px;
+            animation: logoBreathe 4s ease-in-out infinite;
+        }
+
+        @keyframes logoBreathe {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+        }
+
+        .spaces-navigation {
+            flex: 1;
+            padding: 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .space-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px 20px;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .space-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(255, 138, 0, 0.1), transparent);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+
+        .space-item:hover::before {
+            opacity: 1;
+        }
+
+        .space-item.active {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateX(8px);
+        }
+
+        .space-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(4px);
+        }
+
+        .space-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: white;
+            position: relative;
+            z-index: 2;
+        }
+
+        .space-icon.pulse {
+            animation: iconPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes iconPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 rgba(255, 138, 0, 0.3); }
+            50% { transform: scale(1.05); box-shadow: 0 0 20px rgba(255, 138, 0, 0.6); }
+        }
+
+        .space-content {
+            flex: 1;
+        }
+
+        .space-title {
+            color: white;
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 4px;
+        }
+
+        .space-description {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.85rem;
+            line-height: 1.3;
+        }
+
+        .space-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4ade80;
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .content-header {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            padding: 20px 32px;
+            border-bottom: 1px solid rgba(255, 138, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .welcome-message {
+            font-family: 'InstrumentSerif', serif;
+            font-size: 1.6rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .contextual-greeting {
+            color: #6b7280;
+            font-size: 0.95rem;
+            line-height: 1.4;
+        }
+
+        .quick-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .quick-action-btn {
+            padding: 12px 24px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .quick-action-btn.primary {
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            color: white;
+            box-shadow: 0 4px 16px rgba(255, 138, 0, 0.3);
+        }
+
+        .quick-action-btn.secondary {
+            background: rgba(255, 255, 255, 0.9);
+            color: #ff8a00;
+            border: 2px solid #ff8a00;
+        }
+
+        .quick-action-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .quick-action-btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .quick-action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(255, 138, 0, 0.4);
+        }
+
+        /* Content Area */
+        .content-area {
+            flex: 1;
+            padding: 32px;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        /* Focus Space */
+        .focus-space {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            animation: fadeInScale 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes fadeInScale {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .focus-visual {
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(circle, rgba(255, 138, 0, 0.1), rgba(255, 204, 84, 0.05));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            animation: focusBreathe 6s ease-in-out infinite;
+        }
+
+        @keyframes focusBreathe {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 rgba(255, 138, 0, 0.2); }
+            50% { transform: scale(1.1); box-shadow: 0 0 40px rgba(255, 138, 0, 0.4); }
+        }
+
+        .focus-icon {
+            font-size: 3rem;
+            color: #ff8a00;
+            animation: iconRotate 20s linear infinite;
+        }
+
+        @keyframes iconRotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .focus-text {
+            margin-top: 24px;
+            text-align: center;
+            font-family: 'InstrumentSerif', serif;
+        }
+
+        .focus-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .focus-description {
+            color: #6b7280;
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+
+        .focus-timer {
+            margin-top: 20px;
+            padding: 16px 24px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 16px;
+            font-family: 'InstrumentSerif', serif;
+            font-size: 2rem;
+            font-weight: 600;
+            color: #ff8a00;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Memory Bubbles */
+        .memory-bubbles {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .memory-bubble {
+            position: absolute;
+            background: linear-gradient(135deg, rgba(255, 138, 0, 0.1), rgba(255, 204, 84, 0.05));
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 16px 20px;
+            color: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            animation: bubbleFloat 8s ease-in-out infinite;
+            max-width: 200px;
+        }
+
+        @keyframes bubbleFloat {
+            0%, 100% { transform: translateY(0px) scale(1); }
+            50% { transform: translateY(-20px) scale(1.05); }
+        }
+
+        .bubble-1 { top: 20%; left: 10%; animation-delay: 0s; }
+        .bubble-2 { top: 60%; left: 80%; animation-delay: 2s; }
+        .bubble-3 { top: 30%; left: 60%; animation-delay: 4s; }
+        .bubble-4 { top: 80%; left: 20%; animation-delay: 6s; }
+
+        /* Jarvis Chat Space */
+        .jarvis-space {
+            display: none;
+            flex-direction: column;
+            height: 100%;
+            animation: fadeInScale 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .jarvis-space.active {
+            display: flex;
+        }
+
+        .jarvis-header {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            padding: 24px 32px;
+            border-bottom: 1px solid rgba(255, 138, 0, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .jarvis-avatar {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            color: white;
+            font-weight: bold;
+            animation: avatarPulse 4s ease-in-out infinite;
+        }
+
+        @keyframes avatarPulse {
+            0%, 100% { box-shadow: 0 0 0 rgba(255, 138, 0, 0.3); }
+            50% { box-shadow: 0 0 20px rgba(255, 138, 0, 0.6); }
+        }
+
+        .jarvis-info {
+            flex: 1;
+        }
+
+        .jarvis-name {
+            font-family: 'InstrumentSerif', serif;
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 4px;
+        }
+
+        .jarvis-status {
+            color: #4ade80;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+
+        .jarvis-chat {
+            flex: 1;
+            padding: 24px 32px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-message {
+            max-width: 80%;
+            padding: 16px 20px;
+            border-radius: 20px;
+            margin-bottom: 16px;
+            animation: messageSlide 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+        }
+
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .chat-message.ai {
+            background: linear-gradient(135deg, rgba(255, 138, 0, 0.1), rgba(255, 204, 84, 0.05));
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: rgba(255, 255, 255, 0.9);
+            align-self: flex-start;
+            border-bottom-left-radius: 8px;
+        }
+
+        .chat-message.user {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid rgba(255, 138, 0, 0.2);
+            color: #1f2937;
+            align-self: flex-end;
+            border-bottom-right-radius: 8px;
+        }
+
+        .chat-content {
+            line-height: 1.5;
+            font-size: 0.95rem;
+        }
+
+        .chat-time {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            margin-top: 8px;
+        }
+
+        .voice-input {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 138, 0, 0.2);
+            border-radius: 24px;
+            padding: 16px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-top: auto;
+        }
+
+        .voice-button {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .voice-button.listening {
+            animation: voiceListen 2s ease-in-out infinite;
+        }
+
+        @keyframes voiceListen {
+            0%, 100% { box-shadow: 0 0 0 rgba(255, 138, 0, 0.3); }
+            50% { box-shadow: 0 0 30px rgba(255, 138, 0, 0.8); }
+        }
+
+        .voice-waves {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+
+        .voice-wave {
+            position: absolute;
+            border: 2px solid rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: waveExpand 1.5s ease-out infinite;
+        }
+
+        .voice-wave:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        .voice-wave:nth-child(2) {
+            animation-delay: 0.3s;
+        }
+
+        .voice-wave:nth-child(3) {
+            animation-delay: 0.6s;
+        }
+
+        @keyframes waveExpand {
+            0% {
+                width: 0;
+                height: 0;
+                opacity: 1;
+            }
+            100% {
+                width: 60px;
+                height: 60px;
+                opacity: 0;
+            }
+        }
+
+        .input-field {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #1f2937;
+            font-size: 1rem;
+            font-family: 'InstrumentSerif', serif;
+        }
+
+        .input-field::placeholder {
+            color: rgba(31, 41, 55, 0.5);
+        }
+
+        /* Insights Space */
+        .insights-space {
+            display: none;
+            flex-direction: column;
+            height: 100%;
+            animation: fadeInScale 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .insights-space.active {
+            display: flex;
+        }
+
+        .insights-header {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            padding: 24px 32px;
+            border-bottom: 1px solid rgba(255, 138, 0, 0.1);
+        }
+
+        .insights-title {
+            font-family: 'InstrumentSerif', serif;
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .insights-subtitle {
+            color: #6b7280;
+            font-size: 1rem;
+            line-height: 1.4;
+        }
+
+        .insights-grid {
+            flex: 1;
+            padding: 24px 32px;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .insight-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 24px;
+            border: 1px solid rgba(255, 138, 0, 0.1);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .insight-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #ff8a00, #ffcc54);
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .insight-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .insight-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 32px rgba(255, 138, 0, 0.2);
+        }
+
+        .insight-icon {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            margin-bottom: 16px;
+        }
+
+        .insight-title {
+            font-family: 'InstrumentSerif', serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 8px;
+        }
+
+        .insight-description {
+            color: #6b7280;
+            line-height: 1.5;
+            margin-bottom: 16px;
+            font-size: 0.95rem;
+        }
+
+        .insight-action {
+            background: linear-gradient(135deg, #ff8a00, #ffcc54);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .insight-action::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .insight-action:hover::before {
+            width: 200px;
+            height: 200px;
+        }
+
+        .insight-action:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(255, 138, 0, 0.4);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .spaces-sidebar {
+                width: 280px;
+            }
+            
+            .insights-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .spaces-sidebar {
+                width: 80px;
+            }
+            
+            .space-title,
+            .space-description {
+                display: none;
+            }
+            
+            .content-area {
+                padding: 20px;
+            }
+            
+            .quick-actions {
+                flex-direction: column;
+            }
+        }
+
+        /* Loading and Transitions */
+        .fade-in {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .slide-up {
+            animation: slideUp 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Breathing Background -->
+    <div class="breathing-background"></div>
+    
+    <!-- Memory Bubbles -->
+    <div class="memory-bubbles">
+        <div class="memory-bubble bubble-1">💡 Working on financial models</div>
+        <div class="memory-bubble bubble-2">📊 Pattern: Most productive 9-11 AM</div>
+        <div class="memory-bubble bubble-3">🎯 Deep work session detected</div>
+        <div class="memory-bubble bubble-4">⚠️ Distraction risk at 3 PM</div>
+    </div>
+
+    <div class="app-container">
+        <!-- Contextual Spaces Sidebar -->
+        <div class="spaces-sidebar">
+            <div class="spaces-header">
+                <div class="app-title">
+                    <div class="logo-breathing">FL</div>
+                    <div>FocusLock</div>
+                </div>
+            </div>
+            
+            <div class="spaces-navigation">
+                <div class="space-item active" data-space="focus">
+                    <div class="space-icon pulse">🎯</div>
+                    <div class="space-content">
+                        <div class="space-title">Focus Space</div>
+                        <div class="space-description">Enter deep work mode</div>
+                        <div class="space-status">
+                            <div class="status-indicator"></div>
+                            <div>Ready</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="space-item" data-space="jarvis">
+                    <div class="space-icon">💬</div>
+                    <div class="space-content">
+                        <div class="space-title">Jarvis AI</div>
+                        <div class="space-description">Your contextual companion</div>
+                        <div class="space-status">
+                            <div class="status-indicator"></div>
+                            <div>3 insights</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="space-item" data-space="insights">
+                    <div class="space-icon">🧠</div>
+                    <div class="space-content">
+                        <div class="space-title">Memory Palace</div>
+                        <div class="space-description">Visualize your patterns</div>
+                        <div class="space-status">
+                            <div class="status-indicator"></div>
+                            <div>12 patterns</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="space-item" data-space="flow">
+                    <div class="space-icon">🌊</div>
+                    <div class="space-content">
+                        <div class="space-title">Flow State</div>
+                        <div class="space-description">Your productivity rhythm</div>
+                        <div class="space-status">
+                            <div class="status-indicator"></div>
+                            <div>Optimal</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="main-content">
+            <!-- Content Header -->
+            <div class="content-header">
+                <div>
+                    <div class="welcome-message">Good afternoon, Darius</div>
+                    <div class="contextual-greeting">I notice you're in a productive flow state. Your focus has been strong for 2 hours.</div>
+                </div>
+                
+                <div class="quick-actions">
+                    <button class="quick-action-btn primary">
+                        <span>🎯</span>
+                        Start Focus Session
+                    </button>
+                    <button class="quick-action-btn secondary">
+                        <span>💬</span>
+                        Chat with Jarvis
+                    </button>
+                </div>
+            </div>
+
+            <!-- Dynamic Content Areas -->
+            <div class="content-area">
+                <!-- Focus Space -->
+                <div class="focus-space" id="focus-space">
+                    <div class="focus-visual">
+                        <div class="focus-icon">🎯</div>
+                    </div>
+                    <div class="focus-text">
+                        <div class="focus-title">Ready for Deep Work</div>
+                        <div class="focus-description">Enter a focus session to maximize productivity and minimize distractions</div>
+                        <div class="focus-timer">25:00</div>
+                    </div>
+                </div>
+
+                <!-- Jarvis Chat Space -->
+                <div class="jarvis-space" id="jarvis-space">
+                    <div class="jarvis-header">
+                        <div class="jarvis-avatar">J</div>
+                        <div class="jarvis-info">
+                            <div class="jarvis-name">Jarvis</div>
+                            <div class="jarvis-status">
+                                <div class="status-dot"></div>
+                                <div>Contextually aware</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="jarvis-chat">
+                        <div class="chat-message ai">
+                            <div class="chat-content">
+                                I can see you've been working on the Q4 financial projections for the past 90 minutes. Your focus has been exceptional - this matches your most productive patterns from last month.
+                                <div class="chat-time">2:30 PM</div>
+                            </div>
+                        </div>
+                        
+                        <div class="chat-message user">
+                            <div class="chat-content">
+                                Thanks Jarvis! Can you pull up similar challenges I've solved before?
+                                <div class="chat-time">2:31 PM</div>
+                            </div>
+                        </div>
+                        
+                        <div class="chat-message ai">
+                            <div class="chat-content">
+                                Absolutely. I found 3 similar scenarios: the 2023 Q2 modeling challenge, the 2024 budget variance analysis, and the 2025 scenario planning. Would you like me to open the most relevant one?
+                                <div class="chat-time">2:32 PM</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="voice-input">
+                        <div class="voice-button" id="voice-button">
+                            <span>🎤</span>
+                            <div class="voice-waves">
+                                <div class="voice-wave"></div>
+                                <div class="voice-wave"></div>
+                                <div class="voice-wave"></div>
+                            </div>
+                        </div>
+                        <input type="text" class="input-field" placeholder="Ask Jarvis anything about your work..." id="chat-input">
+                    </div>
+                </div>
+
+                <!-- Insights Space -->
+                <div class="insights-space" id="insights-space">
+                    <div class="insights-header">
+                        <div class="insights-title">Memory Palace</div>
+                        <div class="insights-subtitle">Your work patterns visualized as insights</div>
+                    </div>
+                    
+                    <div class="insights-grid">
+                        <div class="insight-card">
+                            <div class="insight-icon">📊</div>
+                            <div class="insight-title">Peak Productivity Window</div>
+                            <div class="insight-description">
+                                You're consistently most productive between 9-11 AM when working on analytical tasks. This pattern has held steady for 6 months.
+                            </div>
+                            <button class="insight-action">Optimize Schedule</button>
+                        </div>
+                        
+                        <div class="insight-card">
+                            <div class="insight-icon">🔄</div>
+                            <div class="insight-title">Context Switching Cost</div>
+                            <div class="insight-description">
+                                Each context switch costs you 23 minutes of focus time. The highest cost occurs after lunch breaks.
+                            </div>
+                            <button class="insight-action">Reduce Switching</button>
+                        </div>
+                        
+                        <div class="insight-card">
+                            <div class="insight-icon">⚡</div>
+                            <div class="insight-title">Flow State Triggers</div>
+                            <div class="insight-description">
+                                You enter flow state most easily when working on creative tasks with ambient music and minimal interruptions.
+                            </div>
+                            <button class="insight-action">Create Flow Conditions</button>
+                        </div>
+                        
+                        <div class="insight-card">
+                            <div class="insight-icon">🎯</div>
+                            <div class="insight-title">Deep Work Capacity</div>
+                            <div class="insight-description">
+                                Your maximum sustainable deep work session is 90 minutes. Beyond this, focus quality degrades significantly.
+                            </div>
+                            <button class="insight-action">Session Planning</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Space Navigation
+            const spaceItems = document.querySelectorAll('.space-item');
+            const contentSpaces = {
+                focus: document.getElementById('focus-space'),
+                jarvis: document.getElementById('jarvis-space'),
+                insights: document.getElementById('insights-space')
+            };
+
+            spaceItems.forEach(item => {
+                item.addEventListener('click', function() {
+                    const targetSpace = this.dataset.space;
+                    
+                    // Update active state
+                    spaceItems.forEach(space => space.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    // Hide all content spaces
+                    Object.values(contentSpaces).forEach(space => {
+                        space.style.display = 'none';
+                    });
+                    
+                    // Show selected content space with animation
+                    const targetElement = contentSpaces[targetSpace];
+                    if (targetElement) {
+                        targetElement.style.display = 'flex';
+                        targetElement.classList.add('fade-in');
+                    }
+                });
+            });
+
+            // Voice Button Interaction
+            const voiceButton = document.getElementById('voice-button');
+            const chatInput = document.getElementById('chat-input');
+            let isListening = false;
+
+            voiceButton.addEventListener('click', function() {
+                isListening = !isListening;
+                
+                if (isListening) {
+                    this.classList.add('listening');
+                    chatInput.placeholder = 'Listening... Speak now';
+                    // Simulate voice recognition
+                    setTimeout(() => {
+                        chatInput.placeholder = 'Ask Jarvis anything about your work...';
+                        this.classList.remove('listening');
+                        isListening = false;
+                    }, 3000);
+                }
+            });
+
+            // Chat Input Interaction
+            chatInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && this.value.trim()) {
+                    // Simulate sending message
+                    const userMessage = this.value.trim();
+                    this.value = '';
+                    
+                    // Add user message to chat (in real implementation)
+                    console.log('Sending message:', userMessage);
+                }
+            });
+
+            // Quick Action Buttons
+            const quickActionBtns = document.querySelectorAll('.quick-action-btn');
+            quickActionBtns.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    // Ripple effect
+                    const ripple = document.createElement('span');
+                    ripple.style.position = 'absolute';
+                    ripple.style.borderRadius = '50%';
+                    ripple.style.background = 'rgba(255, 255, 255, 0.5)';
+                    ripple.style.transform = 'scale(0)';
+                    ripple.style.animation = 'ripple 0.6s ease-out';
+                    this.appendChild(ripple);
+                    
+                    setTimeout(() => {
+                        ripple.remove();
+                    }, 600);
+                });
+            });
+
+            // Insight Cards Interaction
+            const insightCards = document.querySelectorAll('.insight-card');
+            insightCards.forEach(card => {
+                card.addEventListener('click', function() {
+                    // Expand or show more details
+                    console.log('Insight card clicked');
+                });
+            });
+
+            // Keyboard Shortcuts
+            document.addEventListener('keydown', function(e) {
+                // Cmd+K for quick focus
+                if (e.metaKey && e.key === 'k') {
+                    e.preventDefault();
+                    document.querySelector('[data-space="focus"]').click();
+                }
+                
+                // Cmd+/ for Jarvis chat
+                if (e.metaKey && e.key === '/') {
+                    e.preventDefault();
+                    document.querySelector('[data-space="jarvis"]').click();
+                }
+                
+                // Cmd+I for insights
+                if (e.metaKey && e.key === 'i') {
+                    e.preventDefault();
+                    document.querySelector('[data-space="insights"]').click();
+                }
+                
+                // Space to start focus session
+                if (e.key === ' ' && document.getElementById('focus-space').style.display === 'flex') {
+                    e.preventDefault();
+                    // Start focus session logic
+                    console.log('Starting focus session');
+                }
+            });
+
+            // Add entrance animations
+            setTimeout(() => {
+                document.querySelectorAll('.space-item, .insight-card').forEach((element, index) => {
+                    element.style.opacity = '0';
+                    element.style.transform = 'translateY(20px)';
+                    setTimeout(() => {
+                        element.style.transition = 'all 0.5s cubic-bezier(0.4, 0, 0.2, 1)';
+                        element.style.opacity = '1';
+                        element.style.transform = 'translateY(0)';
+                    }, index * 100);
+                });
+            }, 500);
+
+            // Dynamic time updates
+            function updateFocusTimer() {
+                const timerElement = document.querySelector('.focus-timer');
+                if (timerElement) {
+                    // Simulate countdown
+                    let timeLeft = 25 * 60; // 25 minutes in seconds
+                    
+                    setInterval(() => {
+                        if (timeLeft > 0) {
+                            timeLeft--;
+                            const minutes = Math.floor(timeLeft / 60);
+                            const seconds = timeLeft % 60;
+                            timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                        }
+                    }, 1000);
+                }
+            }
+
+            // Initialize with focus space active
+            updateFocusTimer();
+        });
+
+        // Add CSS for ripple animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes ripple {
+                to {
+                    transform: scale(4);
+                    opacity: 0;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>
