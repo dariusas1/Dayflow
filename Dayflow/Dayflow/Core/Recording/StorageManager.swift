@@ -47,40 +47,41 @@ extension Date {
 /// _No_ `@MainActor` isolation ⇒ can be called from any thread/actor.
 /// If you add UI‑touching methods later, isolate **those** individually.
 protocol StorageManaging: Sendable {
-    // Recording‑chunk lifecycle
+    // Recording‑chunk lifecycle (Story 1.3: migrated to async + DatabaseManager)
     func nextFileURL() -> URL
-    func registerChunk(url: URL)
-    func markChunkCompleted(url: URL)
-    func markChunkFailed(url: URL)
+    func registerChunk(url: URL) async throws
+    func markChunkCompleted(url: URL) async throws
+    func markChunkFailed(url: URL) async throws
 
-    // Fetch unprocessed (completed + not yet batched) chunks
-    func fetchUnprocessedChunks(olderThan oldestAllowed: Int) -> [RecordingChunk]
-    func fetchChunksInTimeRange(startTs: Int, endTs: Int) -> [RecordingChunk]
+    // Fetch unprocessed (completed + not yet batched) chunks (Story 1.3: migrated to async + DatabaseManager)
+    func fetchUnprocessedChunks(olderThan oldestAllowed: Int) async throws -> [RecordingChunk]
+    func fetchChunksInTimeRange(startTs: Int, endTs: Int) async throws -> [RecordingChunk]
 
-    // Analysis‑batch management
-    func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) -> Int64?
-    func updateBatchStatus(batchId: Int64, status: String)
+    // Analysis‑batch management (Story 1.3: migrated to async + DatabaseManager)
+    func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) async throws -> Int64?
+    func updateBatchStatus(batchId: Int64, status: String) async throws
     func markBatchFailed(batchId: Int64, reason: String)
 
-    // Record details about all LLM calls for a batch
-    func updateBatchLLMMetadata(batchId: Int64, calls: [LLMCall])
-    func fetchBatchLLMMetadata(batchId: Int64) -> [LLMCall]
+    // Record details about all LLM calls for a batch (Story 1.3: migrated to async + DatabaseManager)
+    func updateBatchLLMMetadata(batchId: Int64, calls: [LLMCall]) async throws
+    func fetchBatchLLMMetadata(batchId: Int64) async throws -> [LLMCall]
 
-    // Timeline‑cards
-    func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) -> Int64?
-    func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String)
-    func fetchTimelineCards(forBatch batchId: Int64) -> [TimelineCard]
-    func fetchTimelineCard(byId id: Int64) -> TimelineCardWithTimestamps?
+    // Timeline‑cards (Story 1.3: migrated to async + DatabaseManager)
+    func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) async throws -> Int64?
+    func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String) async throws
+    func fetchTimelineCards(forBatch batchId: Int64) async throws -> [TimelineCard]
+    func fetchTimelineCard(byId id: Int64) async throws -> TimelineCardWithTimestamps?
 
-    // Timeline Queries
-    func fetchTimelineCards(forDay day: String) -> [TimelineCard]
-    func fetchTimelineCardsByTimeRange(from: Date, to: Date) -> [TimelineCard]
+    // Timeline Queries (Story 1.3: migrated to async + DatabaseManager)
+    func fetchTimelineCards(forDay day: String) async throws -> [TimelineCard]
+    func fetchTimelineCardsByTimeRange(from: Date, to: Date) async throws -> [TimelineCard]
     func replaceTimelineCardsInRange(from: Date, to: Date, with: [TimelineCardShell], batchId: Int64) -> (insertedIds: [Int64], deletedVideoPaths: [String])
-    func fetchRecentTimelineCardsForDebug(limit: Int) -> [TimelineCardDebugEntry]
+    func fetchRecentTimelineCardsForDebug(limit: Int) async throws -> [TimelineCardDebugEntry]
 
-    func fetchRecentLLMCallsForDebug(limit: Int) -> [LLMCallDebugEntry]
-    func fetchRecentAnalysisBatchesForDebug(limit: Int) -> [AnalysisBatchDebugEntry]
-    func fetchLLMCallsForBatches(batchIds: [Int64], limit: Int) -> [LLMCallDebugEntry]
+    // LLM debug methods (Story 1.3: migrated to async + DatabaseManager)
+    func fetchRecentLLMCallsForDebug(limit: Int) async throws -> [LLMCallDebugEntry]
+    func fetchRecentAnalysisBatchesForDebug(limit: Int) async throws -> [AnalysisBatchDebugEntry]
+    func fetchLLMCallsForBatches(batchIds: [Int64], limit: Int) async throws -> [LLMCallDebugEntry]
 
     // Note: Transcript storage methods removed in favor of Observations
     
@@ -268,7 +269,7 @@ struct AnalysisBatchDebugEntry: Sendable {
 }
 
 // Extended TimelineCard with timestamp fields for internal use
-struct TimelineCardWithTimestamps {
+struct TimelineCardWithTimestamps: Sendable {
     let id: Int64
     let startTimestamp: String
     let endTimestamp: String
@@ -820,50 +821,49 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         return root.appendingPathComponent("\(df.string(from: Date())).mp4")
     }
 
-    func registerChunk(url: URL) {
+    /// Register a new recording chunk in the database (Story 1.3: async + DatabaseManager)
+    func registerChunk(url: URL) async throws {
         let ts = Int(Date().timeIntervalSince1970)
         let path = url.path
 
-        // Perform database write asynchronously to avoid blocking caller thread
-        dbWriteQueue.async { [weak self] in
-            try? self?.timedWrite("registerChunk") { db in
-                try db.execute(sql: "INSERT INTO chunks(start_ts, end_ts, file_url, status) VALUES (?, ?, ?, 'recording')",
-                               arguments: [ts, ts + 60, path])
-            }
+        try await DatabaseManager.shared.write { db in
+            try db.execute(
+                sql: "INSERT INTO chunks(start_ts, end_ts, file_url, status) VALUES (?, ?, ?, 'recording')",
+                arguments: [ts, ts + 60, path]
+            )
         }
     }
 
-    func markChunkCompleted(url: URL) {
+    /// Mark a recording chunk as completed (Story 1.3: async + DatabaseManager)
+    func markChunkCompleted(url: URL) async throws {
         let end = Int(Date().timeIntervalSince1970)
         let path = url.path
 
-        // Perform database write asynchronously to avoid blocking caller thread
-        dbWriteQueue.async { [weak self] in
-            try? self?.timedWrite("markChunkCompleted") { db in
-                try db.execute(sql: "UPDATE chunks SET end_ts = ?, status = 'completed' WHERE file_url = ?",
-                               arguments: [end, path])
-            }
+        try await DatabaseManager.shared.write { db in
+            try db.execute(
+                sql: "UPDATE chunks SET end_ts = ?, status = 'completed' WHERE file_url = ?",
+                arguments: [end, path]
+            )
         }
     }
 
-    func markChunkFailed(url: URL) {
+    /// Mark a recording chunk as failed and delete it (Story 1.3: async + DatabaseManager)
+    func markChunkFailed(url: URL) async throws {
         let path = url.path
 
-        // Perform database write and file deletion asynchronously to avoid blocking caller thread
-        dbWriteQueue.async { [weak self] in
-            guard let self = self else { return }
-
-            try? self.timedWrite("markChunkFailed") { db in
-                try db.execute(sql: "DELETE FROM chunks WHERE file_url = ?", arguments: [path])
-            }
-
-            try? self.fileMgr.removeItem(at: url)
+        // Delete from database first
+        try await DatabaseManager.shared.write { db in
+            try db.execute(sql: "DELETE FROM chunks WHERE file_url = ?", arguments: [path])
         }
+
+        // Then delete the file from disk
+        try? fileMgr.removeItem(at: url)
     }
 
 
-    func fetchUnprocessedChunks(olderThan oldestAllowed: Int) -> [RecordingChunk] {
-        (try? timedRead("fetchUnprocessedChunks") { db in
+    /// Fetch unprocessed chunks (Story 1.3: async + DatabaseManager)
+    func fetchUnprocessedChunks(olderThan oldestAllowed: Int) async throws -> [RecordingChunk] {
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM chunks
                 WHERE start_ts >= ?
@@ -872,31 +872,50 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                   AND id NOT IN (SELECT chunk_id FROM batch_chunks)
                 ORDER BY start_ts ASC
             """, arguments: [oldestAllowed])
-                .map { row in
-                    RecordingChunk(id: row["id"], startTs: row["start_ts"], endTs: row["end_ts"], fileUrl: row["file_url"], status: row["status"]) }
-        }) ?? []
-    }
-
-    func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) -> Int64? {
-        guard !chunkIds.isEmpty else { return nil }
-        var batchID: Int64 = 0
-        try? timedWrite("saveBatch(\(chunkIds.count)_chunks)") { db in
-            try db.execute(sql: "INSERT INTO analysis_batches(batch_start_ts, batch_end_ts) VALUES (?, ?)",
-                           arguments: [startTs, endTs])
-            batchID = db.lastInsertedRowID
-            for id in chunkIds {
-                try db.execute(sql: "INSERT INTO batch_chunks(batch_id, chunk_id) VALUES (?, ?)", arguments: [batchID, id])
+            .map { row in
+                RecordingChunk(
+                    id: row["id"],
+                    startTs: row["start_ts"],
+                    endTs: row["end_ts"],
+                    fileUrl: row["file_url"],
+                    status: row["status"]
+                )
             }
         }
+    }
+
+    /// Save a new batch with associated chunks (Story 1.3: async + DatabaseManager, uses transaction for atomicity)
+    func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) async throws -> Int64? {
+        guard !chunkIds.isEmpty else { return nil }
+
+        // Use transaction to ensure atomicity of batch + chunk associations
+        let batchID = try await DatabaseManager.shared.transaction { db in
+            try db.execute(
+                sql: "INSERT INTO analysis_batches(batch_start_ts, batch_end_ts) VALUES (?, ?)",
+                arguments: [startTs, endTs]
+            )
+            let batchID = db.lastInsertedRowID
+
+            for id in chunkIds {
+                try db.execute(
+                    sql: "INSERT INTO batch_chunks(batch_id, chunk_id) VALUES (?, ?)",
+                    arguments: [batchID, id]
+                )
+            }
+
+            return batchID
+        }
+
         return batchID == 0 ? nil : batchID
     }
 
-    func updateBatchStatus(batchId: Int64, status: String) {
-        // Perform database write asynchronously to avoid blocking caller thread
-        dbWriteQueue.async { [weak self] in
-            try? self?.timedWrite("updateBatchStatus") { db in
-                try db.execute(sql: "UPDATE analysis_batches SET status = ? WHERE id = ?", arguments: [status, batchId])
-            }
+    /// Update batch status (Story 1.3: async + DatabaseManager)
+    func updateBatchStatus(batchId: Int64, status: String) async throws {
+        try await DatabaseManager.shared.write { db in
+            try db.execute(
+                sql: "UPDATE analysis_batches SET status = ? WHERE id = ?",
+                arguments: [status, batchId]
+            )
         }
     }
 
@@ -909,26 +928,40 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
     }
 
-    func updateBatchLLMMetadata(batchId: Int64, calls: [LLMCall]) {
+    /// Update batch LLM metadata (Story 1.3: async + DatabaseManager)
+    func updateBatchLLMMetadata(batchId: Int64, calls: [LLMCall]) async throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(calls), let json = String(data: data, encoding: .utf8) else { return }
-        try? timedWrite("updateBatchLLMMetadata") { db in
-            try db.execute(sql: "UPDATE analysis_batches SET llm_metadata = ? WHERE id = ?", arguments: [json, batchId])
+        guard let data = try encoder.encode(calls),
+              let json = String(data: data, encoding: .utf8) else {
+            throw DatabaseError.invalidConfiguration
+        }
+
+        try await DatabaseManager.shared.write { db in
+            try db.execute(
+                sql: "UPDATE analysis_batches SET llm_metadata = ? WHERE id = ?",
+                arguments: [json, batchId]
+            )
         }
     }
 
-    func fetchBatchLLMMetadata(batchId: Int64) -> [LLMCall] {
+    /// Fetch LLM metadata for a batch (Story 1.3: async + DatabaseManager)
+    func fetchBatchLLMMetadata(batchId: Int64) async throws -> [LLMCall] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? timedRead("fetchBatchLLMMetadata") { db in
-            if let row = try Row.fetchOne(db, sql: "SELECT llm_metadata FROM analysis_batches WHERE id = ?", arguments: [batchId]),
+
+        return try await DatabaseManager.shared.read { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT llm_metadata FROM analysis_batches WHERE id = ?",
+                arguments: [batchId]
+            ),
                let json: String = row["llm_metadata"],
                let data = json.data(using: .utf8) {
                 return try decoder.decode([LLMCall].self, from: data)
             }
             return []
-        }) ?? []
+        }
     }
 
     /// Chunks that belong to one batch, already sorted.
@@ -949,18 +982,18 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
     }
 
-    /// Helper to get the batch start timestamp for date calculations
-    private func getBatchStartTimestamp(batchId: Int64) -> Int? {
-        return try? db.read { db in
+    /// Helper to get the batch start timestamp for date calculations (Story 1.3: async + DatabaseManager)
+    private func getBatchStartTimestamp(batchId: Int64) async throws -> Int? {
+        return try await DatabaseManager.shared.read { db in
             try Int.fetchOne(db, sql: """
                 SELECT batch_start_ts FROM analysis_batches WHERE id = ?
             """, arguments: [batchId])
         }
     }
     
-    /// Fetch chunks that overlap with a specific time range
-    func fetchChunksInTimeRange(startTs: Int, endTs: Int) -> [RecordingChunk] {
-        (try? timedRead("fetchChunksInTimeRange") { db in
+    /// Fetch chunks that overlap with a specific time range (Story 1.3: async + DatabaseManager)
+    func fetchChunksInTimeRange(startTs: Int, endTs: Int) async throws -> [RecordingChunk] {
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM chunks
                 WHERE status = 'completed'
@@ -971,19 +1004,24 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 ORDER BY start_ts ASC
             """, arguments: [endTs, startTs, startTs, endTs, startTs, endTs])
             .map { r in
-                RecordingChunk(id: r["id"], startTs: r["start_ts"], endTs: r["end_ts"],
-                              fileUrl: r["file_url"], status: r["status"])
+                RecordingChunk(
+                    id: r["id"],
+                    startTs: r["start_ts"],
+                    endTs: r["end_ts"],
+                    fileUrl: r["file_url"],
+                    status: r["status"]
+                )
             }
-        }) ?? []
+        }
     }
 
 
-    func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) -> Int64? {
+    /// Save a timeline card shell (Story 1.3: async + DatabaseManager)
+    func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) async throws -> Int64? {
         let encoder = JSONEncoder()
-        var lastId: Int64? = nil
 
         // Get the batch's actual start timestamp to use as the base date
-        guard let batchStartTs = getBatchStartTimestamp(batchId: batchId) else {
+        guard let batchStartTs = try await getBatchStartTimestamp(batchId: batchId) else {
             return nil
         }
         let baseDate = Date(timeIntervalSince1970: TimeInterval(batchStartTs))
@@ -1046,16 +1084,16 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
         let endTs = Int(endDate.timeIntervalSince1970)
 
-        try? timedWrite("saveTimelineCardShell") {
-            db in
-            // Encode metadata as an object for forward-compatibility
-            let meta = TimelineMetadata(distractions: card.distractions, appSites: card.appSites)
-            let metadataString: String? = (try? encoder.encode(meta)).flatMap { String(data: $0, encoding: .utf8) }
+        // Encode metadata as an object for forward-compatibility
+        let meta = TimelineMetadata(distractions: card.distractions, appSites: card.appSites)
+        let metadataString: String? = (try? encoder.encode(meta)).flatMap { String(data: $0, encoding: .utf8) }
 
-            // Calculate the day string using 4 AM boundary rules
-            let (dayString, _, _) = startDate.getDayInfoFor4AMBoundary()
+        // Calculate the day string using 4 AM boundary rules
+        let (dayString, _, _) = startDate.getDayInfoFor4AMBoundary()
 
-            try? db.execute(sql: """
+        // Write to database using DatabaseManager
+        let lastId = try await DatabaseManager.shared.write { db in
+            try db.execute(sql: """
                 INSERT INTO timeline_cards(
                     batch_id, start, end, start_ts, end_ts, day, title,
                     summary, category, subcategory, detailed_summary, metadata
@@ -1066,14 +1104,15 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 batchId, card.startTimestamp, card.endTimestamp, startTs, endTs, dayString, card.title,
                 card.summary, card.category, card.subcategory, card.detailedSummary, metadataString
             ])
-            lastId = db.lastInsertedRowID
+            return db.lastInsertedRowID
         }
+
         return lastId
     }
 
-    func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String) {
-        try? timedWrite("updateTimelineCardVideoURL") {
-            db in
+    /// Update timeline card video URL (Story 1.3: async + DatabaseManager)
+    func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String) async throws {
+        try await DatabaseManager.shared.write { db in
             try db.execute(sql: """
                 UPDATE timeline_cards
                 SET video_summary_url = ?
@@ -1082,9 +1121,10 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
     }
 
-    func fetchTimelineCards(forBatch batchId: Int64) -> [TimelineCard] {
+    /// Fetch timeline cards for a batch (Story 1.3: async + DatabaseManager)
+    func fetchTimelineCards(forBatch batchId: Int64) async throws -> [TimelineCard] {
         let decoder = JSONDecoder()
-        return (try? timedRead("fetchTimelineCards(forBatch)") { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM timeline_cards
                 WHERE batch_id = ?
@@ -1118,7 +1158,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     appSites: appSites
                 )
             }
-        }) ?? []
+        }
     }
 
     // All batches, newest first
@@ -1133,10 +1173,11 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
     }
 
-    func fetchRecentAnalysisBatchesForDebug(limit: Int) -> [AnalysisBatchDebugEntry] {
+    /// Fetch recent analysis batches for debug (Story 1.3: async + DatabaseManager)
+    func fetchRecentAnalysisBatchesForDebug(limit: Int) async throws -> [AnalysisBatchDebugEntry] {
         guard limit > 0 else { return [] }
 
-        return (try? db.read { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT id, status, batch_start_ts, batch_end_ts, created_at, reason
                 FROM analysis_batches
@@ -1152,26 +1193,27 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     reason: row["reason"]
                 )
             }
-        }) ?? []
+        }
     }
 
 
-    func fetchTimelineCards(forDay day: String) -> [TimelineCard] {
+    /// Fetch timeline cards for a specific day (Story 1.3: async + DatabaseManager)
+    func fetchTimelineCards(forDay day: String) async throws -> [TimelineCard] {
         let decoder = JSONDecoder()
-        
+
         guard let dayDate = dateFormatter.date(from: day) else {
             return []
         }
-        
+
         let calendar = Calendar.current
-        
+
         // Get 4 AM of the given day as the start
         var startComponents = calendar.dateComponents([.year, .month, .day], from: dayDate)
         startComponents.hour = 4
         startComponents.minute = 0
         startComponents.second = 0
         guard let dayStart = calendar.date(from: startComponents) else { return [] }
-        
+
         // Get 4 AM of the next day as the end
         guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayDate) else { return [] }
         var endComponents = calendar.dateComponents([.year, .month, .day], from: nextDay)
@@ -1179,11 +1221,11 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         endComponents.minute = 0
         endComponents.second = 0
         guard let dayEnd = calendar.date(from: endComponents) else { return [] }
-        
+
         let startTs = Int(dayStart.timeIntervalSince1970)
         let endTs = Int(dayEnd.timeIntervalSince1970)
 
-        let cards: [TimelineCard]? = try? timedRead("fetchTimelineCards(forDay:\(day))") { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM timeline_cards
                 WHERE start_ts >= ? AND start_ts < ?
@@ -1207,8 +1249,8 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 // Create TimelineCard instance using renamed columns
                 return TimelineCard(
                     batchId: row["batch_id"],
-                    startTimestamp: row["start"] ?? "", // Use row["start"]
-                    endTimestamp: row["end"] ?? "",   // Use row["end"]
+                    startTimestamp: row["start"] ?? "",
+                    endTimestamp: row["end"] ?? "",
                     category: row["category"],
                     subcategory: row["subcategory"],
                     title: row["title"],
@@ -1222,16 +1264,15 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 )
             }
         }
-        return cards ?? []
     }
 
-    func fetchTimelineCardsByTimeRange(from: Date, to: Date) -> [TimelineCard] {
+    /// Fetch timeline cards by time range (Story 1.3: async + DatabaseManager)
+    func fetchTimelineCardsByTimeRange(from: Date, to: Date) async throws -> [TimelineCard] {
         let decoder = JSONDecoder()
         let fromTs = Int(from.timeIntervalSince1970)
         let toTs = Int(to.timeIntervalSince1970)
 
-
-        let cards: [TimelineCard]? = try? timedRead("fetchTimelineCardsByTimeRange") { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT * FROM timeline_cards
                 WHERE ((start_ts < ? AND end_ts > ?)
@@ -1271,13 +1312,13 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 )
             }
         }
-        return cards ?? []
     }
 
-    func fetchRecentTimelineCardsForDebug(limit: Int) -> [TimelineCardDebugEntry] {
+    /// Fetch recent timeline cards for debug (Story 1.3: async + DatabaseManager)
+    func fetchRecentTimelineCardsForDebug(limit: Int) async throws -> [TimelineCardDebugEntry] {
         guard limit > 0 else { return [] }
 
-        return (try? db.read { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT batch_id, day, start, end, category, subcategory, title, summary, detailed_summary, created_at
                 FROM timeline_cards
@@ -1298,13 +1339,14 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     detailedSummary: row["detailed_summary"]
                 )
             }
-        }) ?? []
+        }
     }
 
-    func fetchRecentLLMCallsForDebug(limit: Int) -> [LLMCallDebugEntry] {
+    /// Fetch recent LLM calls for debug (Story 1.3: async + DatabaseManager)
+    func fetchRecentLLMCallsForDebug(limit: Int) async throws -> [LLMCallDebugEntry] {
         guard limit > 0 else { return [] }
 
-        return (try? db.read { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT created_at, batch_id, call_group_id, attempt, provider, model, operation, status, latency_ms, http_status, request_method, request_url, request_body, response_body, error_message
                 FROM llm_calls
@@ -1329,7 +1371,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     errorMessage: row["error_message"]
                 )
             }
-        }) ?? []
+        }
     }
 
     func updateStorageLimit(bytes: Int64) {
@@ -1341,13 +1383,14 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         }
     }
 
-    func fetchLLMCallsForBatches(batchIds: [Int64], limit: Int) -> [LLMCallDebugEntry] {
+    /// Fetch LLM calls for specific batches (Story 1.3: async + DatabaseManager)
+    func fetchLLMCallsForBatches(batchIds: [Int64], limit: Int) async throws -> [LLMCallDebugEntry] {
         guard !batchIds.isEmpty, limit > 0 else { return [] }
 
         // Create SQL placeholders for batch IDs
         let placeholders = Array(repeating: "?", count: batchIds.count).joined(separator: ",")
 
-        return (try? db.read { db in
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT created_at, batch_id, call_group_id, attempt, provider, model, operation, status, latency_ms, http_status, request_method, request_url, request_body, response_body, error_message
                 FROM llm_calls
@@ -1373,20 +1416,20 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     errorMessage: row["error_message"]
                 )
             }
-        }) ?? []
+        }
     }
 
-    /// Fetch a specific timeline card by ID including timestamp fields
-    func fetchTimelineCard(byId id: Int64) -> TimelineCardWithTimestamps? {
+    /// Fetch a specific timeline card by ID including timestamp fields (Story 1.3: async + DatabaseManager)
+    func fetchTimelineCard(byId id: Int64) async throws -> TimelineCardWithTimestamps? {
         let decoder = JSONDecoder()
 
-        return try? timedRead("fetchTimelineCard(byId)") { db in
+        return try await DatabaseManager.shared.read { db in
             guard let row = try Row.fetchOne(db, sql: """
                 SELECT * FROM timeline_cards
                 WHERE id = ?
                   AND is_deleted = 0
             """, arguments: [id]) else { return nil }
-            
+
             // Decode distractions from metadata JSON
             var distractions: [Distraction]? = nil
             if let metadataString: String = row["metadata"],
@@ -1397,7 +1440,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                     distractions = legacy
                 }
             }
-            
+
             return TimelineCardWithTimestamps(
                 id: id,
                 startTimestamp: row["start"] ?? "",
@@ -1615,8 +1658,9 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
     }
     
     
-    func getChunkFilesForBatch(batchId: Int64) -> [String] {
-        return (try? db.read { db in
+    /// Get chunk files for a batch (Story 1.3: async + DatabaseManager)
+    func getChunkFilesForBatch(batchId: Int64) async throws -> [String] {
+        return try await DatabaseManager.shared.read { db in
             let sql = """
                 SELECT c.file_url
                 FROM chunks c
@@ -1628,7 +1672,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
             let rows = try Row.fetchAll(db, sql: sql, arguments: [batchId])
             return rows.compactMap { $0["file_url"] as? String }
-        }) ?? []
+        }
     }
     
     func updateBatch(_ batchId: Int64, status: String, reason: String? = nil) {
@@ -1659,8 +1703,9 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         return formatter
     }
 
-    func insertLLMCall(_ rec: LLMCallDBRecord) {
-        try? db.write { db in
+    /// Insert an LLM call record (Story 1.3: async + DatabaseManager)
+    func insertLLMCall(_ rec: LLMCallDBRecord) async throws {
+        try await DatabaseManager.shared.write { db in
             try db.execute(sql: """
                 INSERT INTO llm_calls (
                     batch_id, call_group_id, attempt, provider, model, operation,
