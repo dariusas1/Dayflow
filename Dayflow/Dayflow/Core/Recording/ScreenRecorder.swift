@@ -184,6 +184,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     private var currentDisplayConfiguration: DisplayConfiguration?  // Current display setup
     private var isHandlingConfigurationChange = false  // Debounce flag for display changes
 
+    // Compression engine (Story 2.2)
+    private var compressionEngine: AVFoundationCompressionEngine?
+    private var adaptiveQualityManager = AdaptiveQualityManager()
+    private var useCompressionEngine = true  // Feature flag for compression engine
+
     // AsyncStream for status updates (AC 2.3.2)
     private var statusContinuation: AsyncStream<RecorderState>.Continuation?
 
@@ -630,7 +635,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private func beginSegment() {
         guard writer == nil else { return }
-        
+
         // Check disk space before starting new segment
         if !checkDiskSpace() {
             dbg("beginSegment – insufficient disk space, skipping segment creation")
@@ -641,7 +646,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             return
         }
-        
+
         let url = StorageManager.shared.nextFileURL(); fileURL = url; frames = 0
 
         // Add breadcrumb for recording segment start
@@ -649,11 +654,67 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         beginBreadcrumb.message = "Beginning new segment"
         beginBreadcrumb.data = [
             "file": url.lastPathComponent,
-            "resolution": "\(recordingWidth)x\(recordingHeight)"
+            "resolution": "\(recordingWidth)x\(recordingHeight)",
+            "compressionEngine": useCompressionEngine ? "enabled" : "disabled"
         ]
         SentryHelper.addBreadcrumb(beginBreadcrumb)
 
         StorageManager.shared.registerChunk(url: url)
+
+        // Initialize compression engine if enabled
+        if useCompressionEngine {
+            do {
+                // Get default settings and apply adaptive quality adjustment
+                var settings = CompressionSettings.default(width: recordingWidth, height: recordingHeight, fps: Int(C.fps))
+
+                // Apply adaptive bitrate multiplier from previous chunks
+                let adjustedBitrate = Int(Double(settings.targetBitrate) * adaptiveQualityManager.currentBitrateMultiplier)
+                settings = settings.withBitrate(adjustedBitrate)
+
+                dbg("🎬 Starting segment with bitrate: \(settings.targetBitrate) bps (multiplier: \(String(format: "%.2f", adaptiveQualityManager.currentBitrateMultiplier)))")
+
+                let engine = AVFoundationCompressionEngine(settings: settings)
+
+                // Initialize the engine asynchronously
+                Task {
+                    do {
+                        try await engine.initialize(settings: settings, outputURL: url)
+                        self.q.async { [weak self] in
+                            self?.compressionEngine = engine
+                            dbg("✅ Compression engine initialized for segment")
+                        }
+                    } catch {
+                        self.q.async { [weak self] in
+                            dbg("❌ Failed to initialize compression engine: \(error)")
+                            // Fall back to direct AVAssetWriter
+                            self?.useCompressionEngine = false
+                            self?.beginSegment()  // Retry with fallback
+                        }
+                    }
+                }
+
+                // auto-finish after C.chunk seconds
+                let t = DispatchSource.makeTimerSource(queue: q)
+                t.schedule(deadline: .now() + C.chunk)
+                t.setEventHandler { [weak self] in self?.finishSegment() }
+                t.resume(); timer = t
+
+                // Transition to recording state
+                if case .recording = state {
+                    // Already in recording state, keep it
+                } else {
+                    // Fallback if state wasn't set yet
+                    transition(to: .recording(displayCount: 1), context: "segment started with compression")
+                }
+                return
+            } catch {
+                dbg("❌ Compression engine initialization failed: \(error), falling back to AVAssetWriter")
+                useCompressionEngine = false
+                // Fall through to AVAssetWriter path
+            }
+        }
+
+        // Legacy AVAssetWriter path (fallback)
         do {
             let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
             
@@ -753,7 +814,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         finishBreadcrumb.message = "Finishing segment (restart: \(restart))"
         finishBreadcrumb.data = [
             "frames": frames,
-            "file": fileURL?.lastPathComponent ?? "nil"
+            "file": fileURL?.lastPathComponent ?? "nil",
+            "compressionEngine": useCompressionEngine ? "enabled" : "disabled"
         ]
         SentryHelper.addBreadcrumb(finishBreadcrumb)
 
@@ -761,7 +823,70 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         timer?.cancel()
         timer = nil
 
-        // 2. make sure we even have something to finish
+        // Compression engine path
+        if useCompressionEngine {
+            guard let engine = compressionEngine, let url = fileURL else {
+                return reset()
+            }
+
+            guard frames > 0 else {
+                reset()
+                transition(to: .idle, context: "finishSegment - no frames (compression)")
+                StorageManager.shared.markChunkFailed(url: url)
+                return
+            }
+
+            // Finalize chunk with compression engine
+            Task {
+                do {
+                    let chunk = try await engine.finalizeChunk()
+
+                    self.q.async { [weak self] in
+                        guard let self = self else { return }
+
+                        // Mark chunk as completed
+                        StorageManager.shared.markChunkCompleted(url: url)
+
+                        // Apply adaptive quality adjustment
+                        if let newSettings = self.adaptiveQualityManager.analyzeAndAdjust(chunk: chunk) {
+                            dbg("📊 Quality adjusted: new bitrate = \(newSettings.targetBitrate) bps")
+                            // Settings will be applied to next segment via beginSegment()
+                        }
+
+                        // Save chunk metadata using RecordingMetadataManager
+                        Task { @MainActor in
+                            self.saveChunkMetadata(chunk: chunk)
+                        }
+
+                        // Reset recorder state
+                        self.reset()
+
+                        guard restart else { return }
+
+                        // Restart if still recording
+                        Task { @MainActor in
+                            guard AppState.shared.isRecording else { return }
+                            self.q.async { [weak self] in
+                                guard let self else { return }
+                                guard self.wantsRecording else { return }
+                                self.beginSegment()
+                            }
+                        }
+                    }
+                } catch {
+                    self.q.async { [weak self] in
+                        guard let self = self else { return }
+                        dbg("❌ Failed to finalize chunk: \(error)")
+                        StorageManager.shared.markChunkFailed(url: url)
+                        self.reset()
+                        self.transition(to: .idle, context: "finishSegment - compression finalization failed")
+                    }
+                }
+            }
+            return
+        }
+
+        // Legacy AVAssetWriter path
         guard let w = writer, let inp = input, let url = fileURL else {
             return reset()
         }
@@ -825,6 +950,31 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private func reset() {
         timer = nil; writer = nil; input = nil; firstPTS = nil; fileURL = nil; frames = 0
+        compressionEngine = nil  // Reset compression engine for next segment
+    }
+
+    /// Save chunk metadata for analytics and quality tracking
+    @MainActor
+    private func saveChunkMetadata(chunk: CompressedChunk) {
+        // Save using RecordingMetadataManager pattern (transitional until Epic 1 DatabaseManager ready)
+        let metadata: [String: Any] = [
+            "fileURL": chunk.fileURL.path,
+            "size": chunk.size,
+            "duration": chunk.duration,
+            "compressionRatio": chunk.compressionRatio,
+            "frameCount": chunk.frameCount,
+            "createdAt": chunk.createdAt,
+            "codec": chunk.settings.codec.rawValue,
+            "quality": chunk.settings.quality.rawValue,
+            "bitrate": chunk.settings.targetBitrate,
+            "averageBytesPerFrame": chunk.averageBytesPerFrame
+        ]
+
+        // Log for now (will be persisted to database in Epic 1)
+        dbg("📊 Chunk metadata: \(chunk.frameCount) frames, \(chunk.size / 1024) KB, ratio: \(String(format: "%.1f", chunk.compressionRatio)):1")
+
+        // TODO: When Epic 1 DatabaseManager is ready, use serial queue pattern to persist
+        // DatabaseManager.shared.saveChunkMetadata(metadata) on serial queue
     }
     
     // Check available disk space before starting new chunk
@@ -853,22 +1003,52 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         if let pb = CMSampleBufferGetImageBuffer(sb) {
             overlayClock(on: pb)
         }
-        if writer == nil { beginSegment() }
-        guard let w = writer, let inp = input else { return }
 
-        if firstPTS == nil {
-            firstPTS = sb.presentationTimeStamp
+        // Initialize segment if needed
+        if useCompressionEngine {
+            if compressionEngine == nil { beginSegment() }
+            guard let engine = compressionEngine else { return }
 
-            // Start the session timeline with the first frame's timestamp
-            // Note: startWriting() was already called in beginSegment() - no race condition!
-            w.startSession(atSourceTime: firstPTS!)
-        }
+            // Compression engine path
+            if firstPTS == nil {
+                firstPTS = sb.presentationTimeStamp
+            }
 
-        if inp.isReadyForMoreMediaData, w.status == .writing {
-            if inp.append(sb) { 
-                frames += 1
-            } else { 
-                finishSegment() 
+            // Compress frame asynchronously
+            Task {
+                do {
+                    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sb) else { return }
+                    try await engine.compress(frame: pixelBuffer, timestamp: sb.presentationTimeStamp)
+
+                    self.q.async { [weak self] in
+                        self?.frames += 1
+                    }
+                } catch {
+                    self.q.async { [weak self] in
+                        dbg("❌ Compression failed: \(error), finishing segment")
+                        self?.finishSegment()
+                    }
+                }
+            }
+        } else {
+            // Legacy AVAssetWriter path
+            if writer == nil { beginSegment() }
+            guard let w = writer, let inp = input else { return }
+
+            if firstPTS == nil {
+                firstPTS = sb.presentationTimeStamp
+
+                // Start the session timeline with the first frame's timestamp
+                // Note: startWriting() was already called in beginSegment() - no race condition!
+                w.startSession(atSourceTime: firstPTS!)
+            }
+
+            if inp.isReadyForMoreMediaData, w.status == .writing {
+                if inp.append(sb) {
+                    frames += 1
+                } else {
+                    finishSegment()
+                }
             }
         }
     }
