@@ -193,6 +193,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             print("AppDelegate: SuggestedTodosEngine initialization complete")
         }
 
+        // Initialize MemoryMonitor for leak detection (Story 1.4)
+        // Start monitoring with 10-second sampling interval
+        Task {
+            await MemoryMonitor.shared.startMonitoring(interval: 10.0)
+            print("AppDelegate: MemoryMonitor started (interval=10s)")
+
+            // Register alert callback for UI updates
+            await MemoryMonitor.shared.onAlert { alert in
+                Task { @MainActor in
+                    // Update AppState with memory status (if implemented)
+                    // For now, just log the alert
+                    print("🚨 Memory Alert: [\(alert.severity.rawValue)] \(alert.message)")
+
+                    // Send to Sentry for visibility (if enabled)
+                    SentryHelper.configureScope { scope in
+                        scope.addBreadcrumb(Breadcrumb(
+                            level: alert.severity == .critical ? .error : .warning,
+                            category: "memory"
+                        ))
+                    }
+
+                    // Could optionally show user notification for critical alerts
+                    if alert.severity == .critical {
+                        let breadcrumb = Breadcrumb(
+                            level: .error,
+                            category: "memory"
+                        )
+                        breadcrumb.message = alert.message
+                        breadcrumb.data = [
+                            "memory_usage_percent": alert.snapshot.memoryUsagePercent,
+                            "buffer_count": alert.snapshot.bufferCount,
+                            "recommended_action": alert.recommendedAction
+                        ]
+                        SentryHelper.addBreadcrumb(breadcrumb)
+                    }
+                }
+            }
+        }
+
         // Observe recording state
         analyticsSub = AppState.shared.$isRecording
             .removeDuplicates()
@@ -358,6 +397,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Cleanup MemoryMonitor (Story 1.4)
+        Task {
+            await MemoryMonitor.shared.stopMonitoring()
+            print("AppDelegate: MemoryMonitor stopped")
+        }
+
         // Cleanup FocusLock components
         backgroundMonitor?.stopMonitoring()
         launchAgentManager = nil
