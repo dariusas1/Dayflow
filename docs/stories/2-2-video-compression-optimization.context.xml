@@ -1,0 +1,503 @@
+<story-context id="bmad/bmm/workflows/4-implementation/story-context/2-2-video-compression-optimization" v="1.0">
+  <metadata>
+    <epicId>2</epicId>
+    <storyId>2</storyId>
+    <title>Video Compression Optimization</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-14</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/2-2-video-compression-optimization.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a user recording for 8+ hours</asA>
+    <iWant>efficient video compression to manage storage</iWant>
+    <soThat>disk space usage remains reasonable</soThat>
+    <tasks>
+      <task id="1" priority="high" ac="2.2.1,2.2.2">
+        <title>Design and Implement CompressionEngine Protocol</title>
+        <subtasks>
+          <subtask>Create CompressionEngine protocol with compress(), finalizeChunk(), estimateChunkSize() methods</subtask>
+          <subtask>Define CompressionSettings data model (codec, quality, targetBitrate, keyFrameInterval)</subtask>
+          <subtask>Implement VideoCodec enum (h264, hevc) with hardware encoding detection</subtask>
+          <subtask>Implement CompressionQuality enum (low, medium, high, auto)</subtask>
+          <subtask>Create CompressedChunk data model with size, duration, compressionRatio</subtask>
+          <subtask>Write unit tests for protocol conformance and data models</subtask>
+        </subtasks>
+      </task>
+      <task id="2" priority="high" ac="2.2.1,2.2.2">
+        <title>Implement AVFoundation-based H.265 Compression</title>
+        <subtasks>
+          <subtask>Create AVFoundationCompressionEngine class conforming to CompressionEngine</subtask>
+          <subtask>Initialize AVAssetWriter with H.265 codec and 1920x1080 resolution</subtask>
+          <subtask>Configure compression settings for target ~70KB per frame (2GB/8hrs = 28800 frames)</subtask>
+          <subtask>Implement compress(frame: CVPixelBuffer, timestamp: CMTime) with AVAssetWriterInput</subtask>
+          <subtask>Implement finalizeChunk() to close AVAssetWriter and return file URL</subtask>
+          <subtask>Add hardware encoding fallback to H.264 on Intel Macs</subtask>
+          <subtask>Implement CPU architecture detection (Apple Silicon vs Intel)</subtask>
+          <subtask>Write unit tests for compression pipeline with mock frames</subtask>
+        </subtasks>
+      </task>
+      <task id="3" priority="medium" ac="2.2.4">
+        <title>Implement Adaptive Quality Adjustment</title>
+        <subtasks>
+          <subtask>Create quality adjustment algorithm based on actual vs target chunk size</subtask>
+          <subtask>Implement oversized chunk handling: reduce quality by 10%</subtask>
+          <subtask>Implement undersized chunk handling: increase quality by 5%</subtask>
+          <subtask>Add quality bounds (min/max) to prevent excessive degradation or file bloat</subtask>
+          <subtask>Implement adjustment smoothing to prevent oscillation</subtask>
+          <subtask>Store quality adjustment history for analytics</subtask>
+          <subtask>Write unit tests for quality adjustment algorithm with various size deviations</subtask>
+        </subtasks>
+      </task>
+      <task id="4" priority="high" ac="all">
+        <title>Integrate CompressionEngine with ScreenRecorder</title>
+        <subtasks>
+          <subtask>Add compressionEngine property to ScreenRecorder</subtask>
+          <subtask>Initialize CompressionEngine with default settings (auto quality, H.265)</subtask>
+          <subtask>Integrate compress() call in frame capture callback (around lines 807-832)</subtask>
+          <subtask>Implement 15-minute chunk finalization timer</subtask>
+          <subtask>Add chunk file path generation and storage management</subtask>
+          <subtask>Integrate with TimelapseStorageManager for chunk persistence</subtask>
+          <subtask>Add compression metrics tracking (chunk size, compression ratio, duration)</subtask>
+          <subtask>Implement error handling for compression failures with retry logic</subtask>
+          <subtask>Write integration tests for ScreenRecorder + CompressionEngine workflow</subtask>
+        </subtasks>
+      </task>
+      <task id="5" priority="medium" ac="2.2.1,2.2.4">
+        <title>Implement Storage Metrics and Monitoring</title>
+        <subtasks>
+          <subtask>Create StorageMetrics data model (totalStorageUsed, compressionRatio, dailyAverageSize)</subtask>
+          <subtask>Implement calculateStorageMetrics() method in TimelapseStorageManager</subtask>
+          <subtask>Add daily storage usage tracking and historical trend analysis</subtask>
+          <subtask>Implement storage usage alerts when approaching retention limits</subtask>
+          <subtask>Create storage metrics dashboard data for UI integration (Epic 5)</subtask>
+          <subtask>Write unit tests for storage metrics calculation</subtask>
+        </subtasks>
+      </task>
+      <task id="6" priority="high" ac="2.2.2">
+        <title>Performance Optimization and Validation</title>
+        <subtasks>
+          <subtask>Implement per-frame compression timing measurement</subtask>
+          <subtask>Add CPU usage monitoring during compression</subtask>
+          <subtask>Optimize AVAssetWriter configuration for minimal CPU impact</subtask>
+          <subtask>Implement frame backlog detection and alerting</subtask>
+          <subtask>Add compression performance logging for diagnostics</subtask>
+          <subtask>Write performance tests measuring compression time and CPU usage</subtask>
+          <subtask>Execute 8-hour continuous compression test with storage measurement</subtask>
+          <subtask>Validate &lt;2GB/day target with actual recording data</subtask>
+        </subtasks>
+      </task>
+      <task id="7" priority="medium" ac="2.2.3">
+        <title>Quality Validation for AI Analysis</title>
+        <subtasks>
+          <subtask>Create test suite of compressed video samples at different quality levels</subtask>
+          <subtask>Integration test with Epic 3 OCR pipeline (when available)</subtask>
+          <subtask>Measure OCR accuracy on compressed frames (target &gt;90%)</subtask>
+          <subtask>Validate activity categorization effectiveness with compressed video</subtask>
+          <subtask>Document minimum quality threshold for AI analysis</subtask>
+          <subtask>Write quality validation tests with benchmark datasets</subtask>
+        </subtasks>
+      </task>
+      <task id="8" priority="high" ac="all">
+        <title>Testing and Validation</title>
+        <subtasks>
+          <subtask>Run unit tests for all compression components (&gt;80% coverage target)</subtask>
+          <subtask>Execute integration tests with ScreenRecorder and TimelapseStorageManager</subtask>
+          <subtask>Perform 8-hour recording test with actual storage measurement</subtask>
+          <subtask>Test compression on Intel and Apple Silicon Macs</subtask>
+          <subtask>Validate adaptive quality adjustment converges to 2GB/day target</subtask>
+          <subtask>Test compression failure scenarios (disk full, codec unavailable)</subtask>
+          <subtask>Verify compression doesn't impact system performance (&lt;2% CPU)</subtask>
+        </subtasks>
+      </task>
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <criterion id="2.2.1" priority="critical">
+      <title>Storage Target Achievement</title>
+      <given>continuous 1 FPS recording for 8 hours at 1920x1080 resolution</given>
+      <when>video frames are compressed and stored</when>
+      <then>total storage usage is less than 2GB per 8-hour day</then>
+      <and>compression quality is sufficient for AI text extraction (&gt;90% OCR accuracy)</and>
+    </criterion>
+    <criterion id="2.2.2" priority="critical">
+      <title>Compression Performance</title>
+      <given>recording is active at 1 FPS</given>
+      <when>each frame is compressed</when>
+      <then>compression completes within 500ms per frame</then>
+      <and>CPU usage remains below 2% on Apple Silicon</and>
+      <and>no frame backlog accumulates during continuous operation</and>
+    </criterion>
+    <criterion id="2.2.3" priority="high">
+      <title>Quality Preservation</title>
+      <given>video compression is configured for optimal storage</given>
+      <when>AI analysis processes compressed video</when>
+      <then>OCR text extraction maintains &gt;90% accuracy</then>
+      <and>activity categorization remains effective</and>
+      <and>visual quality is sufficient for user review</and>
+    </criterion>
+    <criterion id="2.2.4" priority="medium">
+      <title>Adaptive Compression</title>
+      <given>compression settings are in auto-quality mode</given>
+      <when>actual file sizes deviate from 2GB/day target</when>
+      <then>compression quality adjusts automatically</then>
+      <and>adjustments do not cause visual artifacts</and>
+      <and>storage target is maintained within ±10%</and>
+    </criterion>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification: Core Recording Pipeline Stabilization</title>
+        <section>Story 2.2: Video Compression Optimization</section>
+        <snippet>CompressionEngine service handles video frame compression with H.265/H.264 codecs targeting &lt;2GB/8hrs storage. AVFoundationCompressionEngine implements compression with adaptive quality adjustment. Storage metrics track daily usage, compression ratio, and retention compliance.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>APIs and Interfaces - CompressionEngine API</section>
+        <snippet>Protocol CompressionEngine defines compress(frame:timestamp:), finalizeChunk(), estimateChunkSize(frameCount:) methods. CompressionSettings configures codec, quality, targetBitrate, keyFrameInterval. VideoCodec enum supports h264 and hevc (H.265).</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>Workflows and Sequencing - Compression Optimization Workflow</section>
+        <snippet>Frame compression loop: receive CVPixelBuffer → timestamp calculation → AVAssetWriter.append → monitor chunk size. Chunk finalization every 15 minutes with compression ratio calculation. Adaptive quality adjustment based on actual vs target file sizes.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>Non-Functional Requirements - Performance</section>
+        <snippet>Compression Time: &lt;500ms per frame. CPU Usage: &lt;2% during 1 FPS recording on Apple Silicon. Target Storage: &lt;2GB per 8-hour day at 1920x1080. Chunk Write Speed: &gt;10MB/s. Database Operations: &lt;50ms for recording metadata writes.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics.md</path>
+        <title>Epic 2: Core Recording Pipeline Stabilization</title>
+        <section>Story 2.2: Video Compression Optimization</section>
+        <snippet>Optimize video compression for long-term storage targeting &lt;2GB per 8-hour day. Implement H.265 compression with adaptive quality adjustment. Ensure compression quality maintains &gt;90% OCR accuracy for AI analysis.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/2-1-multi-display-screen-capture.md</path>
+        <title>Story 2.1: Multi-Display Screen Capture</title>
+        <section>Dev Agent Record - Learnings from Previous Story</section>
+        <snippet>RecordingMetadataManager uses transitional JSON approach for metadata persistence until Epic 1 DatabaseManager ready. statusUpdates AsyncStream pattern in ScreenRecorder for state propagation. Serial queue pattern in ScreenRecorder for thread safety. 2-second debouncing for configuration changes.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture Documentation</title>
+        <section>Rescue Architecture Pattern</section>
+        <snippet>MVVM with Memory-Safe Serial Database Layer. Serial Database Queue ensures thread-safe database operations. BufferManager for bounded memory usage. MemoryMonitor for leak detection. All database operations serialized to prevent concurrent access crashes.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture Documentation</title>
+        <section>Technology Stack</section>
+        <snippet>Swift 5.9+ with SwiftUI, macOS 13.0+ minimum. GRDB for SQLite persistence, ScreenCaptureKit for screen recording, AVFoundation for media processing. Sentry for error tracking, PostHog for analytics.</snippet>
+      </doc>
+    </docs>
+    <code>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>ScreenRecorder</symbol>
+        <lines>108-1130</lines>
+        <reason>Core recording orchestration service. Already has AVAssetWriter integration with H.264 compression (lines 658-686). Frame capture callback at lines 849-874 where compression integration needed. Existing bitrate calculation logic (lines 660-666) to be extracted to CompressionEngine.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>beginSegment()</symbol>
+        <lines>631-740</lines>
+        <reason>Initializes AVAssetWriter with H.264 compression settings. Contains existing compression configuration (bitrate calculation, codec settings) that will be moved to CompressionEngine. Critical integration point for new compression architecture.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>stream(_:didOutputSampleBuffer:of:)</symbol>
+        <lines>849-874</lines>
+        <reason>Frame capture callback receiving CVPixelBuffer frames at 1 FPS. Compression integration point: replace direct AVAssetWriter.append with CompressionEngine.compress() call. Current implementation appends to writer at line 868.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>statusUpdates</symbol>
+        <lines>192-214</lines>
+        <reason>AsyncStream pattern for recording state propagation. Pattern to reuse for compression status updates. Emits RecorderState changes to UI observers with &lt;1s latency (AC 2.3.2).</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>TimelapseStorageManager</symbol>
+        <lines>3-78</lines>
+        <reason>Storage manager for video chunk files with purge policy. Integration point for compressed chunk persistence. Needs storage metrics calculation methods (currentUsageBytes, calculateStorageMetrics). Uses utility queue for background cleanup.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/RecordingMetadataManager.swift</path>
+        <kind>service</kind>
+        <symbol>RecordingMetadataManager</symbol>
+        <lines>16-149</lines>
+        <reason>Transitional JSON-based metadata persistence (Story 2.1). Pattern to follow for chunk metadata persistence until Epic 1 DatabaseManager ready. MainActor isolated for thread safety. Includes cleanup methods for old metadata.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/Models/DisplayConfiguration.swift</path>
+        <kind>model</kind>
+        <symbol>DisplayConfiguration</symbol>
+        <lines>13-51</lines>
+        <reason>Display configuration snapshot model from Story 2.1. Pattern for creating CompressedChunk and StorageMetrics models. Codable, Sendable, Equatable conformance. Static factory method pattern (current(displays:)).</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+        <kind>service</kind>
+        <symbol>ActiveDisplayTracker</symbol>
+        <lines>full file</lines>
+        <reason>Display monitoring service from Story 2.1. Compression settings may need display-aware configuration (higher quality for higher resolution displays). getActiveDisplays() provides resolution info for adaptive compression.</reason>
+      </file>
+    </code>
+    <dependencies>
+      <swift_packages>
+        <package name="GRDB.swift" version="7.8.0">Database persistence for recording metadata with serial queue pattern from Epic 1</package>
+        <package name="Sentry-Cocoa" version="8.56.2">Optional error reporting for compression failures (user opt-in)</package>
+        <package name="PostHog-iOS" version="3.31.0">Optional analytics for compression metrics (user opt-in)</package>
+        <package name="Sparkle" version="2.7.1">Auto-update framework (not directly used by Epic 2)</package>
+      </swift_packages>
+      <system_frameworks>
+        <framework name="AVFoundation">Video compression and encoding. AVAssetWriter for H.264/H.265 encoding, AVAssetWriterInput for frame appending, VideoToolbox for hardware acceleration.</framework>
+        <framework name="CoreMedia">Media timing and buffer management. CMTime for timestamp handling, CVPixelBuffer operations, CMSampleBuffer processing.</framework>
+        <framework name="ScreenCaptureKit">Screen capture functionality (macOS 13.0+). Provides CVPixelBuffer frames to compress.</framework>
+        <framework name="Combine">Reactive state management. @Published properties, AsyncStream bridging for status updates.</framework>
+        <framework name="Foundation">Core system framework for data models, file management, threading.</framework>
+      </system_frameworks>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <development>
+      <constraint type="architecture" priority="critical">
+        <title>Serial Database Queue Pattern (Epic 1)</title>
+        <description>All database operations for chunk metadata must use serial queue pattern to prevent concurrent access crashes. Use RecordingMetadataManager transitional approach until Epic 1 DatabaseManager ready.</description>
+        <source>docs/epics/epic-2-tech-spec.md#Dependencies-and-Integrations</source>
+      </constraint>
+      <constraint type="architecture" priority="high">
+        <title>Actor Isolation for Thread Safety</title>
+        <description>Use @MainActor isolation for UI-related managers (RecordingMetadataManager pattern). Use dedicated serial queues (DispatchQueue) for background operations (TimelapseStorageManager pattern at line 8).</description>
+        <source>Dayflow/Dayflow/Core/Recording/RecordingMetadataManager.swift:16</source>
+      </constraint>
+      <constraint type="performance" priority="critical">
+        <title>Compression Performance Requirements</title>
+        <description>Compression must complete within 500ms per frame (1 FPS allows 1 second budget). CPU usage must remain below 2% on Apple Silicon. No frame backlog accumulation during continuous operation.</description>
+        <source>docs/epics/epic-2-tech-spec.md#Non-Functional-Requirements#Performance</source>
+      </constraint>
+      <constraint type="storage" priority="critical">
+        <title>Storage Target Achievement</title>
+        <description>Target &lt;2GB per 8-hour recording day at 1920x1080 resolution. Approximately 70KB per frame (2GB / 28800 frames in 8 hours). Adaptive quality must maintain target within ±10%.</description>
+        <source>docs/stories/2-2-video-compression-optimization.md#AC-2.2.1</source>
+      </constraint>
+      <constraint type="quality" priority="high">
+        <title>Quality Preservation for AI Analysis</title>
+        <description>Compressed video must maintain &gt;90% OCR accuracy for Epic 3 text extraction. Activity categorization must remain effective. Visual quality must be sufficient for user review.</description>
+        <source>docs/stories/2-2-video-compression-optimization.md#AC-2.2.3</source>
+      </constraint>
+      <constraint type="compatibility" priority="high">
+        <title>Hardware Encoding Fallback</title>
+        <description>H.265 preferred for Apple Silicon (hardware acceleration). Fallback to H.264 on Intel Macs if H.265 performance inadequate. Implement CPU architecture detection upfront.</description>
+        <source>docs/epics/epic-2-tech-spec.md#Risks#R2</source>
+      </constraint>
+      <constraint type="integration" priority="high">
+        <title>Epic 1 Dependencies Status</title>
+        <description>BufferManager: Not yet implemented (use ScreenCaptureKit built-in buffering). MemoryMonitor: Not yet implemented (defer memory monitoring). DatabaseManager: Basic GRDB exists but serial queue pattern pending (use RecordingMetadataManager transitional approach).</description>
+        <source>docs/stories/2-1-multi-display-screen-capture.md#Dev-Notes#Learnings</source>
+      </constraint>
+      <constraint type="testing" priority="high">
+        <title>Test Coverage Requirements</title>
+        <description>Unit test coverage &gt;80% for compression modules. Integration tests with ScreenRecorder and TimelapseStorageManager. Performance tests for 8-hour recording validation. Quality tests for OCR accuracy on compressed frames.</description>
+        <source>docs/epics/epic-2-tech-spec.md#Test-Strategy-Summary</source>
+      </constraint>
+    </development>
+    <patterns>
+      <pattern type="state-management">
+        <title>AsyncStream for Status Propagation</title>
+        <description>Use AsyncStream pattern from ScreenRecorder.statusUpdates for compression status updates. Emit state changes to subscribers with &lt;1s latency. Store continuation for yielding updates.</description>
+        <example>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift:192-214</example>
+      </pattern>
+      <pattern type="concurrency">
+        <title>Serial Queue for Background Operations</title>
+        <description>Use dedicated DispatchQueue with label for background processing. Example: DispatchQueue(label: "com.dayflow.timelapse.purge", qos: .utility) for storage cleanup.</description>
+        <example>Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift:8</example>
+      </pattern>
+      <pattern type="error-handling">
+        <title>Graceful Degradation with Retry Logic</title>
+        <description>Compression failures should trigger retry with lower quality settings. Storage space low should stop recording and notify user. Database write failures should queue writes with exponential backoff.</description>
+        <example>docs/epics/epic-2-tech-spec.md#Reliability#Error-Recovery</example>
+      </pattern>
+      <pattern type="debouncing">
+        <title>2-Second Debouncing for Configuration Changes</title>
+        <description>Quality adjustment changes should be debounced to prevent oscillation. Follow pattern from Story 2.1 display configuration changes (2-second debounce to prevent rapid restart cycles).</description>
+        <example>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift:586-588</example>
+      </pattern>
+    </patterns>
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>CompressionEngine</name>
+      <kind>protocol</kind>
+      <signature>
+protocol CompressionEngine {
+    func compress(frame: CVPixelBuffer, timestamp: CMTime) async throws -&gt; CompressedChunk
+    func finalizeChunk() async throws -&gt; URL
+    func estimateChunkSize(frameCount: Int) -&gt; Int64
+    var compressionSettings: CompressionSettings { get set }
+    var currentChunkSize: Int64 { get }
+}
+      </signature>
+      <path>Core/Recording/CompressionEngine.swift (new file)</path>
+      <usage>Protocol abstraction for video compression implementations. AVFoundationCompressionEngine will implement for H.264/H.265 compression.</usage>
+    </interface>
+    <interface>
+      <name>CompressionSettings</name>
+      <kind>struct</kind>
+      <signature>
+struct CompressionSettings {
+    let codec: VideoCodec
+    let quality: CompressionQuality
+    let targetBitrate: Int // bits per second
+    let keyFrameInterval: Int
+}
+      </signature>
+      <path>Core/Recording/Models/CompressionSettings.swift (new file)</path>
+      <usage>Configuration model for compression parameters. Passed to CompressionEngine during initialization.</usage>
+    </interface>
+    <interface>
+      <name>VideoCodec</name>
+      <kind>enum</kind>
+      <signature>
+enum VideoCodec {
+    case h264
+    case hevc // H.265 for better compression
+}
+      </signature>
+      <path>Core/Recording/Models/VideoCodec.swift (new file)</path>
+      <usage>Codec selection enum. H.265 for Apple Silicon, H.264 fallback for Intel Macs.</usage>
+    </interface>
+    <interface>
+      <name>CompressionQuality</name>
+      <kind>enum</kind>
+      <signature>
+enum CompressionQuality {
+    case low, medium, high, auto
+}
+      </signature>
+      <path>Core/Recording/Models/CompressionQuality.swift (new file)</path>
+      <usage>Quality level enum. Auto mode enables adaptive quality adjustment based on storage target.</usage>
+    </interface>
+    <interface>
+      <name>CompressedChunk</name>
+      <kind>struct</kind>
+      <signature>
+struct CompressedChunk {
+    let fileURL: URL
+    let size: Int64
+    let duration: TimeInterval
+    let compressionRatio: Double
+    let frameCount: Int
+}
+      </signature>
+      <path>Core/Recording/Models/CompressedChunk.swift (new file)</path>
+      <usage>Metadata for a finalized compressed video chunk. Returned by finalizeChunk() and persisted to storage manager.</usage>
+    </interface>
+    <interface>
+      <name>StorageMetrics</name>
+      <kind>struct</kind>
+      <signature>
+struct StorageMetrics {
+    let totalStorageUsed: Int64 // bytes
+    let recordingCount: Int
+    let oldestRecordingDate: Date?
+    let compressionRatio: Double
+    let dailyAverageSize: Int64
+    let retentionDays: Int
+}
+      </signature>
+      <path>Core/Recording/Models/StorageMetrics.swift (new file)</path>
+      <usage>Storage usage metrics calculated by TimelapseStorageManager. Used for storage monitoring and cleanup decisions.</usage>
+    </interface>
+    <interface>
+      <name>ScreenRecorder.compressionEngine</name>
+      <kind>property</kind>
+      <signature>private var compressionEngine: CompressionEngine?</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift (modify)</path>
+      <usage>Add compressionEngine property to ScreenRecorder. Initialize in beginSegment(), call compress() in stream callback, finalize in finishSegment().</usage>
+    </interface>
+    <interface>
+      <name>TimelapseStorageManager.calculateStorageMetrics()</name>
+      <kind>method</kind>
+      <signature>func calculateStorageMetrics() -&gt; StorageMetrics</signature>
+      <path>Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift (modify)</path>
+      <usage>Add method to calculate comprehensive storage metrics. Analyze chunk files, compute daily average, compression ratios, retention compliance.</usage>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+FocusLock uses XCTest framework with Swift Testing patterns. Test files located in Dayflow/DayflowTests/. Unit tests verify individual component behavior with &gt;80% coverage target. Integration tests validate component interactions and data flow correctness. Performance tests measure timing, CPU usage, memory consumption against NFRs. System tests execute end-to-end workflows over extended durations (8+ hours).
+
+Testing patterns from Story 2.1: @MainActor for UI-related tests, async/await for asynchronous operations, XCTestExpectation for timing validation. Tests follow AC-driven structure mapping each test to specific acceptance criteria (e.g., testStorageTargetAchievement for AC 2.2.1).
+
+Compression-specific testing: Mock CVPixelBuffer frames for compression pipeline tests, measure per-frame timing and CPU usage, validate actual storage consumption over 8-hour recording, OCR accuracy validation with Epic 3 integration when available.
+
+Test data: Sample video frames at various resolutions, benchmark datasets for quality validation, error injection framework for failure mode testing. CI/CD integration: unit tests on every commit, integration tests on PR merge, performance tests nightly, system tests weekly.
+    </standards>
+    <locations>
+      <location>Dayflow/DayflowTests/</location>
+      <location>Dayflow/DayflowTests/*CompressionTests.swift (new files)</location>
+      <location>Dayflow/DayflowTests/RecordingPipelineEdgeCaseTests.swift (existing, extend for compression scenarios)</location>
+      <location>Dayflow/DayflowTests/MultiDisplayRecordingTests.swift (existing pattern reference)</location>
+    </locations>
+    <ideas>
+      <test ac="2.2.1" type="integration">
+        <title>testStorageTargetAchievement</title>
+        <description>Run 8-hour recording simulation at 1 FPS with 1920x1080 resolution. Measure total storage consumption. Assert &lt;2GB total. Validate compression quality maintains &gt;90% OCR accuracy (integration with Epic 3 when available).</description>
+      </test>
+      <test ac="2.2.2" type="performance">
+        <title>testCompressionPerformance</title>
+        <description>Measure per-frame compression timing with AVFoundationCompressionEngine. Assert &lt;500ms per frame. Profile CPU usage during compression. Assert &lt;2% CPU on Apple Silicon. Verify no frame backlog accumulation over 100 frames.</description>
+      </test>
+      <test ac="2.2.2" type="unit">
+        <title>testCompressionEngineInitialization</title>
+        <description>Verify CompressionEngine initializes with H.265 on Apple Silicon. Verify fallback to H.264 on Intel Macs. Test CPU architecture detection logic. Validate compression settings configuration.</description>
+      </test>
+      <test ac="2.2.3" type="integration">
+        <title>testQualityPreservationForAI</title>
+        <description>Create compressed video samples at low/medium/high quality levels. Run OCR text extraction (Epic 3 integration). Measure OCR accuracy per quality level. Assert &gt;90% accuracy at target quality. Validate activity categorization effectiveness.</description>
+      </test>
+      <test ac="2.2.4" type="unit">
+        <title>testAdaptiveQualityAdjustment</title>
+        <description>Simulate oversized chunks (10% over target). Verify quality reduction by 10%. Simulate undersized chunks (10% under target). Verify quality increase by 5%. Test quality bounds (min/max limits). Verify adjustment smoothing prevents oscillation.</description>
+      </test>
+      <test ac="all" type="integration">
+        <title>testScreenRecorderCompressionIntegration</title>
+        <description>Initialize ScreenRecorder with CompressionEngine. Verify compress() called in frame capture callback. Validate 15-minute chunk finalization. Assert compressed chunks saved to TimelapseStorageManager. Verify compression metrics tracked (size, ratio, duration).</description>
+      </test>
+      <test ac="2.2.1,2.2.4" type="unit">
+        <title>testStorageMetricsCalculation</title>
+        <description>Create mock chunk files with known sizes. Call TimelapseStorageManager.calculateStorageMetrics(). Verify totalStorageUsed, compressionRatio, dailyAverageSize calculations. Test retention compliance logic.</description>
+      </test>
+      <test type="edge-case">
+        <title>testCompressionFailureRecovery</title>
+        <description>Inject AVAssetWriter failure. Verify retry logic with lower quality. Test disk full scenario. Assert graceful recording stop with user notification. Test codec unavailability (H.265 unsupported). Verify fallback to H.264.</description>
+      </test>
+      <test type="performance">
+        <title>testIntelMacCompressionPerformance</title>
+        <description>If running on Intel Mac, measure H.264 compression performance. Assert &lt;500ms per frame (may require lower quality settings). Validate H.265 performance inadequacy triggers H.264 fallback.</description>
+      </test>
+      <test type="system">
+        <title>test24HourContinuousCompression</title>
+        <description>Run 24-hour continuous recording (3× retention period). Monitor memory usage for leaks. Verify compression stability over extended duration. Assert no crashes. Validate storage cleanup after retention period expires.</description>
+      </test>
+    </ideas>
+  </tests>
+</story-context>
