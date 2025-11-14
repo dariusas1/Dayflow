@@ -41,6 +41,15 @@ extension Date {
     }
 }
 
+// MARK: - Settings Error Types
+
+enum SettingsError: Error {
+    case encodingFailed(String)
+    case decodingFailed(String)
+    case invalidValue(String)
+    case invalidPath(String)
+    case migrationFailed(String)
+}
 
 /// File + database persistence used by screen‑recorder & Gemini pipeline.
 ///
@@ -106,6 +115,14 @@ protocol StorageManaging: Sendable {
     
     /// All batches, newest first
     func allBatches() -> [(id: Int64, start: Int, end: Int, status: String)]
+
+    // Data Integrity Validation
+    func validateTimelineCardIntegrity() -> [String]
+    func getIntegrityStatistics() -> IntegrityStatistics
+
+    // Chunk Management and Storage
+    func cleanupOldChunks(retentionDays: Int) async throws -> CleanupStats
+    func calculateStorageUsage() async throws -> StorageUsage
 }
 
 
@@ -284,6 +301,53 @@ struct TimelineCardWithTimestamps {
     let videoSummaryURL: String?
 }
 
+/// Comprehensive statistics about database health and integrity
+///
+/// This structure provides detailed metrics about timeline cards, batches, and observations,
+/// including counts of various integrity violations. Use this to monitor database health
+/// and identify potential data quality issues.
+///
+/// - Note: This structure is thread-safe and conforms to Sendable for concurrent access.
+struct IntegrityStatistics: Sendable {
+    /// Total number of active (non-deleted) timeline cards in the database
+    let totalCards: Int
+
+    /// Total number of analysis batches across all time periods
+    let totalBatches: Int
+
+    /// Total number of observations (transcripts) stored in the database
+    let totalObservations: Int
+
+    /// Number of timeline cards with invalid timestamps (end_ts < start_ts)
+    /// - Note: This should always be 0 in a healthy database
+    let cardsWithInvalidTimestamps: Int
+
+    /// Number of timeline cards referencing non-existent batches
+    /// - Note: This indicates orphaned foreign key references that need cleanup
+    let orphanedCards: Int
+
+    /// Number of observations referencing non-existent batches
+    /// - Note: This indicates orphaned foreign key references that need cleanup
+    let orphanedObservations: Int
+
+    /// Number of timeline cards missing required fields (title, category, timestamps)
+    /// - Note: This should always be 0 due to NOT NULL constraints
+    let cardsWithMissingRequiredFields: Int
+
+    /// Number of distinct days that have timeline cards
+    let daysWithCards: Int
+
+    /// Average number of timeline cards per day
+    /// - Note: Calculated as totalCards / daysWithCards
+    let averageCardsPerDay: Double
+
+    /// Date of the oldest timeline card in YYYY-MM-DD format, or nil if no cards exist
+    let oldestCardDate: String?
+
+    /// Date of the newest timeline card in YYYY-MM-DD format, or nil if no cards exist
+    let newestCardDate: String?
+}
+
 
 final class StorageManager: StorageManaging, @unchecked Sendable {
     static let shared = StorageManager()
@@ -323,6 +387,9 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
     // Dedicated queue for database writes to prevent main thread blocking
     private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+
+    // Timeline cache for performance optimization
+    private let timelineCache = TimelineCache(cacheDuration: 60.0, maxCacheSize: 30)
 
     private init() {
         UserDefaultsMigrator.migrateIfNeeded()
@@ -405,7 +472,47 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         // Start connection monitoring
         startConnectionMonitoring()
     }
-    
+
+    // MARK: - Testing Support
+
+    /// Internal initializer for testing purposes only
+    /// Creates a StorageManager instance with a custom database path (typically a temporary file)
+    /// - Parameter testDatabasePath: Path to the test database file
+    /// - Note: This initializer skips production-specific setup like purge scheduling and connection monitoring
+    internal init(testDatabasePath: String) {
+        let fileMgr = FileManager.default
+        let tempDir = fileMgr.temporaryDirectory
+        let testBaseDir = tempDir.appendingPathComponent("DayflowTests-\(UUID().uuidString)", isDirectory: true)
+        let testRecordingsDir = testBaseDir.appendingPathComponent("recordings", isDirectory: true)
+
+        // Create test directories
+        try? fileMgr.createDirectory(at: testBaseDir, withIntermediateDirectories: true)
+        try? fileMgr.createDirectory(at: testRecordingsDir, withIntermediateDirectories: true)
+
+        root = testRecordingsDir
+        dbURL = URL(fileURLWithPath: testDatabasePath)
+
+        // Configure test database with WAL mode
+        var config = Configuration()
+        config.maximumReaderCount = 5
+        config.qos = .userInitiated
+
+        config.prepareDatabase { db in
+            if !db.configuration.readonly {
+                try? db.execute(sql: "PRAGMA journal_mode = WAL")
+                try? db.execute(sql: "PRAGMA synchronous = NORMAL")
+            }
+            try? db.execute(sql: "PRAGMA busy_timeout = 5000")
+        }
+
+        db = try! DatabasePool(path: dbURL.path, configuration: config)
+
+        // Run migrations to create schema
+        migrate()
+
+        // Note: Skip purge scheduling, optimization scheduling, and connection monitoring for tests
+    }
+
     private func startConnectionMonitoring() {
         // Monitor connection pool usage periodically
         let monitorQueue = DispatchQueue(label: "com.dayflow.storage.connectionMonitor", qos: .utility)
@@ -809,7 +916,16 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 CREATE INDEX IF NOT EXISTS idx_context_switches_created ON context_switches(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_context_switches_date ON context_switches(DATE(created_at));
             """)
-            
+
+            // App Settings Table: Generic key-value store for app settings
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+                );
+            """)
+
             print("✅ Second Brain platform tables created successfully")
         }
     }
@@ -974,6 +1090,240 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                               fileUrl: r["file_url"], status: r["status"])
             }
         }) ?? []
+    }
+
+    /// Removes recording chunks older than the specified retention period
+    ///
+    /// This method performs automatic cleanup of old recording chunks to manage storage usage.
+    /// It identifies chunks whose end timestamp is older than the retention period and performs
+    /// the following operations for each chunk:
+    /// 1. Deletes the physical video file from the filesystem
+    /// 2. Clears video_summary_url references in timeline_cards (preserves timeline data)
+    /// 3. Removes the chunk record from the database
+    ///
+    /// **Important:** This method only deletes chunks that are NOT referenced in batches.
+    /// Chunks linked to analysis batches via the batch_chunks table are excluded from cleanup
+    /// to prevent foreign key constraint violations (ON DELETE RESTRICT).
+    ///
+    /// The cleanup process is resilient to individual file deletion failures - if a file cannot
+    /// be deleted, the operation logs an error and continues processing remaining chunks.
+    ///
+    /// - Parameter retentionDays: Number of days to retain chunks (default: 3 days)
+    /// - Returns: Statistics about the cleanup operation including chunks found, files deleted,
+    ///            database records removed, and bytes freed
+    /// - Throws: Database errors if chunk queries or deletions fail
+    ///
+    /// ## Performance
+    /// - Target: < 5 seconds for batch deletion
+    /// - Sequential processing of chunks with file I/O and database operations
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Clean up chunks older than 7 days
+    /// let stats = try await storageManager.cleanupOldChunks(retentionDays: 7)
+    /// print("Freed \(stats.bytesFreed) bytes")
+    /// ```
+    func cleanupOldChunks(retentionDays: Int = 3) async throws -> CleanupStats {
+        let retentionSeconds = retentionDays * 24 * 60 * 60
+        let cutoffTs = Int(Date().timeIntervalSince1970) - retentionSeconds
+
+        var stats = CleanupStats()
+
+        // Find chunks older than retention period
+        let oldChunks = try await withCheckedThrowingContinuation { continuation in
+            dbWriteQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                    return
+                }
+
+                do {
+                    let chunks = try self.timedRead("fetchOldChunks") { db -> [RecordingChunk] in
+                        try Row.fetchAll(db, sql: """
+                            SELECT id, file_url, start_ts, end_ts, status
+                            FROM chunks
+                            WHERE end_ts < ?
+                              AND id NOT IN (SELECT chunk_id FROM batch_chunks)
+                        """, arguments: [cutoffTs])
+                        .map { row in
+                            RecordingChunk(
+                                id: row["id"],
+                                startTs: row["start_ts"],
+                                endTs: row["end_ts"],
+                                fileUrl: row["file_url"],
+                                status: row["status"]
+                            )
+                        }
+                    }
+                    continuation.resume(returning: chunks)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        stats.chunksFound = oldChunks.count
+
+        // Delete files and database records
+        for chunk in oldChunks {
+            let fileURL = URL(fileURLWithPath: chunk.fileUrl)
+
+            // Delete physical file
+            do {
+                let attrs = try fileMgr.attributesOfItem(atPath: chunk.fileUrl)
+                let fileSize = attrs[.size] as? Int64 ?? 0
+
+                try fileMgr.removeItem(at: fileURL)
+                stats.filesDeleted += 1
+                stats.bytesFreed += fileSize
+            } catch {
+                // Log error but continue cleanup
+                print("Failed to delete chunk file at \(chunk.fileUrl): \(error)")
+            }
+
+            // Clear video references in timeline cards (preserve timeline data)
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                dbWriteQueue.async { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                        return
+                    }
+
+                    do {
+                        try self.timedWrite("clearVideoURLs") { db in
+                            let filename = fileURL.lastPathComponent
+                            try db.execute(sql: """
+                                UPDATE timeline_cards
+                                SET video_summary_url = NULL
+                                WHERE video_summary_url LIKE ?
+                            """, arguments: ["%\(filename)%"])
+                        }
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            // Delete database record
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                dbWriteQueue.async { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                        return
+                    }
+
+                    do {
+                        try self.timedWrite("deleteChunkRecord") { db in
+                            try db.execute(sql: "DELETE FROM chunks WHERE id = ?", arguments: [chunk.id])
+                        }
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            stats.recordsDeleted += 1
+        }
+
+        return stats
+    }
+
+    /// Calculates total storage usage for database and recording files
+    ///
+    /// This method provides a comprehensive breakdown of storage usage across both
+    /// database files and video recording chunks. It performs the following calculations:
+    ///
+    /// **Database Storage:**
+    /// - Main SQLite database file (chunks.sqlite)
+    /// - Write-Ahead Log file (chunks.sqlite-wal)
+    /// - Shared memory file (chunks.sqlite-shm)
+    ///
+    /// **Recording Storage:**
+    /// - Queries all chunk file paths from the database
+    /// - Calculates individual file sizes for each chunk
+    /// - Handles missing files gracefully (files may be deleted or moved)
+    ///
+    /// The calculation runs on a background queue to avoid blocking the main thread,
+    /// making it safe to call from UI contexts.
+    ///
+    /// - Returns: A `StorageUsage` struct containing:
+    ///   - `databaseBytes`: Total size of database files
+    ///   - `recordingsBytes`: Total size of all chunk video files
+    ///   - `totalBytes`: Combined size of database and recordings
+    ///   - Computed properties for GB conversions (`totalGB`, `databaseGB`, `recordingsGB`)
+    /// - Throws: Database errors if chunk queries fail
+    ///
+    /// ## Performance
+    /// - Target: < 2 seconds for 1000+ chunks
+    /// - Uses single database query to fetch all chunk paths
+    /// - File size lookups are performed synchronously but efficiently
+    ///
+    /// ## Example
+    /// ```swift
+    /// let usage = try await storageManager.calculateStorageUsage()
+    /// print("Total storage: \(usage.totalGB) GB")
+    /// print("Database: \(usage.databaseGB) GB, Recordings: \(usage.recordingsGB) GB")
+    /// ```
+    func calculateStorageUsage() async throws -> StorageUsage {
+        // Calculate database size (main file + WAL + SHM)
+        let dbPath = dbURL.path
+        var databaseSize: Int64 = 0
+
+        // Main database file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // WAL file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath + "-wal"),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // SHM file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath + "-shm"),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // Calculate total recording file size
+        let recordingsSize = try await withCheckedThrowingContinuation { continuation in
+            dbWriteQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                    return
+                }
+
+                do {
+                    let totalSize = try self.timedRead("calculateRecordingsSize") { db -> Int64 in
+                        let chunks = try Row.fetchAll(db, sql: "SELECT file_url FROM chunks")
+                        var total: Int64 = 0
+
+                        for row in chunks {
+                            let path: String = row["file_url"]
+                            if let attrs = try? self.fileMgr.attributesOfItem(atPath: path),
+                               let size = attrs[.size] as? Int64 {
+                                total += size
+                            }
+                        }
+
+                        return total
+                    }
+                    continuation.resume(returning: totalSize)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        return StorageUsage(
+            databaseBytes: databaseSize,
+            recordingsBytes: recordingsSize,
+            totalBytes: databaseSize + recordingsSize
+        )
     }
 
 
@@ -1155,21 +1505,26 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
 
     func fetchTimelineCards(forDay day: String) -> [TimelineCard] {
+        // Check cache first
+        if let cachedCards = timelineCache.getCachedCards(forDay: day) {
+            return cachedCards
+        }
+
         let decoder = JSONDecoder()
-        
+
         guard let dayDate = dateFormatter.date(from: day) else {
             return []
         }
-        
+
         let calendar = Calendar.current
-        
+
         // Get 4 AM of the given day as the start
         var startComponents = calendar.dateComponents([.year, .month, .day], from: dayDate)
         startComponents.hour = 4
         startComponents.minute = 0
         startComponents.second = 0
         guard let dayStart = calendar.date(from: startComponents) else { return [] }
-        
+
         // Get 4 AM of the next day as the end
         guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayDate) else { return [] }
         var endComponents = calendar.dateComponents([.year, .month, .day], from: nextDay)
@@ -1177,7 +1532,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         endComponents.minute = 0
         endComponents.second = 0
         guard let dayEnd = calendar.date(from: endComponents) else { return [] }
-        
+
         let startTs = Int(dayStart.timeIntervalSince1970)
         let endTs = Int(dayEnd.timeIntervalSince1970)
 
@@ -1220,7 +1575,14 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 )
             }
         }
-        return cards ?? []
+        let fetchedCards = cards ?? []
+
+        // Cache the results for future queries
+        if !fetchedCards.isEmpty {
+            timelineCache.cacheCards(fetchedCards, forDay: day)
+        }
+
+        return fetchedCards
     }
 
     func fetchTimelineCardsByTimeRange(from: Date, to: Date) -> [TimelineCard] {
@@ -1542,7 +1904,18 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 insertedIds.append(insertedId)
             }
         }
-        
+
+        // Invalidate cache for affected days
+        // Calculate which days are affected by the time range
+        let calendar = Calendar.current
+        var currentDate = from
+        while currentDate < to {
+            let (dayString, _, _) = currentDate.getDayInfoFor4AMBoundary()
+            timelineCache.invalidate(forDay: dayString)
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
+            currentDate = nextDate
+        }
+
         return (insertedIds, videoPaths)
     }
 
@@ -1776,7 +2149,10 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                   AND is_deleted = 0
             """, arguments: [startTs, endTs])
         }
-        
+
+        // Invalidate cache for this day
+        timelineCache.invalidate(forDay: day)
+
         return videoPaths
     }
 
@@ -3112,6 +3488,329 @@ private extension StorageManager {
         } catch {
             let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
             logger.error("Failed to track database growth: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Data Integrity Validation
+
+    /// Validates timeline card data integrity across the entire database
+    ///
+    /// Performs comprehensive validation checks to identify data quality issues including:
+    /// - Invalid timestamps (end before start)
+    /// - Orphaned foreign key references (cards referencing non-existent batches)
+    /// - Missing required fields (title, category, timestamps)
+    /// - Orphaned observations
+    /// - Batches without associated chunks
+    ///
+    /// This method is read-only and does not modify any data. Use it for diagnostic purposes
+    /// or as part of regular health checks.
+    ///
+    /// - Returns: Array of human-readable issue descriptions. Returns a single element
+    ///            `["Database integrity check passed - no issues found"]` if no issues are detected.
+    ///
+    /// - Note: This method is thread-safe and can be called concurrently with other database operations.
+    ///         All validation queries only examine active (non-deleted) records.
+    ///
+    /// # Example Usage
+    /// ```swift
+    /// let issues = storageManager.validateTimelineCardIntegrity()
+    /// if issues.first?.contains("passed") == true {
+    ///     print("Database is healthy")
+    /// } else {
+    ///     print("Issues found:")
+    ///     issues.forEach { print("  - \($0)") }
+    /// }
+    /// ```
+    func validateTimelineCardIntegrity() -> [String] {
+        var issues: [String] = []
+
+        // Check for invalid timestamps (end_ts < start_ts)
+        let invalidTimestamps = (try? timedRead("validateIntegrity:invalidTimestamps") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE end_ts < start_ts
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        if invalidTimestamps > 0 {
+            issues.append("\(invalidTimestamps) timeline cards have invalid timestamps (end before start)")
+        }
+
+        // Check for orphaned timeline cards (batch_id references non-existent batch)
+        let orphanedCards = (try? timedRead("validateIntegrity:orphanedCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards tc
+                LEFT JOIN analysis_batches ab ON tc.batch_id = ab.id
+                WHERE tc.batch_id IS NOT NULL
+                  AND ab.id IS NULL
+                  AND tc.is_deleted = 0
+            """)
+        }) ?? 0
+
+        if orphanedCards > 0 {
+            issues.append("\(orphanedCards) timeline cards reference non-existent batches")
+        }
+
+        // Check for missing required fields (title, category, timestamps)
+        let missingFields = (try? timedRead("validateIntegrity:missingFields") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE (title IS NULL OR title = ''
+                   OR category IS NULL OR category = ''
+                   OR start IS NULL OR start = ''
+                   OR end IS NULL OR end = '')
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        if missingFields > 0 {
+            issues.append("\(missingFields) timeline cards have missing required fields")
+        }
+
+        // NOTE: Day field consistency with 4AM boundary logic is NOT validated
+        //
+        // RATIONALE: Validating that the `day` field matches the 4AM boundary calculation
+        // would require re-implementing the Date.getDayInfoFor4AMBoundary() logic in SQL,
+        // which is complex and error-prone. The day field is computed correctly at write time
+        // using the Swift extension method, and any inconsistencies would indicate a bug in
+        // the save logic rather than data corruption.
+        //
+        // ALTERNATIVE APPROACH: If day field validation becomes critical, consider:
+        // 1. Adding a stored function in SQLite that implements 4AM boundary logic
+        // 2. Creating a separate validation test that fetches all cards and validates in Swift
+        // 3. Adding a migration to recompute all day fields from start_ts if inconsistencies found
+        //
+        // For now, we rely on the correctness of saveTimelineCardShell() which uses
+        // getDayInfoFor4AMBoundary() to compute the day field at insertion time.
+
+        // Check for orphaned observations (batch_id references non-existent batch)
+        let orphanedObs = (try? timedRead("validateIntegrity:orphanedObservations") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM observations o
+                LEFT JOIN analysis_batches ab ON o.batch_id = ab.id
+                WHERE ab.id IS NULL
+            """)
+        }) ?? 0
+
+        if orphanedObs > 0 {
+            issues.append("\(orphanedObs) observations reference non-existent batches")
+        }
+
+        // Check for batches without any chunks
+        let batchesWithoutChunks = (try? timedRead("validateIntegrity:batchesWithoutChunks") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM analysis_batches ab
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM batch_chunks bc
+                    WHERE bc.batch_id = ab.id
+                )
+            """)
+        }) ?? 0
+
+        if batchesWithoutChunks > 0 {
+            issues.append("\(batchesWithoutChunks) batches have no associated chunks")
+        }
+
+        if issues.isEmpty {
+            return ["Database integrity check passed - no issues found"]
+        }
+
+        return issues
+    }
+
+    /// Returns comprehensive statistics about database health and integrity
+    ///
+    /// Collects detailed metrics about the database including counts of timeline cards, batches,
+    /// observations, and various integrity violations. This method provides a complete snapshot
+    /// of database health for monitoring and diagnostic purposes.
+    ///
+    /// The statistics include:
+    /// - Total counts of cards, batches, and observations
+    /// - Integrity violation counts (invalid timestamps, orphaned records, missing fields)
+    /// - Timeline coverage metrics (days with cards, average cards per day)
+    /// - Date range of timeline data (oldest and newest cards)
+    ///
+    /// - Returns: `IntegrityStatistics` structure containing all collected metrics.
+    ///
+    /// - Note: This method is thread-safe and can be called concurrently. All queries examine
+    ///         only active (non-deleted) records except for batch and observation counts.
+    ///
+    /// # Example Usage
+    /// ```swift
+    /// let stats = storageManager.getIntegrityStatistics()
+    /// print("Total cards: \(stats.totalCards)")
+    /// print("Average per day: \(String(format: "%.1f", stats.averageCardsPerDay))")
+    /// if stats.cardsWithInvalidTimestamps > 0 {
+    ///     print("Warning: \(stats.cardsWithInvalidTimestamps) cards have invalid timestamps")
+    /// }
+    /// ```
+    func getIntegrityStatistics() -> IntegrityStatistics {
+        let totalCards = (try? timedRead("integrityStats:totalCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE is_deleted = 0
+            """)
+        }) ?? 0
+
+        let totalBatches = (try? timedRead("integrityStats:totalBatches") { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM analysis_batches")
+        }) ?? 0
+
+        let totalObservations = (try? timedRead("integrityStats:totalObservations") { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM observations")
+        }) ?? 0
+
+        let invalidTimestamps = (try? timedRead("integrityStats:invalidTimestamps") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE end_ts < start_ts AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        let orphanedCards = (try? timedRead("integrityStats:orphanedCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards tc
+                LEFT JOIN analysis_batches ab ON tc.batch_id = ab.id
+                WHERE tc.batch_id IS NOT NULL
+                  AND ab.id IS NULL
+                  AND tc.is_deleted = 0
+            """)
+        }) ?? 0
+
+        let orphanedObservations = (try? timedRead("integrityStats:orphanedObservations") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM observations o
+                LEFT JOIN analysis_batches ab ON o.batch_id = ab.id
+                WHERE ab.id IS NULL
+            """)
+        }) ?? 0
+
+        let missingFields = (try? timedRead("integrityStats:missingFields") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE (title IS NULL OR title = ''
+                   OR category IS NULL OR category = ''
+                   OR start IS NULL OR start = ''
+                   OR end IS NULL OR end = '')
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        let daysWithCards = (try? timedRead("integrityStats:daysWithCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(DISTINCT day) FROM timeline_cards
+                WHERE is_deleted = 0
+            """)
+        }) ?? 0
+
+        let oldestDay: String? = try? timedRead("integrityStats:oldestDay") { db in
+            try String.fetchOne(db, sql: """
+                SELECT day FROM timeline_cards
+                WHERE is_deleted = 0
+                ORDER BY start_ts ASC
+                LIMIT 1
+            """)
+        }
+
+        let newestDay: String? = try? timedRead("integrityStats:newestDay") { db in
+            try String.fetchOne(db, sql: """
+                SELECT day FROM timeline_cards
+                WHERE is_deleted = 0
+                ORDER BY start_ts DESC
+                LIMIT 1
+            """)
+        }
+
+        let averageCardsPerDay: Double = daysWithCards > 0
+            ? Double(totalCards) / Double(daysWithCards)
+            : 0.0
+
+        return IntegrityStatistics(
+            totalCards: totalCards,
+            totalBatches: totalBatches,
+            totalObservations: totalObservations,
+            cardsWithInvalidTimestamps: invalidTimestamps,
+            orphanedCards: orphanedCards,
+            orphanedObservations: orphanedObservations,
+            cardsWithMissingRequiredFields: missingFields,
+            daysWithCards: daysWithCards,
+            averageCardsPerDay: averageCardsPerDay,
+            oldestCardDate: oldestDay,
+            newestCardDate: newestDay
+        )
+    }
+
+    // MARK: - Settings Persistence (Story 4.3)
+
+    /// Saves a setting to the app_settings table with JSON encoding
+    /// - Parameters:
+    ///   - key: Setting identifier (e.g., "aiProvider", "recording", "retention")
+    ///   - value: Codable value to store
+    /// - Throws: Encoding errors or database errors
+    func saveSetting<T: Codable>(key: String, value: T) async throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        guard let jsonString = String(data: data, encoding: .utf8) else {
+            throw SettingsError.encodingFailed("Failed to convert encoded data to UTF-8 string")
+        }
+
+        try await db.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+            """, arguments: [key, jsonString, Int(Date().timeIntervalSince1970)])
+        }
+    }
+
+    /// Loads a setting from the app_settings table with JSON decoding
+    /// - Parameters:
+    ///   - key: Setting identifier
+    ///   - defaultValue: Value to return if setting doesn't exist or fails to decode
+    /// - Returns: The decoded setting value or the default value
+    /// - Throws: Database errors (but not decoding errors - returns default instead)
+    func loadSetting<T: Codable>(key: String, defaultValue: T) async throws -> T {
+        let jsonString = try await db.read { db -> String? in
+            try String.fetchOne(db, sql: """
+                SELECT value FROM app_settings WHERE key = ?
+            """, arguments: [key])
+        }
+
+        guard let jsonString = jsonString,
+              let data = jsonString.data(using: .utf8) else {
+            return defaultValue
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            // Log decoding failure but return default value gracefully
+            print("⚠️ Failed to decode setting '\(key)': \(error). Using default value.")
+            return defaultValue
+        }
+    }
+
+    /// Deletes a setting from the app_settings table
+    /// - Parameter key: Setting identifier to delete
+    /// - Throws: Database errors
+    func deleteSetting(key: String) async throws {
+        try await db.write { db in
+            try db.execute(sql: """
+                DELETE FROM app_settings WHERE key = ?
+            """, arguments: [key])
+        }
+    }
+
+    /// Lists all setting keys in the database
+    /// - Returns: Array of all setting keys
+    /// - Throws: Database errors
+    func listSettingKeys() async throws -> [String] {
+        return try await db.read { db in
+            try String.fetchAll(db, sql: "SELECT key FROM app_settings ORDER BY key")
         }
     }
 }

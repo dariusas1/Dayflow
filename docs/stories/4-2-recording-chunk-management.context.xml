@@ -1,0 +1,1028 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Story 4.2: Recording Chunk Management - Context File
+  Generated: 2025-11-14
+  Purpose: Comprehensive context for implementing recording chunk lifecycle management,
+           automatic cleanup, retention policies, and storage quota management
+-->
+<story-context>
+  <metadata>
+    <story-id>4-2-recording-chunk-management</story-id>
+    <story-title>Recording Chunk Management</story-title>
+    <epic-id>epic-4</epic-id>
+    <epic-title>Database &amp; Persistence Reliability</epic-title>
+    <generated-date>2025-11-14</generated-date>
+    <status>ready-for-dev</status>
+    <priority>high</priority>
+  </metadata>
+
+  <!-- ================================================================
+       STORY OVERVIEW
+       ================================================================ -->
+  <overview>
+    <description>
+      Implement efficient management of video recording chunks with automatic cleanup
+      based on retention policies. Ensures storage doesn't fill up and old data is
+      handled properly while preserving timeline data integrity.
+    </description>
+
+    <goals>
+      <goal>Register and track recording chunks in database with file paths and metadata</goal>
+      <goal>Implement automatic cleanup of old chunks based on retention policy (default: 3 days)</goal>
+      <goal>Preserve timeline data when chunks are deleted (clear video_summary_url but keep timeline cards)</goal>
+      <goal>Enforce storage usage within configured limits (default: 10GB)</goal>
+      <goal>Support chunk-to-batch mapping for AI analysis pipeline</goal>
+    </goals>
+
+    <acceptance-criteria>
+      <criterion>Chunk registration on recording start/completion with database persistence</criterion>
+      <criterion>Automatic cleanup runs every 1 hour, deleting chunks older than retention period</criterion>
+      <criterion>Timeline cards remain intact when chunks are deleted (video URLs cleared)</criterion>
+      <criterion>Storage usage calculated accurately (database + video files)</criterion>
+      <criterion>Cleanup completes within 5 seconds for batch deletion</criterion>
+      <criterion>Retention policy configurable (1-365 days, 1-1000 GB)</criterion>
+    </acceptance-criteria>
+  </overview>
+
+  <!-- ================================================================
+       DATABASE SCHEMA
+       ================================================================ -->
+  <database-schema>
+    <table name="chunks">
+      <description>Stores video recording segments with timestamps and status tracking</description>
+      <location>Dayflow/Core/Recording/StorageManager.swift:659-668</location>
+      <definition><![CDATA[
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_ts INTEGER NOT NULL,
+    end_ts INTEGER NOT NULL,
+    file_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'recording',  -- recording, completed, failed
+    is_deleted INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
+CREATE INDEX IF NOT EXISTS idx_chunks_start_ts ON chunks(start_ts);
+      ]]></definition>
+      <notes>
+        - status lifecycle: 'recording' -> 'completed' or 'failed'
+        - is_deleted flag for soft deletes (not currently used in cleanup)
+        - start_ts and end_ts are Unix timestamps (seconds since epoch)
+        - file_url is absolute path to .mp4 file in recordings directory
+      </notes>
+    </table>
+
+    <table name="analysis_batches">
+      <description>Groups chunks for LLM processing, links to timeline cards</description>
+      <location>Dayflow/Core/Recording/StorageManager.swift:671-681</location>
+      <definition><![CDATA[
+CREATE TABLE IF NOT EXISTS analysis_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_start_ts INTEGER NOT NULL,
+    batch_end_ts INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending, processing, completed, failed
+    reason TEXT,
+    llm_metadata TEXT,
+    detailed_transcription TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_batches_status ON analysis_batches(status);
+      ]]></definition>
+      <notes>
+        - Batches represent time ranges of chunks processed together
+        - llm_metadata stores JSON array of LLM call logs
+        - detailed_transcription stores combined observations
+      </notes>
+    </table>
+
+    <table name="batch_chunks">
+      <description>Junction table linking batches to chunks (many-to-many)</description>
+      <location>Dayflow/Core/Recording/StorageManager.swift:684-688</location>
+      <definition><![CDATA[
+CREATE TABLE IF NOT EXISTS batch_chunks (
+    batch_id INTEGER NOT NULL REFERENCES analysis_batches(id) ON DELETE CASCADE,
+    chunk_id INTEGER NOT NULL REFERENCES chunks(id) ON DELETE RESTRICT,
+    PRIMARY KEY (batch_id, chunk_id)
+);
+      ]]></definition>
+      <notes>
+        - CASCADE on batch deletion: deleting batch removes junction records
+        - RESTRICT on chunk deletion: prevents chunk deletion if in a batch
+        - PRIMARY KEY ensures no duplicate batch-chunk relationships
+      </notes>
+    </table>
+
+    <table name="timeline_cards">
+      <description>Timeline cards that may reference video chunks via video_summary_url</description>
+      <location>Dayflow/Core/Recording/StorageManager.swift:691-710</location>
+      <definition><![CDATA[
+CREATE TABLE IF NOT EXISTS timeline_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER REFERENCES analysis_batches(id) ON DELETE CASCADE,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    start_ts INTEGER,
+    end_ts INTEGER,
+    day DATE NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    category TEXT NOT NULL,
+    subcategory TEXT,
+    detailed_summary TEXT,
+    metadata TEXT,
+    video_summary_url TEXT,  -- THIS FIELD MUST BE CLEARED ON CHUNK DELETION
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_day ON timeline_cards(day);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_start_ts ON timeline_cards(start_ts);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_time_range ON timeline_cards(start_ts, end_ts);
+      ]]></definition>
+      <notes>
+        - video_summary_url contains file path to video chunk
+        - When chunk is deleted, this field must be set to NULL
+        - Timeline card itself MUST NOT be deleted (preserve history)
+      </notes>
+    </table>
+  </database-schema>
+
+  <!-- ================================================================
+       EXISTING IMPLEMENTATION
+       ================================================================ -->
+  <existing-implementation>
+    <file path="Dayflow/Dayflow/Core/Recording/StorageManager.swift">
+      <description>Main storage manager handling all database operations and file management</description>
+
+      <class name="StorageManager">
+        <description>Singleton managing database, file storage, and persistence operations</description>
+
+        <threading-model>
+          <pattern>Serial queue for write operations</pattern>
+          <location>Line 376</location>
+          <code><![CDATA[
+private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+          ]]></code>
+          <notes>
+            - All database writes executed asynchronously on dedicated serial queue
+            - Prevents main thread blocking during database operations
+            - Ensures thread-safe write serialization
+            - Read operations use GRDB's DatabasePool for concurrent access
+          </notes>
+        </threading-model>
+
+        <method name="registerChunk">
+          <location>Lines 917-928</location>
+          <signature>func registerChunk(url: URL)</signature>
+          <implementation><![CDATA[
+func registerChunk(url: URL) {
+    let ts = Int(Date().timeIntervalSince1970)
+    let path = url.path
+
+    // Perform database write asynchronously to avoid blocking caller thread
+    dbWriteQueue.async { [weak self] in
+        try? self?.timedWrite("registerChunk") { db in
+            try db.execute(sql: "INSERT INTO chunks(start_ts, end_ts, file_url, status) VALUES (?, ?, ?, 'recording')",
+                           arguments: [ts, ts + 60, path])
+        }
+    }
+}
+          ]]></implementation>
+          <notes>
+            - Called when ScreenRecorder creates new chunk file
+            - Initial end_ts is estimated (start + 60 seconds)
+            - Status set to 'recording' initially
+            - Async execution prevents blocking recording pipeline
+          </notes>
+        </method>
+
+        <method name="markChunkCompleted">
+          <location>Lines 930-941</location>
+          <signature>func markChunkCompleted(url: URL)</signature>
+          <implementation><![CDATA[
+func markChunkCompleted(url: URL) {
+    let end = Int(Date().timeIntervalSince1970)
+    let path = url.path
+
+    // Perform database write asynchronously to avoid blocking caller thread
+    dbWriteQueue.async { [weak self] in
+        try? self?.timedWrite("markChunkCompleted") { db in
+            try db.execute(sql: "UPDATE chunks SET end_ts = ?, status = 'completed' WHERE file_url = ?",
+                           arguments: [end, path])
+        }
+    }
+}
+          ]]></implementation>
+          <notes>
+            - Called when recording segment finishes successfully
+            - Updates actual end_ts based on completion time
+            - Transitions status: 'recording' -> 'completed'
+            - Completed chunks become eligible for batch processing
+          </notes>
+        </method>
+
+        <method name="markChunkFailed">
+          <location>Lines 943-956</location>
+          <signature>func markChunkFailed(url: URL)</signature>
+          <implementation><![CDATA[
+func markChunkFailed(url: URL) {
+    let path = url.path
+
+    // Perform database write and file deletion asynchronously to avoid blocking caller thread
+    dbWriteQueue.async { [weak self] in
+        guard let self = self else { return }
+
+        try? self.timedWrite("markChunkFailed") { db in
+            try db.execute(sql: "DELETE FROM chunks WHERE file_url = ?", arguments: [path])
+        }
+
+        try? self.fileMgr.removeItem(at: url)
+    }
+}
+          ]]></implementation>
+          <notes>
+            - Called when recording fails or errors occur
+            - Immediately deletes both database record AND file
+            - Uses DELETE instead of soft delete for failed chunks
+            - Cleans up partial/corrupted recordings
+          </notes>
+        </method>
+
+        <method name="fetchUnprocessedChunks">
+          <location>Lines 959-972</location>
+          <signature>func fetchUnprocessedChunks(olderThan oldestAllowed: Int) -> [RecordingChunk]</signature>
+          <implementation><![CDATA[
+func fetchUnprocessedChunks(olderThan oldestAllowed: Int) -> [RecordingChunk] {
+    (try? timedRead("fetchUnprocessedChunks") { db in
+        try Row.fetchAll(db, sql: """
+            SELECT * FROM chunks
+            WHERE start_ts >= ?
+              AND status = 'completed'
+              AND (is_deleted = 0 OR is_deleted IS NULL)
+              AND id NOT IN (SELECT chunk_id FROM batch_chunks)
+            ORDER BY start_ts ASC
+        """, arguments: [oldestAllowed])
+            .map { row in
+                RecordingChunk(id: row["id"], startTs: row["start_ts"], endTs: row["end_ts"],
+                              fileUrl: row["file_url"], status: row["status"]) }
+    }) ?? []
+}
+          ]]></implementation>
+          <notes>
+            - Used by AI analysis pipeline to find chunks ready for processing
+            - Only returns completed chunks not yet in any batch
+            - Filters by minimum timestamp to avoid processing too-recent chunks
+            - Critical for batch creation workflow
+          </notes>
+        </method>
+
+        <method name="fetchChunksInTimeRange">
+          <location>Lines 1055-1071</location>
+          <signature>func fetchChunksInTimeRange(startTs: Int, endTs: Int) -> [RecordingChunk]</signature>
+          <implementation><![CDATA[
+func fetchChunksInTimeRange(startTs: Int, endTs: Int) -> [RecordingChunk] {
+    (try? timedRead("fetchChunksInTimeRange") { db in
+        try Row.fetchAll(db, sql: """
+            SELECT * FROM chunks
+            WHERE status = 'completed'
+              AND (is_deleted = 0 OR is_deleted IS NULL)
+              AND ((start_ts <= ? AND end_ts >= ?)
+                   OR (start_ts >= ? AND start_ts <= ?)
+                   OR (end_ts >= ? AND end_ts <= ?))
+            ORDER BY start_ts ASC
+        """, arguments: [endTs, startTs, startTs, endTs, startTs, endTs])
+        .map { r in
+            RecordingChunk(id: r["id"], startTs: r["start_ts"], endTs: r["end_ts"],
+                          fileUrl: r["file_url"], status: r["status"])
+        }
+    }) ?? []
+}
+          ]]></implementation>
+          <notes>
+            - Finds chunks that overlap with specified time range
+            - Used for targeted reprocessing and analysis
+            - Handles partial overlaps (chunk starts/ends within range)
+          </notes>
+        </method>
+
+        <method name="saveBatch">
+          <location>Lines 974-986</location>
+          <signature>func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) -> Int64?</signature>
+          <implementation><![CDATA[
+func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) -> Int64? {
+    guard !chunkIds.isEmpty else { return nil }
+    var batchID: Int64 = 0
+    try? timedWrite("saveBatch(\(chunkIds.count)_chunks)") { db in
+        try db.execute(sql: "INSERT INTO analysis_batches(batch_start_ts, batch_end_ts) VALUES (?, ?)",
+                       arguments: [startTs, endTs])
+        batchID = db.lastInsertedRowID
+        for id in chunkIds {
+            try db.execute(sql: "INSERT INTO batch_chunks(batch_id, chunk_id) VALUES (?, ?)",
+                          arguments: [batchID, id])
+        }
+    }
+    return batchID == 0 ? nil : batchID
+}
+          ]]></implementation>
+          <notes>
+            - Creates new analysis batch and links chunks
+            - Returns batch_id for further processing
+            - Links prevent chunk deletion (ON DELETE RESTRICT)
+            - Used by AI analysis pipeline
+          </notes>
+        </method>
+
+        <method name="chunksForBatch">
+          <location>Lines 1029-1043</location>
+          <signature>func chunksForBatch(_ batchId: Int64) -> [RecordingChunk]</signature>
+          <implementation><![CDATA[
+func chunksForBatch(_ batchId: Int64) -> [RecordingChunk] {
+    (try? db.read { db in
+        try Row.fetchAll(db, sql: """
+            SELECT c.* FROM batch_chunks bc
+            JOIN chunks c ON c.id = bc.chunk_id
+            WHERE bc.batch_id = ?
+              AND (c.is_deleted = 0 OR c.is_deleted IS NULL)
+            ORDER BY c.start_ts ASC
+            """, arguments: [batchId]
+        ).map { r in
+            RecordingChunk(id: r["id"], startTs: r["start_ts"], endTs: r["end_ts"],
+                           fileUrl: r["file_url"], status: r["status"])
+        }
+    }) ?? []
+}
+          ]]></implementation>
+          <notes>
+            - Retrieves all chunks belonging to specific batch
+            - Sorted chronologically for video processing
+            - Used to get video files for AI analysis
+          </notes>
+        </method>
+      </class>
+
+      <properties>
+        <property name="root">
+          <location>Line 345</location>
+          <type>URL</type>
+          <description>Root directory for video chunk storage</description>
+          <initialization><![CDATA[
+let baseDir = appSupport.appendingPathComponent("Dayflow", isDirectory: true)
+let recordingsDir = baseDir.appendingPathComponent("recordings", isDirectory: true)
+root = recordingsDir
+          ]]></initialization>
+          <path-pattern>~/Library/Application Support/Dayflow/recordings/</path-pattern>
+          <notes>
+            - All chunk files stored in this directory
+            - Directory created with intermediate directories if needed
+            - Files named with timestamp pattern (yyyyMMdd_HHmmssSSS.mp4)
+          </notes>
+        </property>
+
+        <property name="fileMgr">
+          <location>Line 344</location>
+          <type>FileManager</type>
+          <description>File manager for file system operations</description>
+          <notes>
+            - Used for file deletion, size calculation, directory enumeration
+            - Thread-safe (FileManager.default is safe for concurrent use)
+          </notes>
+        </property>
+      </properties>
+    </file>
+
+    <file path="Dayflow/Dayflow/Core/Recording/StoragePreferences.swift">
+      <description>User defaults storage for storage limit preferences</description>
+      <implementation><![CDATA[
+enum StoragePreferences {
+    private static let defaults = UserDefaults.standard
+    private static let recordingsKey = "storageLimitRecordingsBytes"
+    private static let timelapsesKey = "storageLimitTimelapsesBytes"
+    private static let defaultRecordings: Int64 = 10_000_000_000 // 10 GB
+    private static let defaultTimelapses: Int64 = 10_000_000_000 // 10 GB
+
+    static var recordingsLimitBytes: Int64 {
+        get {
+            let stored = defaults.object(forKey: recordingsKey) as? NSNumber
+            return stored?.int64Value ?? defaultRecordings
+        }
+        set {
+            defaults.set(NSNumber(value: newValue), forKey: recordingsKey)
+        }
+    }
+
+    static var timelapsesLimitBytes: Int64 {
+        get {
+            let stored = defaults.object(forKey: timelapsesKey) as? NSNumber
+            return stored?.int64Value ?? defaultTimelapses
+        }
+        set {
+            defaults.set(NSNumber(value: newValue), forKey: timelapsesKey)
+        }
+    }
+}
+      ]]></implementation>
+      <notes>
+        - Default storage limit: 10GB for recordings
+        - Persists across app restarts via UserDefaults
+        - Currently only stores limits, no automatic enforcement
+        - TODO: Integrate with cleanup/retention manager
+      </notes>
+    </file>
+
+    <file path="Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift">
+      <description>Example storage manager with automatic purge functionality (reference implementation)</description>
+      <relevant-methods>
+        <method name="purgeIfNeeded">
+          <location>Lines 31-68</location>
+          <implementation><![CDATA[
+func purgeIfNeeded(limit: Int64? = nil) {
+    queue.async { [weak self] in
+        guard let self else { return }
+        let limitBytes = limit ?? StoragePreferences.timelapsesLimitBytes
+        guard limitBytes < Int64.max else { return }
+
+        do {
+            var usage = (try? self.fileMgr.allocatedSizeOfDirectory(at: self.root)) ?? 0
+            if usage <= limitBytes { return }
+
+            let entries = try self.fileMgr.contentsOfDirectory(
+                at: self.root,
+                includingPropertiesForKeys: [.creationDateKey, .contentModificationDateKey, .isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )
+            .sorted { lhs, rhs in
+                let lValues = try? lhs.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+                let rValues = try? rhs.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+                let lDate = lValues?.creationDate ?? lValues?.contentModificationDate ?? Date.distantPast
+                let rDate = rValues?.creationDate ?? rValues?.contentModificationDate ?? Date.distantPast
+                return lDate < rDate
+            }
+
+            for entry in entries {
+                if usage <= limitBytes { break }
+                let size = (try? self.entrySize(entry)) ?? 0
+                do {
+                    try self.fileMgr.removeItem(at: entry)
+                    usage -= size
+                } catch {
+                    print("⚠️ Failed to delete timelapse entry at \(entry.path): \(error)")
+                }
+            }
+        } catch {
+            print("❌ Timelapse purge error: \(error)")
+        }
+    }
+}
+          ]]></implementation>
+          <notes>
+            - Reference implementation for storage quota enforcement
+            - Uses background queue for non-blocking execution
+            - Sorts by creation date, deletes oldest first
+            - Continues deleting until under quota
+            - PATTERN TO FOLLOW for recording chunk cleanup
+          </notes>
+        </method>
+      </relevant-methods>
+    </file>
+
+    <file path="Dayflow/Dayflow/Models/AnalysisModels.swift">
+      <description>Data model for RecordingChunk</description>
+      <model name="RecordingChunk">
+        <location>Lines 11-21</location>
+        <definition><![CDATA[
+struct RecordingChunk: Codable {
+    let id: Int64
+    let startTs: Int
+    let endTs: Int
+    let fileUrl: String
+    let status: String
+
+    var duration: TimeInterval {
+        TimeInterval(endTs - startTs)
+    }
+}
+        ]]></definition>
+        <notes>
+          - Represents a chunk record from database
+          - fileUrl is absolute path string
+          - duration computed property for convenience
+          - Used throughout analysis and cleanup workflows
+        </notes>
+      </model>
+    </file>
+
+    <file path="Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift">
+      <description>Screen recording pipeline that creates and manages chunks</description>
+      <integration-points>
+        <point>
+          <description>Chunk creation on recording start</description>
+          <location>Lines 135-141 (ScreenRecorder queue and timer setup)</location>
+          <notes>
+            - ScreenRecorder creates chunk files every 15 seconds (C.chunk constant)
+            - Calls StorageManager.nextFileURL() to get file path
+            - Calls StorageManager.registerChunk(url) when file is created
+            - Calls StorageManager.markChunkCompleted(url) when segment finishes
+            - Recording runs on dedicated queue: "com.dayflow.recorder"
+          </notes>
+        </point>
+      </integration-points>
+    </file>
+  </existing-implementation>
+
+  <!-- ================================================================
+       MISSING IMPLEMENTATION (TO BE BUILT)
+       ================================================================ -->
+  <missing-implementation>
+    <component name="RetentionManager">
+      <description>Manager for automatic cleanup with timer-based execution</description>
+      <location>NEW FILE: Dayflow/Dayflow/Core/Recording/RetentionManager.swift</location>
+      <requirements>
+        <requirement>RetentionPolicy struct with enabled, retentionDays, maxStorageGB, cleanupIntervalHours</requirement>
+        <requirement>Timer-based automatic cleanup (default: every 1 hour)</requirement>
+        <requirement>Load/save policy from StorageManager app_settings table</requirement>
+        <requirement>Start automatic cleanup on init</requirement>
+        <requirement>Call StorageManager.cleanupOldChunks() periodically</requirement>
+      </requirements>
+      <reference>Epic 4 Tech Spec Section 2.2.4 (Lines 636-683)</reference>
+    </component>
+
+    <component name="StorageManager.cleanupOldChunks">
+      <description>Delete chunks older than retention period</description>
+      <location>ADD TO: Dayflow/Dayflow/Core/Recording/StorageManager.swift</location>
+      <signature>func cleanupOldChunks(retentionDays: Int = 3) async throws -> CleanupStats</signature>
+      <requirements>
+        <requirement>Calculate cutoff timestamp based on retention days</requirement>
+        <requirement>Query chunks WHERE end_ts &lt; cutoff</requirement>
+        <requirement>For each chunk: delete file, clear timeline video URLs, delete DB record</requirement>
+        <requirement>Track statistics: chunksFound, filesDeleted, recordsDeleted, bytesFreed</requirement>
+        <requirement>Handle errors gracefully (continue on individual file delete failures)</requirement>
+        <requirement>Complete within 5 seconds performance target</requirement>
+      </requirements>
+      <reference>Story 4.2 Section: Technical Implementation (Lines 199-265)</reference>
+    </component>
+
+    <component name="StorageManager.calculateStorageUsage">
+      <description>Calculate total storage usage for database and recordings</description>
+      <location>ADD TO: Dayflow/Dayflow/Core/Recording/StorageManager.swift</location>
+      <signature>func calculateStorageUsage() async throws -> StorageUsage</signature>
+      <requirements>
+        <requirement>Get database file size (chunks.sqlite + WAL + SHM)</requirement>
+        <requirement>Query all chunk file_url paths</requirement>
+        <requirement>Sum file sizes for all chunks</requirement>
+        <requirement>Return StorageUsage struct with databaseBytes, recordingsBytes, totalBytes</requirement>
+        <requirement>Complete within 2 seconds for 1000+ chunks</requirement>
+      </requirements>
+      <reference>Epic 4 Tech Spec Section 2.2.5 (Lines 687-724)</reference>
+    </component>
+
+    <component name="Timeline Video URL Clearing">
+      <description>Clear video_summary_url when chunks are deleted</description>
+      <location>ADD TO: StorageManager.cleanupOldChunks implementation</location>
+      <sql-query><![CDATA[
+UPDATE timeline_cards
+SET video_summary_url = NULL
+WHERE video_summary_url LIKE ?
+      ]]></sql-query>
+      <requirements>
+        <requirement>Execute for each deleted chunk (use chunk filename in LIKE pattern)</requirement>
+        <requirement>Must execute BEFORE deleting chunk record</requirement>
+        <requirement>Ensures timeline data integrity (no broken references)</requirement>
+      </requirements>
+      <reference>Story 4.2 Section: Technical Implementation (Lines 238-245)</reference>
+    </component>
+
+    <component name="CleanupStats">
+      <description>Statistics struct for cleanup operations</description>
+      <location>ADD TO: Dayflow/Dayflow/Models/AnalysisModels.swift</location>
+      <definition><![CDATA[
+struct CleanupStats {
+    var chunksFound: Int = 0
+    var filesDeleted: Int = 0
+    var recordsDeleted: Int = 0
+    var bytesFreed: Int64 = 0
+}
+      ]]></definition>
+      <reference>Story 4.2 Section: Technical Implementation (Lines 259-265)</reference>
+    </component>
+
+    <component name="StorageUsage">
+      <description>Storage usage information struct</description>
+      <location>ADD TO: Dayflow/Dayflow/Models/AnalysisModels.swift</location>
+      <definition><![CDATA[
+struct StorageUsage {
+    let databaseBytes: Int64
+    let recordingsBytes: Int64
+    let totalBytes: Int64
+
+    var totalGB: Double {
+        return Double(totalBytes) / (1024 * 1024 * 1024)
+    }
+}
+      ]]></definition>
+      <reference>Epic 4 Tech Spec Section 2.2.5 (Lines 714-724)</reference>
+    </component>
+
+    <component name="RetentionPolicy">
+      <description>Configuration struct for retention and cleanup</description>
+      <location>ADD TO: Dayflow/Dayflow/Core/Recording/RetentionManager.swift</location>
+      <definition><![CDATA[
+struct RetentionPolicy: Codable {
+    var enabled: Bool = true
+    var retentionDays: Int = 3
+    var maxStorageGB: Int = 10
+    var cleanupIntervalHours: Int = 1
+
+    static let `default` = RetentionPolicy()
+}
+      ]]></definition>
+      <validation>
+        <rule>retentionDays: 1-365</rule>
+        <rule>maxStorageGB: 1-1000</rule>
+        <rule>cleanupIntervalHours: 1-24</rule>
+      </validation>
+      <reference>Story 4.2 Section: Retention Policy Management (Lines 269-279)</reference>
+    </component>
+  </missing-implementation>
+
+  <!-- ================================================================
+       THREADING AND CONCURRENCY PATTERNS
+       ================================================================ -->
+  <threading-patterns>
+    <pattern name="Serial Write Queue">
+      <description>All database write operations serialized on dedicated queue</description>
+      <implementation>
+        <queue>DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)</queue>
+        <usage>All write operations execute asynchronously on this queue</usage>
+        <rationale>Prevents main thread blocking and ensures write serialization</rationale>
+      </implementation>
+      <location>StorageManager.swift:376</location>
+    </pattern>
+
+    <pattern name="DatabasePool Concurrent Reads">
+      <description>GRDB DatabasePool allows multiple concurrent read operations</description>
+      <implementation>
+        <method>db.read { }</method>
+        <concurrency>Multiple simultaneous readers supported</concurrency>
+        <note>Write operations still serialized through queue</note>
+      </implementation>
+      <location>Throughout StorageManager read methods</location>
+    </pattern>
+
+    <pattern name="Background Cleanup Queue">
+      <description>Cleanup operations run on background queue to avoid blocking</description>
+      <implementation>
+        <queue>DispatchQueue(label: "com.dayflow.storage.purge", qos: .background)</queue>
+        <usage>File deletion, storage calculation, cleanup operations</usage>
+        <rationale>Long-running operations shouldn't block user interactions</rationale>
+      </implementation>
+      <reference>TimelapseStorageManager.swift:8 (pattern to follow)</reference>
+    </pattern>
+
+    <pattern name="Async/Await for Database Operations">
+      <description>Modern async/await pattern for database operations</description>
+      <implementation>
+        <syntax>func cleanupOldChunks(retentionDays: Int) async throws -> CleanupStats</syntax>
+        <benefits>Simpler error handling, better cancellation support</benefits>
+        <note>Use for new cleanup and storage calculation methods</note>
+      </implementation>
+    </pattern>
+
+    <critical-notes>
+      <note>NEVER perform database writes on main thread (UI blocking)</note>
+      <note>NEVER perform file I/O on main thread (especially directory enumeration)</note>
+      <note>Always use dbWriteQueue for database writes (thread safety)</note>
+      <note>Cleanup operations should be cancellable (check for early exit conditions)</note>
+    </critical-notes>
+  </threading-patterns>
+
+  <!-- ================================================================
+       FILE SYSTEM PATTERNS
+       ================================================================ -->
+  <file-system>
+    <directory-structure>
+      <root-path>~/Library/Application Support/Dayflow/</root-path>
+      <recordings-path>~/Library/Application Support/Dayflow/recordings/</recordings-path>
+      <database-path>~/Library/Application Support/Dayflow/chunks.sqlite</database-path>
+      <database-wal>~/Library/Application Support/Dayflow/chunks.sqlite-wal</database-wal>
+      <database-shm>~/Library/Application Support/Dayflow/chunks.sqlite-shm</database-shm>
+    </directory-structure>
+
+    <file-naming>
+      <pattern>yyyyMMdd_HHmmssSSS.mp4</pattern>
+      <example>20251114_143052123.mp4</example>
+      <notes>
+        - Timestamp-based naming ensures chronological sorting
+        - Millisecond precision prevents collisions
+        - Generated by ScreenRecorder.nextFileURL()
+      </notes>
+    </file-naming>
+
+    <file-operations>
+      <operation name="Delete Chunk File">
+        <method>FileManager.default.removeItem(at: url)</method>
+        <error-handling>Log error but continue cleanup (don't fail entire operation)</error-handling>
+        <notes>File may already be deleted or moved - handle gracefully</notes>
+      </operation>
+
+      <operation name="Calculate File Size">
+        <method>FileManager.default.attributesOfItem(atPath:)[.size]</method>
+        <type>Int64 bytes</type>
+        <notes>Used for storage tracking and cleanup statistics</notes>
+      </operation>
+
+      <operation name="Calculate Directory Size">
+        <method>FileManager.allocatedSizeOfDirectory(at:)</method>
+        <location>StorageManager.swift:3490 (extension)</location>
+        <notes>Sums all file sizes in directory recursively</notes>
+      </operation>
+
+      <operation name="Enumerate Directory">
+        <method>FileManager.contentsOfDirectory(at:includingPropertiesForKeys:)</method>
+        <properties>[.creationDateKey, .contentModificationDateKey, .fileSizeKey]</properties>
+        <notes>Used for finding old files, calculating usage</notes>
+      </operation>
+    </file-operations>
+  </file-system>
+
+  <!-- ================================================================
+       INTEGRATION POINTS
+       ================================================================ -->
+  <integration-points>
+    <point name="ScreenRecorder → StorageManager">
+      <description>Recording pipeline creates and registers chunks</description>
+      <workflow>
+        <step>ScreenRecorder.nextFileURL() - get new file path</step>
+        <step>ScreenRecorder creates AVAssetWriter with file URL</step>
+        <step>StorageManager.registerChunk(url) - insert DB record (status: recording)</step>
+        <step>Recording writes frames to file for ~15 seconds</step>
+        <step>StorageManager.markChunkCompleted(url) - update status to completed</step>
+        <step>Chunk now available for batch processing</step>
+      </workflow>
+      <error-path>
+        <step>If recording fails: StorageManager.markChunkFailed(url)</step>
+        <step>Deletes both DB record and file immediately</step>
+      </error-path>
+    </point>
+
+    <point name="AI Analysis Pipeline → Chunks">
+      <description>Batch creation links chunks for LLM processing</description>
+      <workflow>
+        <step>fetchUnprocessedChunks(olderThan) - get completed chunks</step>
+        <step>saveBatch(startTs, endTs, chunkIds) - create batch and link chunks</step>
+        <step>chunksForBatch(batchId) - get chunk files for analysis</step>
+        <step>AI analysis processes videos, creates timeline cards</step>
+        <step>Timeline cards reference chunks via video_summary_url</step>
+      </workflow>
+      <constraints>
+        <constraint>Chunks in batches cannot be deleted (ON DELETE RESTRICT)</constraint>
+        <constraint>Timeline cards must be preserved even when chunks deleted</constraint>
+      </constraints>
+    </point>
+
+    <point name="RetentionManager → StorageManager">
+      <description>Timer-based cleanup execution</description>
+      <workflow>
+        <step>RetentionManager initializes with policy (from app_settings)</step>
+        <step>Timer fires every cleanupIntervalHours (default: 1 hour)</step>
+        <step>RetentionManager calls StorageManager.cleanupOldChunks(retentionDays)</step>
+        <step>Cleanup deletes old files, clears timeline URLs, removes DB records</step>
+        <step>Returns CleanupStats for logging/monitoring</step>
+      </workflow>
+    </point>
+
+    <point name="Timeline Data Preservation">
+      <description>Critical: timeline cards must survive chunk deletion</description>
+      <workflow>
+        <step>Before deleting chunk: query timeline_cards for video_summary_url references</step>
+        <step>UPDATE timeline_cards SET video_summary_url = NULL WHERE matches chunk</step>
+        <step>Delete chunk file from filesystem</step>
+        <step>DELETE FROM chunks WHERE id = ?</step>
+        <step>Timeline card remains with all metadata but no video link</step>
+      </workflow>
+      <critical>Timeline cards are historical records - NEVER delete during cleanup</critical>
+    </point>
+  </integration-points>
+
+  <!-- ================================================================
+       TESTING REQUIREMENTS
+       ================================================================ -->
+  <testing>
+    <test-file>
+      <path>NEW FILE: Dayflow/DayflowTests/ChunkManagementTests.swift</path>
+      <reference-pattern>Dayflow/DayflowTests/TimelinePersistenceTests.swift</reference-pattern>
+      <test-cases>
+        <case>testChunkRegistration - verify chunk created with correct status</case>
+        <case>testChunkLifecycle - register → complete → batch → delete</case>
+        <case>testAutomaticCleanup - old chunks deleted, recent preserved</case>
+        <case>testRetentionPolicyRespected - only chunks older than retention deleted</case>
+        <case>testStorageQuotaCalculation - accurate database + file size calculation</case>
+        <case>testTimelineDataPreservation - timeline cards intact after cleanup</case>
+        <case>testCleanupPerformance - completes within 5s target</case>
+        <case>testConcurrentCleanupOperations - thread safety validation</case>
+        <case>testCleanupDuringActiveRecording - cleanup doesn't interfere</case>
+      </test-cases>
+    </test-file>
+
+    <performance-targets>
+      <target>Chunk registration: &lt; 50ms per chunk</target>
+      <target>Cleanup latency: &lt; 5s for batch deletion</target>
+      <target>Storage calculation: &lt; 2s for 1000+ chunks</target>
+      <target>Memory overhead: &lt; 1% of video file size</target>
+    </performance-targets>
+
+    <test-patterns>
+      <pattern>Use setUp to create test database (isolated from production)</pattern>
+      <pattern>Use tearDown to clean up test database files</pattern>
+      <pattern>Create helper methods: createTestChunk(daysOld:), createTestBatch()</pattern>
+      <pattern>Verify both database state AND file system state</pattern>
+      <pattern>Test edge cases: no chunks, all chunks old, mixed ages</pattern>
+    </test-patterns>
+  </testing>
+
+  <!-- ================================================================
+       TECHNICAL CONSTRAINTS
+       ================================================================ -->
+  <constraints>
+    <constraint type="performance">
+      <description>Cleanup must complete within 5 seconds</description>
+      <rationale>Avoid blocking app during background cleanup</rationale>
+      <mitigation>Use background queue, batch database operations, limit chunk count per cleanup</mitigation>
+    </constraint>
+
+    <constraint type="data-integrity">
+      <description>Timeline cards must never be deleted during cleanup</description>
+      <rationale>Timeline represents user's historical activity record</rationale>
+      <enforcement>Only UPDATE timeline_cards to clear video URLs, never DELETE</enforcement>
+    </constraint>
+
+    <constraint type="foreign-key">
+      <description>Chunks in batches cannot be deleted (ON DELETE RESTRICT)</description>
+      <rationale>Prevents corruption of analysis batch references</rationale>
+      <solution>Cleanup only deletes chunks NOT in batch_chunks junction table</solution>
+    </constraint>
+
+    <constraint type="thread-safety">
+      <description>All database operations must be thread-safe</description>
+      <rationale>Multiple threads access database (recorder, UI, cleanup)</rationale>
+      <enforcement>Use dbWriteQueue for writes, DatabasePool for reads</enforcement>
+    </constraint>
+
+    <constraint type="storage-limit">
+      <description>Default storage limit: 10GB for recordings</description>
+      <rationale>Prevent disk space exhaustion on user systems</rationale>
+      <configuration>Configurable via StoragePreferences (1-1000 GB)</configuration>
+    </constraint>
+
+    <constraint type="retention-period">
+      <description>Default retention: 3 days</description>
+      <rationale>Balance between history preservation and storage usage</rationale>
+      <configuration>Configurable via RetentionPolicy (1-365 days)</configuration>
+    </constraint>
+
+    <constraint type="error-handling">
+      <description>Cleanup must continue even if individual file deletions fail</description>
+      <rationale>Prevent single file error from blocking entire cleanup</rationale>
+      <implementation>Try/catch per file, log errors, continue loop</implementation>
+    </constraint>
+  </constraints>
+
+  <!-- ================================================================
+       IMPLEMENTATION CHECKLIST
+       ================================================================ -->
+  <implementation-checklist>
+    <phase name="1. Data Models and Configuration">
+      <task>Add CleanupStats struct to AnalysisModels.swift</task>
+      <task>Add StorageUsage struct to AnalysisModels.swift</task>
+      <task>Add RetentionPolicy struct to new RetentionManager.swift file</task>
+      <task>Add validation methods for RetentionPolicy settings</task>
+    </phase>
+
+    <phase name="2. Storage Manager Cleanup Methods">
+      <task>Add cleanupOldChunks(retentionDays:) async method</task>
+      <task>Implement chunk query with retention cutoff timestamp</task>
+      <task>Implement file deletion with error handling</task>
+      <task>Implement timeline card video URL clearing</task>
+      <task>Implement database record deletion</task>
+      <task>Return CleanupStats with metrics</task>
+    </phase>
+
+    <phase name="3. Storage Manager Usage Tracking">
+      <task>Add calculateStorageUsage() async method</task>
+      <task>Calculate database file sizes (main + WAL + SHM)</task>
+      <task>Query all chunk file_url paths from database</task>
+      <task>Sum file sizes for all chunks</task>
+      <task>Return StorageUsage with breakdown</task>
+    </phase>
+
+    <phase name="4. Retention Manager">
+      <task>Create RetentionManager.swift file</task>
+      <task>Implement RetentionManager singleton class</task>
+      <task>Add policy loading from StorageManager app_settings</task>
+      <task>Add policy saving to StorageManager app_settings</task>
+      <task>Implement Timer for automatic cleanup</task>
+      <task>Add startAutomaticCleanup() method</task>
+      <task>Add performCleanup() async method</task>
+      <task>Add cleanup result logging</task>
+    </phase>
+
+    <phase name="5. StorageManager Protocol Updates">
+      <task>Add cleanupOldChunks to StorageManaging protocol</task>
+      <task>Add calculateStorageUsage to StorageManaging protocol</task>
+      <task>Update protocol documentation</task>
+    </phase>
+
+    <phase name="6. Testing">
+      <task>Create ChunkManagementTests.swift file</task>
+      <task>Implement basic chunk lifecycle tests</task>
+      <task>Implement cleanup with various retention periods</task>
+      <task>Implement timeline preservation tests</task>
+      <task>Implement storage calculation tests</task>
+      <task>Implement performance tests (cleanup &lt; 5s)</task>
+      <task>Implement concurrent operation tests</task>
+      <task>Implement edge case tests (no chunks, all old, etc.)</task>
+    </phase>
+
+    <phase name="7. Integration and Validation">
+      <task>Initialize RetentionManager in app startup</task>
+      <task>Verify cleanup runs automatically every hour</task>
+      <task>Test with real recording session (create chunks over multiple days)</task>
+      <task>Verify old chunks deleted, timeline data preserved</task>
+      <task>Monitor storage usage and cleanup statistics</task>
+      <task>Validate performance meets targets (&lt; 5s cleanup)</task>
+    </phase>
+  </implementation-checklist>
+
+  <!-- ================================================================
+       RELATED DOCUMENTATION
+       ================================================================ -->
+  <references>
+    <reference>
+      <title>Epic 4 Tech Spec</title>
+      <path>docs/epics/epic-4-tech-spec.md</path>
+      <sections>
+        <section>2.2: Story 4.2 - Recording Chunk Management (Lines 446-739)</section>
+        <section>1.1: Database Schema - chunks table (Lines 44-52)</section>
+        <section>1.2: Thread Safety Architecture (Lines 154-184)</section>
+      </sections>
+    </reference>
+
+    <reference>
+      <title>Story 4.2 Specification</title>
+      <path>docs/stories/4-2-recording-chunk-management.md</path>
+      <sections>
+        <section>Technical Implementation (Lines 68-360)</section>
+        <section>Testing Requirements (Lines 362-543)</section>
+        <section>Success Metrics (Lines 547-573)</section>
+      </sections>
+    </reference>
+
+    <reference>
+      <title>Story 4.1 Context (Reference)</title>
+      <path>docs/stories/4-1-timeline-data-persistence.context.xml</path>
+      <usage>Pattern for context file structure and testing approach</usage>
+    </reference>
+
+    <reference>
+      <title>TimelinePersistenceTests (Test Pattern Reference)</title>
+      <path>Dayflow/DayflowTests/TimelinePersistenceTests.swift</path>
+      <usage>Follow same test structure, setUp/tearDown patterns</usage>
+    </reference>
+  </references>
+
+  <!-- ================================================================
+       NOTES AND WARNINGS
+       ================================================================ -->
+  <notes>
+    <note type="critical">
+      Timeline cards MUST be preserved during cleanup. Only clear video_summary_url field,
+      never delete the timeline card record itself. Timeline represents user's activity history.
+    </note>
+
+    <note type="critical">
+      Chunks linked to batches (via batch_chunks table) CANNOT be deleted due to
+      ON DELETE RESTRICT constraint. Cleanup must filter out batched chunks.
+    </note>
+
+    <note type="performance">
+      File I/O operations (delete, size calculation) are slow. Use background queue
+      and ensure cleanup completes within 5 second target for good UX.
+    </note>
+
+    <note type="thread-safety">
+      All database writes MUST use dbWriteQueue. Reads can use db.read directly
+      (DatabasePool supports concurrent reads). Never block main thread.
+    </note>
+
+    <note type="testing">
+      Create isolated test database for tests (separate from production). Clean up
+      test files in tearDown. Use TimelinePersistenceTests as reference pattern.
+    </note>
+
+    <note type="migration">
+      RetentionManager should start automatically when app launches. Consider adding
+      settings UI in future story (Story 4.3) for user configuration.
+    </note>
+
+    <note type="error-handling">
+      Cleanup should be resilient - if one file deletion fails, continue with others.
+      Log errors but don't fail entire cleanup operation. Return stats for monitoring.
+    </note>
+  </notes>
+</story-context>
