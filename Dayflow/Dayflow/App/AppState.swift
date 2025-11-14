@@ -24,6 +24,10 @@ final class AppState: ObservableObject, AppStateManaging { // <-- Add AppStateMa
         }
     }
 
+    /// ScreenRecorder instance for status UI (Story 2.3)
+    /// Set by AppDelegate after initialization
+    var recorder: ScreenRecorder?
+
     private init() {
         // Always start with false - AppDelegate will set the correct value
         // didSet doesn't fire during initialization, so this won't save
