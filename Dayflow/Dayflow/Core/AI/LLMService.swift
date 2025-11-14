@@ -193,7 +193,7 @@ final class LLMService: LLMServicing {
     func processBatch(_ batchId: Int64, completion: @escaping (Result<ProcessedBatchResult, Error>) -> Void) {
         Task {
             // Get batch info first (outside do-catch so it's available in catch block)
-            let batches = StorageManager.shared.allBatches()
+            let batches = try await StorageManager.shared.allBatches()
             guard let batchInfo = batches.first(where: { $0.0 == batchId }) else {
                 completion(.failure(NSError(domain: "LLMService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Batch not found"])))
                 return

@@ -129,8 +129,8 @@ final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
                 
                 // Use a semaphore to wait for each batch to complete
                 _ = DispatchSemaphore(value: 0)
-                
-                self.queueGeminiRequest(batchId: batchId)
+
+                await self.queueGeminiRequest(batchId: batchId)
                 
                 // Wait for batch to complete (check status periodically using async/await)
                 var isCompleted = false
@@ -219,8 +219,8 @@ final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
             var batchTimings: [(batchId: Int64, duration: TimeInterval)] = []
             
             DispatchQueue.main.async { progressHandler("Preparing to reprocess \(batchIds.count) selected batches...") }
-            
-            let allBatches = self.store.allBatches()
+
+            let allBatches = try await self.store.allBatches()
             let existingBatchIds = Set(allBatches.map { $0.id })
             let orderedBatchIds = batchIds.filter { existingBatchIds.contains($0) }
 
@@ -264,18 +264,18 @@ final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
                 let batchStartTime = Date()
                 let elapsedTotal = Date().timeIntervalSince(overallStartTime)
                 
-                DispatchQueue.main.async { 
+                DispatchQueue.main.async {
                     progressHandler("Processing batch \(index + 1) of \(batchesToProcess.count)... (Total elapsed: \(self.formatDuration(elapsedTotal)))")
                 }
-                
-                self.queueGeminiRequest(batchId: batchId)
+
+                await self.queueGeminiRequest(batchId: batchId)
                 
                 // Wait for batch to complete (check status periodically using async/await)
                 var isCompleted = false
                 while !isCompleted && !hasError {
                     try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                    
-                    let allBatches = self.store.allBatches()
+
+                    let allBatches = try await self.store.allBatches()
                     if let batch = allBatches.first(where: { $0.id == batchId }) {
                         switch batch.status {
                         case "completed", "analyzed":
@@ -347,7 +347,6 @@ final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
 
     private func processRecordings() {
         guard !isProcessing else { return }; isProcessing = true
-        defer { isProcessing = false }
 
         // 1. Gather unprocessed chunks
         let chunks = fetchUnprocessedChunks()
@@ -355,13 +354,26 @@ final class AnalysisManager: AnalysisManaging, @unchecked Sendable {
         let batches = createBatches(from: chunks)
         // 3. Persist batch rows & join table
         let batchIDs = batches.compactMap(saveBatch)
-        // 4. Fire LLM for each batch
-        for id in batchIDs { queueGeminiRequest(batchId: id) }
+        // 4. Fire LLM for each batch (use Task for async context)
+        Task {
+            for id in batchIDs {
+                await self.queueGeminiRequest(batchId: id)
+            }
+            self.isProcessing = false
+        }
     }
 
 
-    private func queueGeminiRequest(batchId: Int64) {
-        let chunksInBatch = StorageManager.shared.chunksForBatch(batchId)
+    private func queueGeminiRequest(batchId: Int64) async {
+        let chunksInBatch: [RecordingChunk]
+        do {
+            chunksInBatch = try await StorageManager.shared.chunksForBatch(batchId)
+        } catch {
+            let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
+            logger.error("Failed to fetch chunks for batch \(batchId): \(error.localizedDescription)")
+            self.updateBatchStatus(batchId: batchId, status: "failed_db_error")
+            return
+        }
 
         let logger = Logger(subsystem: "Dayflow", category: "AnalysisManager")
         

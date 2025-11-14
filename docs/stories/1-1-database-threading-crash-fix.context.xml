@@ -1,0 +1,290 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>1.1</storyId>
+    <title>Database Threading Crash Fix</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-13</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/1-1-database-threading-crash-fix.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a user trying to use FocusLock</asA>
+    <iWant>the application to run for more than 2 minutes without crashing</iWant>
+    <soThat>I can actually test and use the features</soThat>
+    <tasks>
+      - Task 1: Create DatabaseManager actor with serial queue wrapper (AC: 1.1.1, 1.1.5)
+        - Define DatabaseManagerProtocol with Sendable conformance
+        - Implement actor DatabaseManager with singleton pattern
+        - Create serial DispatchQueue with label "com.focusLock.database" and QoS .userInitiated
+        - Initialize GRDB DatabasePool with correct path
+        - Implement read&lt;T: Sendable&gt;() method using withCheckedThrowingContinuation
+        - Implement write&lt;T: Sendable&gt;() method using withCheckedThrowingContinuation
+        - Implement transaction&lt;T: Sendable&gt;() method for batch operations
+        - Add error handling and logging for database operations
+
+      - Task 2: Refactor StorageManager.chunksForBatch() to use DatabaseManager (AC: 1.1.2, 1.1.5)
+        - Audit all direct GRDB access in StorageManager.swift
+        - Convert chunksForBatch() from synchronous to async function
+        - Replace direct dbPool.read() with DatabaseManager.shared.read()
+        - Update function signature to return async throws -&gt; [RecordingChunk]
+        - Add proper error handling for async database failures
+        - Verify no synchronous database calls remain in StorageManager
+
+      - Task 3: Update AnalysisManager to handle async database calls (AC: 1.1.4, 1.1.5)
+        - Audit AnalysisManager.swift line 364 for database access
+        - Convert synchronous chunksForBatch() calls to await async calls
+        - Ensure background processing tasks use proper async context
+        - Add error handling for database failures during AI processing
+        - Verify no blocking operations on main thread
+
+      - Task 4: Audit and refactor all other database access points (AC: 1.1.5)
+        - Search codebase for direct dbPool.read and dbPool.write calls
+        - Audit LLMService for any direct database access from AI processing threads
+        - Refactor all identified access points to use DatabaseManager
+        - Update UI layer to handle async database calls with loading states
+        - Verify all database operations are thread-safe
+
+      - Task 5: Create comprehensive test suite (AC: 1.1.3, 1.1.6)
+        - Write unit test: DatabaseManager initialization with correct queue configuration
+        - Write unit test: Serial queue behavior prevents race conditions
+        - Write unit test: Error handling and timeout handling
+        - Write integration test: Call chunksForBatch from 10 threads simultaneously
+        - Write stress test: 10 concurrent database operations (mixed reads/writes) for 5 minutes
+        - Write performance test: Measure P95 latency for database operations
+        - Verify no data corruption after concurrent access
+
+      - Task 6: System stability validation (AC: 1.1.4)
+        - Test 30-minute continuous recording session
+        - Monitor for "freed pointer was not last allocation" crashes
+        - Verify background AI analysis runs concurrently without crashes
+        - Check crash logs for memory corruption errors
+        - Validate app remains responsive throughout test
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <criterion id="AC-1.1.1">Application launches successfully and initializes DatabaseManager with serial queue</criterion>
+    <criterion id="AC-1.1.2">When StorageManager.chunksForBatch() is called from multiple threads simultaneously, no "freed pointer was not last allocation" crashes occur</criterion>
+    <criterion id="AC-1.1.3">Stress test with 10 concurrent database operations (reads + writes) completes without crashes or data corruption</criterion>
+    <criterion id="AC-1.1.4">App remains stable for at least 30 minutes of continuous recording with background AI analysis</criterion>
+    <criterion id="AC-1.1.5">All GRDB database operations complete successfully through DatabaseManager serial queue</criterion>
+    <criterion id="AC-1.1.6">Database operation latency remains &lt;100ms for 95th percentile of operations</criterion>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Technical Specification: Critical Memory Management Rescue</title>
+        <section>Detailed Design - DatabaseManager</section>
+        <snippet>DatabaseManager actor provides serial queue wrapper for all GRDB operations. All database operations must go through a single DispatchQueue with label "com.focusLock.database" and QoS .userInitiated to prevent priority inversion. Actor isolation pattern guarantees thread safety with Sendable conformance.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Technical Specification</title>
+        <section>APIs and Interfaces - StorageManager.chunksForBatch() Fix</section>
+        <snippet>StorageManager.chunksForBatch() must convert from synchronous to async. OLD: func chunksForBatch(_ batchId: Int64) -&gt; [RecordingChunk] with direct dbPool.read() (CRASHES). NEW: func chunksForBatch(_ batchId: Int64) async throws -&gt; [RecordingChunk] using DatabaseManager.shared.read() (THREAD-SAFE).</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Technical Specification</title>
+        <section>Non-Functional Requirements - Performance</section>
+        <snippet>Database operations: &lt;50ms for read operations, &lt;100ms for write operations. Database transactions: Support 100+ transactions per second without queue buildup. Memory leak threshold: No &gt;5% memory increase over 1-hour period.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Technical Specification</title>
+        <section>Test Strategy Summary</section>
+        <snippet>Unit Testing with XCTest framework targeting &gt;80% code coverage. Integration testing for multi-threaded access. Stress testing with 10-50 threads for 5 minutes. System testing for 30-minute continuous operation. Performance testing for P50/P95/P99 latency measurements.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>FocusLock Architecture Documentation</title>
+        <section>Rescue Architecture Pattern - Serial Database Layer</section>
+        <snippet>Rescue architecture implements MVVM with critical memory safety modifications. Serial Database Queue (Critical) through DatabaseManager thread-safe wrapper. Memory Safety First: All database operations serialized, no concurrent access. Thread Isolation: Background processing isolated from UI and database.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>FocusLock Architecture Documentation</title>
+        <section>Data Architecture - Storage Management</section>
+        <snippet>Database location: ~/Library/Application Support/Dayflow/chunks.sqlite. GRDB type-safe SQLite wrapper for data persistence. Storage includes recordings, database, thumbnails, and configuration files.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-1-database-threading-crash-fix.md</path>
+        <title>Story 1.1: Database Threading Crash Fix</title>
+        <section>Dev Notes - Architecture Patterns</section>
+        <snippet>Root Cause: The crash occurs in StorageManager.chunksForBatch() when multiple threads access GRDB database simultaneously without synchronization. This violates GRDB's thread-safety requirements and causes "freed pointer was not last allocation" errors. Solution: Implement DatabaseManager actor that wraps all GRDB operations with a serial queue.</snippet>
+      </doc>
+    </docs>
+    <code>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>chunksForBatch</symbol>
+        <lines>935-945</lines>
+        <reason>CRITICAL: This method contains the crashing code. Direct dbPool.read() access from multiple threads causes "freed pointer was not last allocation" errors. Must be converted to async and use DatabaseManager.shared.read() instead.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>StorageManager</symbol>
+        <lines>1-100</lines>
+        <reason>Main storage service that needs comprehensive database access audit. All direct db.read and db.write calls must be identified and refactored to use DatabaseManager.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Analysis/AnalysisManager.swift</path>
+        <kind>service</kind>
+        <symbol>queueGeminiRequest</symbol>
+        <lines>363-364</lines>
+        <reason>CRITICAL: Line 364 calls StorageManager.shared.chunksForBatch(batchId) synchronously from background thread. Must be updated to: let chunksInBatch = try await StorageManager.shared.chunksForBatch(batchId) and handle async context properly.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/AI/LLMService.swift</path>
+        <kind>service</kind>
+        <symbol>processBatch</symbol>
+        <lines>193-488</lines>
+        <reason>Audit needed: LLMService.processBatch() calls StorageManager methods (line 196, 225, 228) that may access database. Verify all calls go through DatabaseManager and handle async properly. No direct database access should occur from AI processing threads.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>protocol</kind>
+        <symbol>StorageManagerProtocol</symbol>
+        <lines>80-109</lines>
+        <reason>Protocol definition for StorageManager. Line 105 defines chunksForBatch signature that must change from sync to async: func chunksForBatch(_ batchId: Int64) async throws -&gt; [RecordingChunk]</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>struct</kind>
+        <symbol>RecordingChunk</symbol>
+        <lines>112-150</lines>
+        <reason>Data model returned by chunksForBatch(). Must conform to Sendable protocol to cross actor boundaries safely. Review for Sendable conformance requirements.</reason>
+      </artifact>
+    </code>
+    <dependencies>
+      <swift-packages>
+        <package name="GRDB.swift" version="7.8.0" usage="Type-safe SQLite database wrapper. Core dependency for DatabaseManager implementation. Supports DatabasePool for connection management." />
+        <package name="Sentry" version="8.56.2" usage="Error tracking and crash reporting. Used for logging database operation failures and memory diagnostics." />
+        <package name="PostHog" version="3.31.0" usage="Product analytics. Optional dependency for tracking database performance metrics." />
+        <package name="Sparkle" version="2.7.1" usage="Auto-update framework. No direct dependency for this story." />
+      </swift-packages>
+      <system-frameworks>
+        <framework name="Foundation" usage="Core Swift framework. Required for DispatchQueue, Date, TimeInterval, and system primitives." />
+        <framework name="AVFoundation" usage="Video frame processing. Used by ScreenRecorder and LLMService for video handling." />
+        <framework name="ScreenCaptureKit" usage="Screen capture framework. Used by ScreenRecorder for video capture." />
+        <framework name="os.log" usage="System logging framework. Used throughout for diagnostic logging." />
+      </system-frameworks>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <constraint category="architecture">
+      Serial Database Queue Pattern: ALL GRDB database operations MUST go through a single DispatchQueue with label "com.focusLock.database" and QoS .userInitiated. No exceptions allowed - any direct database access will cause crashes.
+    </constraint>
+    <constraint category="architecture">
+      Actor Isolation: DatabaseManager must be implemented as a Swift actor to guarantee thread safety. All data crossing actor boundaries must conform to Sendable protocol (RecordingChunk, etc.).
+    </constraint>
+    <constraint category="architecture">
+      Breaking Change: StorageManager.chunksForBatch() becomes async. ALL callers must be updated to use await. Synchronous wrappers are NOT safe and must not be used.
+    </constraint>
+    <constraint category="performance">
+      Database operation latency must remain &lt;100ms for P95. Serial queue implementation must not introduce performance regression &gt;10% from current baseline.
+    </constraint>
+    <constraint category="testing">
+      Zero crashes required for 30-minute continuous operation. Stress testing with 10 concurrent database operations is mandatory before marking story complete. Story 1.2, 1.3, 1.4 depend on this foundation.
+    </constraint>
+    <constraint category="coding-standards">
+      Swift Concurrency: Use async/await and actors (no callbacks or completion handlers). All async operations must use proper error handling with try/await. Actor reentrancy must be carefully managed to prevent deadlocks.
+    </constraint>
+    <constraint category="os-requirements">
+      macOS 13.0+ (Ventura) minimum OS requirement. Must support both Intel and Apple Silicon architectures. GRDB 7.x compatibility required.
+    </constraint>
+    <constraint category="error-handling">
+      Database operation failures must retry with exponential backoff (max 3 attempts). All errors must be logged with memory context for debugging. Failed operations must not leak connections or locks.
+    </constraint>
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>DatabaseManagerProtocol</name>
+      <kind>Swift protocol</kind>
+      <signature>
+protocol DatabaseManagerProtocol: Sendable {
+    func read&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+    func write&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+    func transaction&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+}
+      </signature>
+      <path>Dayflow/Core/Database/DatabaseManagerProtocol.swift (NEW FILE)</path>
+    </interface>
+    <interface>
+      <name>DatabaseManager</name>
+      <kind>Swift actor (singleton)</kind>
+      <signature>
+actor DatabaseManager: DatabaseManagerProtocol {
+    static let shared = DatabaseManager()
+    private let serialQueue = DispatchQueue(label: "com.focusLock.database", qos: .userInitiated)
+    private let pool: DatabasePool
+
+    private init() // Initialize GRDB DatabasePool
+    func read&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+    func write&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+    func transaction&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T
+}
+      </signature>
+      <path>Dayflow/Core/Database/DatabaseManager.swift (NEW FILE)</path>
+    </interface>
+    <interface>
+      <name>StorageManager.chunksForBatch (MODIFIED)</name>
+      <kind>Swift async function</kind>
+      <signature>
+// OLD (CRASHES):
+func chunksForBatch(_ batchId: Int64) -&gt; [RecordingChunk]
+
+// NEW (THREAD-SAFE):
+func chunksForBatch(_ batchId: Int64) async throws -&gt; [RecordingChunk]
+      </signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+    </interface>
+    <interface>
+      <name>StorageManagerProtocol (MODIFIED)</name>
+      <kind>Swift protocol</kind>
+      <signature>
+protocol StorageManagerProtocol: Sendable {
+    // ... existing methods ...
+    func chunksForBatch(_ batchId: Int64) async throws -&gt; [RecordingChunk]  // CHANGED to async
+    func allBatches() async throws -&gt; [(id: Int64, start: Int, end: Int, status: String)]  // Consider async
+}
+      </signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      FocusLock uses XCTest framework for all testing. Unit tests target &gt;80% code coverage for new components with focus on edge cases and error handling. Integration tests verify cross-component interactions, especially multi-threaded database access scenarios. Stress tests validate stability under load with 10+ concurrent operations for extended duration. Performance tests measure latency (P50/P95/P99) and memory usage to prevent regressions. All tests use in-memory GRDB databases for repeatability. Tests are located in Dayflow/DayflowTests/ directory following naming convention ComponentNameTests.swift.
+    </standards>
+    <locations>
+      Dayflow/DayflowTests/DatabaseManagerTests.swift (NEW)
+      Dayflow/DayflowTests/StorageManagerTests.swift (NEW/MODIFIED)
+      Dayflow/DayflowTests/AnalysisManagerTests.swift (NEW/MODIFIED)
+      Dayflow/DayflowTests/DatabaseThreadingStressTests.swift (NEW)
+      Dayflow/DayflowTests/DatabasePerformanceTests.swift (NEW)
+    </locations>
+    <ideas>
+      <idea ac="AC-1.1.1">Unit test: DatabaseManager.shared initializes successfully with correct serial queue label "com.focusLock.database" and QoS .userInitiated. Verify singleton pattern prevents multiple instances.</idea>
+      <idea ac="AC-1.1.2">Integration test: Call StorageManager.chunksForBatch() from 10 threads simultaneously using DispatchQueue.concurrentPerform. Verify no crashes, no "freed pointer" errors, and all results are valid RecordingChunk arrays.</idea>
+      <idea ac="AC-1.1.3">Stress test: Run 10 concurrent database operations (5 reads + 5 writes) continuously for 5 minutes. Verify zero crashes, verify data consistency by reading back written values, check for memory leaks using XCTMemoryMetric.</idea>
+      <idea ac="AC-1.1.4">System test: Launch app, start screen recording, enable AI analysis, wait 30 minutes. Monitor crash logs for "freed pointer was not last allocation" errors. Verify app remains responsive (UI interactions &lt;200ms). Test on macOS 13, 14, and 15.</idea>
+      <idea ac="AC-1.1.5">Integration test: Audit all database access points in codebase (use grep for "dbPool.read" and "dbPool.write"). Verify all operations route through DatabaseManager.shared.read() or write(). No direct GRDB access allowed outside DatabaseManager.</idea>
+      <idea ac="AC-1.1.6">Performance test: Measure database operation latency using XCTPerformanceMetric. Run 1000 read and 1000 write operations, calculate P50/P95/P99 latencies. Assert P95 &lt;100ms. Compare against baseline before DatabaseManager to ensure &lt;10% regression.</idea>
+      <idea ac="AC-1.1.1">Unit test: Verify DatabaseManager.read() executes closure on serial queue and returns result correctly. Test with various return types (Int, String, [RecordingChunk]) to ensure generic implementation works.</idea>
+      <idea ac="AC-1.1.1">Unit test: Verify DatabaseManager.write() executes closure on serial queue and handles errors properly. Test error propagation with intentional SQL errors.</idea>
+      <idea ac="AC-1.1.2">Unit test: Test StorageManager.chunksForBatch() async signature change. Verify it returns expected RecordingChunk array for valid batchId. Verify it throws error for invalid batchId.</idea>
+      <idea ac="AC-1.1.3">Integration test: Test race condition prevention. Start 10 concurrent reads and 10 concurrent writes to same database table. Verify final state is consistent and matches expected transactional semantics.</idea>
+      <idea ac="AC-1.1.5">Unit test: Test DatabaseManager error handling. Inject various GRDB errors (connection failure, SQL syntax error, constraint violation). Verify errors propagate correctly through async throws.</idea>
+      <idea ac="AC-1.1.6">Performance test: Measure queue depth under load. Submit 100 database operations rapidly, measure time for all to complete. Verify queue doesn't build up excessively (completion time &lt; 10 seconds).</idea>
+    </ideas>
+  </tests>
+</story-context>
