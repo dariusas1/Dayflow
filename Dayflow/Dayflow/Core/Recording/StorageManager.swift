@@ -288,18 +288,50 @@ struct TimelineCardWithTimestamps {
     let videoSummaryURL: String?
 }
 
-// Integrity statistics for database health monitoring
+/// Comprehensive statistics about database health and integrity
+///
+/// This structure provides detailed metrics about timeline cards, batches, and observations,
+/// including counts of various integrity violations. Use this to monitor database health
+/// and identify potential data quality issues.
+///
+/// - Note: This structure is thread-safe and conforms to Sendable for concurrent access.
 struct IntegrityStatistics: Sendable {
+    /// Total number of active (non-deleted) timeline cards in the database
     let totalCards: Int
+
+    /// Total number of analysis batches across all time periods
     let totalBatches: Int
+
+    /// Total number of observations (transcripts) stored in the database
     let totalObservations: Int
+
+    /// Number of timeline cards with invalid timestamps (end_ts < start_ts)
+    /// - Note: This should always be 0 in a healthy database
     let cardsWithInvalidTimestamps: Int
+
+    /// Number of timeline cards referencing non-existent batches
+    /// - Note: This indicates orphaned foreign key references that need cleanup
     let orphanedCards: Int
+
+    /// Number of observations referencing non-existent batches
+    /// - Note: This indicates orphaned foreign key references that need cleanup
     let orphanedObservations: Int
+
+    /// Number of timeline cards missing required fields (title, category, timestamps)
+    /// - Note: This should always be 0 due to NOT NULL constraints
     let cardsWithMissingRequiredFields: Int
+
+    /// Number of distinct days that have timeline cards
     let daysWithCards: Int
+
+    /// Average number of timeline cards per day
+    /// - Note: Calculated as totalCards / daysWithCards
     let averageCardsPerDay: Double
+
+    /// Date of the oldest timeline card in YYYY-MM-DD format, or nil if no cards exist
     let oldestCardDate: String?
+
+    /// Date of the newest timeline card in YYYY-MM-DD format, or nil if no cards exist
     let newestCardDate: String?
 }
 
@@ -427,7 +459,47 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         // Start connection monitoring
         startConnectionMonitoring()
     }
-    
+
+    // MARK: - Testing Support
+
+    /// Internal initializer for testing purposes only
+    /// Creates a StorageManager instance with a custom database path (typically a temporary file)
+    /// - Parameter testDatabasePath: Path to the test database file
+    /// - Note: This initializer skips production-specific setup like purge scheduling and connection monitoring
+    internal init(testDatabasePath: String) {
+        let fileMgr = FileManager.default
+        let tempDir = fileMgr.temporaryDirectory
+        let testBaseDir = tempDir.appendingPathComponent("DayflowTests-\(UUID().uuidString)", isDirectory: true)
+        let testRecordingsDir = testBaseDir.appendingPathComponent("recordings", isDirectory: true)
+
+        // Create test directories
+        try? fileMgr.createDirectory(at: testBaseDir, withIntermediateDirectories: true)
+        try? fileMgr.createDirectory(at: testRecordingsDir, withIntermediateDirectories: true)
+
+        root = testRecordingsDir
+        dbURL = URL(fileURLWithPath: testDatabasePath)
+
+        // Configure test database with WAL mode
+        var config = Configuration()
+        config.maximumReaderCount = 5
+        config.qos = .userInitiated
+
+        config.prepareDatabase { db in
+            if !db.configuration.readonly {
+                try? db.execute(sql: "PRAGMA journal_mode = WAL")
+                try? db.execute(sql: "PRAGMA synchronous = NORMAL")
+            }
+            try? db.execute(sql: "PRAGMA busy_timeout = 5000")
+        }
+
+        db = try! DatabasePool(path: dbURL.path, configuration: config)
+
+        // Run migrations to create schema
+        migrate()
+
+        // Note: Skip purge scheduling, optimization scheduling, and connection monitoring for tests
+    }
+
     private func startConnectionMonitoring() {
         // Monitor connection pool usage periodically
         let monitorQueue = DispatchQueue(label: "com.dayflow.storage.connectionMonitor", qos: .utility)
@@ -3165,7 +3237,34 @@ private extension StorageManager {
 
     // MARK: - Data Integrity Validation
 
-    /// Validates timeline card data integrity and returns a list of issues found
+    /// Validates timeline card data integrity across the entire database
+    ///
+    /// Performs comprehensive validation checks to identify data quality issues including:
+    /// - Invalid timestamps (end before start)
+    /// - Orphaned foreign key references (cards referencing non-existent batches)
+    /// - Missing required fields (title, category, timestamps)
+    /// - Orphaned observations
+    /// - Batches without associated chunks
+    ///
+    /// This method is read-only and does not modify any data. Use it for diagnostic purposes
+    /// or as part of regular health checks.
+    ///
+    /// - Returns: Array of human-readable issue descriptions. Returns a single element
+    ///            `["Database integrity check passed - no issues found"]` if no issues are detected.
+    ///
+    /// - Note: This method is thread-safe and can be called concurrently with other database operations.
+    ///         All validation queries only examine active (non-deleted) records.
+    ///
+    /// # Example Usage
+    /// ```swift
+    /// let issues = storageManager.validateTimelineCardIntegrity()
+    /// if issues.first?.contains("passed") == true {
+    ///     print("Database is healthy")
+    /// } else {
+    ///     print("Issues found:")
+    ///     issues.forEach { print("  - \($0)") }
+    /// }
+    /// ```
     func validateTimelineCardIntegrity() -> [String] {
         var issues: [String] = []
 
@@ -3213,18 +3312,21 @@ private extension StorageManager {
             issues.append("\(missingFields) timeline cards have missing required fields")
         }
 
-        // Check for day field consistency with start_ts (4AM boundary logic)
-        let inconsistentDays = (try? timedRead("validateIntegrity:inconsistentDays") { db in
-            try Int.fetchOne(db, sql: """
-                SELECT COUNT(*) FROM timeline_cards
-                WHERE is_deleted = 0
-                  AND day IS NOT NULL
-                  AND start_ts IS NOT NULL
-            """)
-        }) ?? 0
-
-        // For now, we just count cards with day field - more complex validation would require
-        // comparing the day field against the actual 4AM boundary calculation in Swift
+        // NOTE: Day field consistency with 4AM boundary logic is NOT validated
+        //
+        // RATIONALE: Validating that the `day` field matches the 4AM boundary calculation
+        // would require re-implementing the Date.getDayInfoFor4AMBoundary() logic in SQL,
+        // which is complex and error-prone. The day field is computed correctly at write time
+        // using the Swift extension method, and any inconsistencies would indicate a bug in
+        // the save logic rather than data corruption.
+        //
+        // ALTERNATIVE APPROACH: If day field validation becomes critical, consider:
+        // 1. Adding a stored function in SQLite that implements 4AM boundary logic
+        // 2. Creating a separate validation test that fetches all cards and validates in Swift
+        // 3. Adding a migration to recompute all day fields from start_ts if inconsistencies found
+        //
+        // For now, we rely on the correctness of saveTimelineCardShell() which uses
+        // getDayInfoFor4AMBoundary() to compute the day field at insertion time.
 
         // Check for orphaned observations (batch_id references non-existent batch)
         let orphanedObs = (try? timedRead("validateIntegrity:orphanedObservations") { db in
@@ -3262,6 +3364,31 @@ private extension StorageManager {
     }
 
     /// Returns comprehensive statistics about database health and integrity
+    ///
+    /// Collects detailed metrics about the database including counts of timeline cards, batches,
+    /// observations, and various integrity violations. This method provides a complete snapshot
+    /// of database health for monitoring and diagnostic purposes.
+    ///
+    /// The statistics include:
+    /// - Total counts of cards, batches, and observations
+    /// - Integrity violation counts (invalid timestamps, orphaned records, missing fields)
+    /// - Timeline coverage metrics (days with cards, average cards per day)
+    /// - Date range of timeline data (oldest and newest cards)
+    ///
+    /// - Returns: `IntegrityStatistics` structure containing all collected metrics.
+    ///
+    /// - Note: This method is thread-safe and can be called concurrently. All queries examine
+    ///         only active (non-deleted) records except for batch and observation counts.
+    ///
+    /// # Example Usage
+    /// ```swift
+    /// let stats = storageManager.getIntegrityStatistics()
+    /// print("Total cards: \(stats.totalCards)")
+    /// print("Average per day: \(String(format: "%.1f", stats.averageCardsPerDay))")
+    /// if stats.cardsWithInvalidTimestamps > 0 {
+    ///     print("Warning: \(stats.cardsWithInvalidTimestamps) cards have invalid timestamps")
+    /// }
+    /// ```
     func getIntegrityStatistics() -> IntegrityStatistics {
         let totalCards = (try? timedRead("integrityStats:totalCards") { db in
             try Int.fetchOne(db, sql: """
