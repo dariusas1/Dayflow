@@ -41,6 +41,15 @@ extension Date {
     }
 }
 
+// MARK: - Settings Error Types
+
+enum SettingsError: Error {
+    case encodingFailed(String)
+    case decodingFailed(String)
+    case invalidValue(String)
+    case invalidPath(String)
+    case migrationFailed(String)
+}
 
 /// File + database persistence used by screen‑recorder & Gemini pipeline.
 ///
@@ -907,7 +916,16 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 CREATE INDEX IF NOT EXISTS idx_context_switches_created ON context_switches(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_context_switches_date ON context_switches(DATE(created_at));
             """)
-            
+
+            // App Settings Table: Generic key-value store for app settings
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+                );
+            """)
+
             print("✅ Second Brain platform tables created successfully")
         }
     }
@@ -3721,6 +3739,79 @@ private extension StorageManager {
             oldestCardDate: oldestDay,
             newestCardDate: newestDay
         )
+    }
+
+    // MARK: - Settings Persistence (Story 4.3)
+
+    /// Saves a setting to the app_settings table with JSON encoding
+    /// - Parameters:
+    ///   - key: Setting identifier (e.g., "aiProvider", "recording", "retention")
+    ///   - value: Codable value to store
+    /// - Throws: Encoding errors or database errors
+    func saveSetting<T: Codable>(key: String, value: T) async throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        guard let jsonString = String(data: data, encoding: .utf8) else {
+            throw SettingsError.encodingFailed("Failed to convert encoded data to UTF-8 string")
+        }
+
+        try await db.write { db in
+            try db.execute(sql: """
+                INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+            """, arguments: [key, jsonString, Int(Date().timeIntervalSince1970)])
+        }
+    }
+
+    /// Loads a setting from the app_settings table with JSON decoding
+    /// - Parameters:
+    ///   - key: Setting identifier
+    ///   - defaultValue: Value to return if setting doesn't exist or fails to decode
+    /// - Returns: The decoded setting value or the default value
+    /// - Throws: Database errors (but not decoding errors - returns default instead)
+    func loadSetting<T: Codable>(key: String, defaultValue: T) async throws -> T {
+        let jsonString = try await db.read { db -> String? in
+            try String.fetchOne(db, sql: """
+                SELECT value FROM app_settings WHERE key = ?
+            """, arguments: [key])
+        }
+
+        guard let jsonString = jsonString,
+              let data = jsonString.data(using: .utf8) else {
+            return defaultValue
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            // Log decoding failure but return default value gracefully
+            print("⚠️ Failed to decode setting '\(key)': \(error). Using default value.")
+            return defaultValue
+        }
+    }
+
+    /// Deletes a setting from the app_settings table
+    /// - Parameter key: Setting identifier to delete
+    /// - Throws: Database errors
+    func deleteSetting(key: String) async throws {
+        try await db.write { db in
+            try db.execute(sql: """
+                DELETE FROM app_settings WHERE key = ?
+            """, arguments: [key])
+        }
+    }
+
+    /// Lists all setting keys in the database
+    /// - Returns: Array of all setting keys
+    /// - Throws: Database errors
+    func listSettingKeys() async throws -> [String] {
+        return try await db.read { db in
+            try String.fetchAll(db, sql: "SELECT key FROM app_settings ORDER BY key")
+        }
     }
 }
 
