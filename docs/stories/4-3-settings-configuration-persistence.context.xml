@@ -1,0 +1,1013 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<story-context>
+  <metadata>
+    <story-id>4-3-settings-configuration-persistence</story-id>
+    <story-title>Settings and Configuration Persistence</story-title>
+    <epic-id>Epic-4</epic-id>
+    <epic-title>Database &amp; Persistence Reliability</epic-title>
+    <generated-date>2025-11-14</generated-date>
+    <workflow>story-context-workflow</workflow>
+    <status>ready-for-dev</status>
+  </metadata>
+
+  <story-overview>
+    <user-story>
+      As a user customizing app settings, I want my preferences saved reliably,
+      so that my configuration persists across app restarts.
+    </user-story>
+
+    <acceptance-criteria>
+      <criterion>User modifies app settings (AI providers, retention, etc.)</criterion>
+      <criterion>Settings are saved to database</criterion>
+      <criterion>Settings persist across app restarts</criterion>
+      <criterion>Settings load correctly on app launch</criterion>
+      <criterion>Invalid settings are handled gracefully</criterion>
+    </acceptance-criteria>
+
+    <technical-goals>
+      <goal>Implement settings persistence using GRDB app_settings table</goal>
+      <goal>Create generic saveSetting/loadSetting methods with Codable support</goal>
+      <goal>Build SettingsManager with @Published properties for SwiftUI</goal>
+      <goal>Implement validation framework for settings</goal>
+      <goal>Integrate Keychain for secure API key storage</goal>
+      <goal>Create migration system for schema changes</goal>
+      <goal>Build backup/restore functionality</goal>
+    </technical-goals>
+
+    <performance-targets>
+      <target metric="load-time" value="&lt; 100ms" description="All settings load time" />
+      <target metric="write-latency" value="&lt; 50ms" description="Per setting save time" />
+      <target metric="storage-overhead" value="&lt; 100KB" description="Total settings storage" />
+      <target metric="validation-time" value="&lt; 10ms" description="Per setting validation" />
+    </performance-targets>
+  </story-overview>
+
+  <existing-implementations>
+    <implementation>
+      <title>StoragePreferences - Simple UserDefaults Pattern</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Recording/StoragePreferences.swift</file>
+      <pattern>UserDefaults-based static properties</pattern>
+      <key-code><![CDATA[
+enum StoragePreferences {
+    private static let defaults = UserDefaults.standard
+    private static let recordingsKey = "storageLimitRecordingsBytes"
+
+    static var recordingsLimitBytes: Int64 {
+        get {
+            let stored = defaults.object(forKey: recordingsKey) as? NSNumber
+            return stored?.int64Value ?? defaultRecordings
+        }
+        set {
+            defaults.set(NSNumber(value: newValue), forKey: recordingsKey)
+        }
+    }
+}
+      ]]></key-code>
+      <notes>
+        Simple pattern for basic preferences. No validation, no migration support.
+        Good for primitive types but not complex settings structures.
+      </notes>
+    </implementation>
+
+    <implementation>
+      <title>FocusLockSettingsManager - Struct-based Settings with JSON</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/FocusLock/FocusLockSettingsManager.swift</file>
+      <pattern>@MainActor ObservableObject with struct encoding to UserDefaults</pattern>
+      <key-code><![CDATA[
+@MainActor
+class FocusLockSettingsManager: ObservableObject {
+    static let shared = FocusLockSettingsManager()
+    @Published var settings: FocusLockSettings = .default
+
+    private let userDefaults = UserDefaults.standard
+    private let settingsKey = "FocusLockSettings"
+
+    func loadSettings() {
+        if let data = userDefaults.data(forKey: settingsKey),
+           let decoded = try? JSONDecoder().decode(FocusLockSettings.self, from: data) {
+            settings = decoded
+            migrateLegacySettingsIfNeeded()
+        } else {
+            loadLegacySettings()
+            migrateToStructStorage()
+        }
+    }
+
+    func saveSettings() {
+        if let encoded = try? JSONEncoder().encode(settings) {
+            userDefaults.set(encoded, forKey: settingsKey)
+        }
+        syncPublishedProperties()
+    }
+}
+      ]]></key-code>
+      <notes>
+        Good pattern for settings migration. Uses JSONEncoder/Decoder for struct persistence.
+        Includes auto-save with Combine debouncing (1 second). Has legacy migration support.
+      </notes>
+    </implementation>
+
+    <implementation>
+      <title>UserPreferencesManager - Comprehensive Multi-Category Preferences</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/FocusLock/UserPreferencesManager.swift</file>
+      <pattern>Category-based preferences with export/import capability</pattern>
+      <key-code><![CDATA[
+class UserPreferencesManager: ObservableObject {
+    static let shared = UserPreferencesManager()
+
+    @Published var generalPreferences: GeneralPreferences
+    @Published var focusPreferences: FocusPreferences
+    @Published var privacyPreferences: PrivacyPreferences
+    @Published var appearancePreferences: AppearancePreferences
+    @Published var notificationPreferences: NotificationPreferences
+    @Published var accessibilityPreferences: AccessibilityPreferences
+
+    private let userDefaults = UserDefaults.standard
+    private let preferencesKey = "FocusLockUserPreferences"
+
+    func savePreferences() {
+        let preferences = UserPreferences(
+            general: generalPreferences,
+            focus: focusPreferences,
+            privacy: privacyPreferences,
+            appearance: appearancePreferences,
+            notifications: notificationPreferences,
+            accessibility: accessibilityPreferences,
+            lastUpdated: Date()
+        )
+
+        do {
+            let data = try JSONEncoder().encode(preferences)
+            userDefaults.set(data, forKey: preferencesKey)
+            userDefaults.set(Date(), forKey: lastSyncKey)
+        } catch {
+            print("Failed to save preferences: \(error)")
+        }
+    }
+
+    func exportPreferences() -> URL?
+    func importPreferences(from url: URL) -> Bool
+    func resetToDefaults()
+}
+      ]]></key-code>
+      <notes>
+        Most comprehensive pattern. Includes export/import, validation, cloud sync hooks.
+        Auto-save with debouncing per preference category. Good model for Story 4.3.
+      </notes>
+    </implementation>
+
+    <implementation>
+      <title>GeminiPromptPreferences - Custom Prompt Overrides Pattern</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/AI/GeminiPromptPreferences.swift</file>
+      <pattern>Enum-based preferences with static methods</pattern>
+      <key-code><![CDATA[
+struct GeminiPromptOverrides: Codable, Equatable {
+    var titleBlock: String?
+    var summaryBlock: String?
+    var detailedBlock: String?
+
+    var isEmpty: Bool {
+        let values = [titleBlock, summaryBlock, detailedBlock]
+        return values.allSatisfy { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty
+        }
+    }
+}
+
+enum GeminiPromptPreferences {
+    private static let overridesKey = "geminiPromptOverrides"
+    private static let store = UserDefaults.standard
+
+    static func load() -> GeminiPromptOverrides
+    static func save(_ overrides: GeminiPromptOverrides)
+    static func reset()
+}
+      ]]></key-code>
+      <notes>
+        Simple enum-based pattern for preferences. Good for namespace organization.
+        Includes reset functionality and isEmpty validation.
+      </notes>
+    </implementation>
+  </existing-implementations>
+
+  <database-schema>
+    <table name="app_settings">
+      <description>
+        Already exists in StorageManager. Generic key-value table for app settings with timestamps.
+      </description>
+      <sql><![CDATA[
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+      ]]></sql>
+      <columns>
+        <column name="key" type="TEXT" constraint="PRIMARY KEY" description="Setting identifier (e.g., 'aiProvider', 'recording', 'retention')" />
+        <column name="value" type="TEXT" constraint="NOT NULL" description="JSON-encoded setting value" />
+        <column name="updated_at" type="INTEGER" constraint="DEFAULT (strftime('%s', 'now'))" description="Unix timestamp of last update" />
+      </columns>
+      <usage>
+        This table is used by StorageManager for generic settings persistence.
+        Values are stored as JSON strings for flexibility with Codable types.
+      </usage>
+    </table>
+  </database-schema>
+
+  <keychain-integration>
+    <implementation>
+      <title>KeychainManager - Thread-Safe Secure Credential Storage</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Security/KeychainManager.swift</file>
+      <pattern>Singleton with serial queue for thread safety</pattern>
+      <key-code><![CDATA[
+final class KeychainManager {
+    static let shared = KeychainManager()
+
+    private let servicePrefix = "com.teleportlabs.dayflow.apikeys"
+    private let queue = DispatchQueue(label: "com.teleportlabs.dayflow.keychain", qos: .userInitiated)
+
+    @discardableResult
+    func store(_ apiKey: String, for provider: String) -> Bool {
+        return queue.sync {
+            guard let data = apiKey.data(using: .utf8) else { return false }
+
+            let service = "\(servicePrefix).\(provider)"
+
+            // Delete any existing item first
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: provider
+            ]
+            SecItemDelete(deleteQuery as CFDictionary)
+
+            // Add new item
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: provider,
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
+            ]
+
+            let status = SecItemAdd(addQuery as CFDictionary, nil)
+            return status == errSecSuccess
+        }
+    }
+
+    func retrieve(for provider: String) -> String?
+    func delete(for provider: String) -> Bool
+    func exists(for provider: String) -> Bool
+}
+      ]]></key-code>
+      <security-considerations>
+        <consideration>Uses kSecAttrAccessibleWhenUnlocked for appropriate access control</consideration>
+        <consideration>Thread-safe via serial DispatchQueue</consideration>
+        <consideration>Deletes existing items before adding to prevent duplicates</consideration>
+        <consideration>Returns clear success/failure status codes</consideration>
+        <consideration>Should be used for API keys, NOT for general settings</consideration>
+      </security-considerations>
+      <usage>
+        Use for storing sensitive data like API keys (Gemini, Ollama, etc.).
+        Do NOT store API keys in app_settings database table.
+      </usage>
+    </implementation>
+  </keychain-integration>
+
+  <database-persistence-patterns>
+    <pattern>
+      <title>StorageManager - GRDB DatabasePool with Serial Queue</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <threading>Serial queue for all database writes, concurrent reads via DatabasePool</threading>
+      <key-code><![CDATA[
+// Generic settings persistence methods (to be implemented):
+func saveSetting<T: Codable>(key: String, value: T) async throws {
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(value)
+    let jsonString = String(data: data, encoding: .utf8)!
+
+    try await db.write { db in
+        try db.execute(sql: """
+            INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+        """, arguments: [key, jsonString, Int(Date().timeIntervalSince1970)])
+    }
+}
+
+func loadSetting<T: Codable>(key: String, defaultValue: T) async throws -> T {
+    let jsonString = try await db.read { db -> String? in
+        try String.fetchOne(db, sql: """
+            SELECT value FROM app_settings WHERE key = ?
+        """, arguments: [key])
+    }
+
+    guard let jsonString = jsonString,
+          let data = jsonString.data(using: .utf8) else {
+        return defaultValue
+    }
+
+    let decoder = JSONDecoder()
+    return try decoder.decode(T.self, from: data)
+}
+      ]]></key-code>
+      <threading-pattern>
+        <description>All database operations use serial queue pattern</description>
+        <write-pattern>dbWriteQueue.async for async writes, db.write {} for sync</write-pattern>
+        <read-pattern>db.read {} for concurrent reads (GRDB handles locking)</read-pattern>
+        <actor-isolation>StorageManager is NOT an actor (protocol requires Sendable)</actor-isolation>
+      </threading-pattern>
+    </pattern>
+
+    <pattern>
+      <title>TimelineCache - In-Memory Caching with LRU Eviction</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Recording/TimelineCache.swift</file>
+      <purpose>Performance optimization for frequently accessed data</purpose>
+      <key-code><![CDATA[
+final class TimelineCache: @unchecked Sendable {
+    private var cache: [String: CacheEntry] = [:]
+    private let cacheDuration: TimeInterval
+    private let maxCacheSize: Int
+    private let queue = DispatchQueue(label: "com.dayflow.timelineCache", qos: .userInitiated)
+
+    func getCachedCards(forDay day: String) -> [TimelineCard]? {
+        return queue.sync {
+            cleanupExpiredEntries()
+            guard let entry = cache[day] else {
+                misses += 1
+                return nil
+            }
+            if entry.isExpired {
+                cache.removeValue(forKey: day)
+                misses += 1
+                return nil
+            }
+            hits += 1
+            return entry.cards
+        }
+    }
+
+    func cacheCards(_ cards: [TimelineCard], forDay day: String) {
+        queue.sync {
+            let now = Date()
+            let entry = CacheEntry(
+                cards: cards,
+                timestamp: now,
+                expiresAt: now.addingTimeInterval(cacheDuration)
+            )
+            cache[day] = entry
+            if cache.count > maxCacheSize {
+                evictOldestEntry()
+            }
+        }
+    }
+}
+      ]]></key-code>
+      <caching-strategy>
+        <description>Consider implementing similar cache for settings if needed</description>
+        <expiration>60 seconds default, configurable</expiration>
+        <eviction>LRU (Least Recently Used) when size limit exceeded</eviction>
+        <thread-safety>Serial DispatchQueue with @unchecked Sendable</thread-safety>
+      </caching-strategy>
+    </pattern>
+  </database-persistence-patterns>
+
+  <settings-categories>
+    <category name="AI Provider Settings">
+      <struct-name>AIProviderSettings</struct-name>
+      <description>AI provider selection, API keys, model configurations, endpoints</description>
+      <fields>
+        <field name="selectedProvider" type="AIProviderType" default=".gemini" />
+        <field name="geminiAPIKey" type="String?" default="nil" security="Keychain" />
+        <field name="geminiModel" type="String" default="gemini-1.5-flash" />
+        <field name="ollamaEndpoint" type="String" default="http://localhost:11434" />
+        <field name="ollamaModel" type="String" default="llava:latest" />
+        <field name="lmStudioEndpoint" type="String" default="http://localhost:1234" />
+        <field name="lmStudioModel" type="String" default="gpt-4-vision-preview" />
+      </fields>
+      <validation-rules>
+        <rule>Endpoint URLs must be valid HTTP/HTTPS URLs</rule>
+        <rule>Model names must not be empty</rule>
+        <rule>API keys stored in Keychain, not in settings struct</rule>
+      </validation-rules>
+    </category>
+
+    <category name="Recording Settings">
+      <struct-name>RecordingSettings</struct-name>
+      <description>Screen recording configuration and video quality</description>
+      <fields>
+        <field name="enabled" type="Bool" default="true" />
+        <field name="frameRate" type="Int" default="1" range="1-30" />
+        <field name="quality" type="VideoQuality" default=".medium" />
+        <field name="storageLocation" type="URL?" default="nil" />
+        <field name="displays" type="[String]" default="[]" />
+      </fields>
+      <validation-rules>
+        <rule>frameRate must be between 1 and 30 FPS</rule>
+        <rule>storageLocation must exist if specified</rule>
+        <rule>quality must be valid VideoQuality enum value</rule>
+      </validation-rules>
+    </category>
+
+    <category name="Retention Settings">
+      <struct-name>RetentionSettings</struct-name>
+      <description>Data retention policies and cleanup intervals</description>
+      <fields>
+        <field name="enabled" type="Bool" default="true" />
+        <field name="retentionDays" type="Int" default="3" range="1-365" />
+        <field name="maxStorageGB" type="Int" default="10" range="1-1000" />
+        <field name="cleanupIntervalHours" type="Int" default="1" range="1-24" />
+      </fields>
+      <validation-rules>
+        <rule>retentionDays must be between 1 and 365</rule>
+        <rule>maxStorageGB must be between 1 and 1000</rule>
+        <rule>cleanupIntervalHours must be between 1 and 24</rule>
+      </validation-rules>
+    </category>
+
+    <category name="Notification Settings">
+      <struct-name>NotificationSettings</struct-name>
+      <description>Notification preferences and alert types</description>
+      <fields>
+        <field name="enabled" type="Bool" default="true" />
+        <field name="analysisComplete" type="Bool" default="true" />
+        <field name="storageWarning" type="Bool" default="true" />
+        <field name="errorAlerts" type="Bool" default="true" />
+      </fields>
+    </category>
+
+    <category name="Analytics Settings">
+      <struct-name>AnalyticsSettings</struct-name>
+      <description>Sentry, PostHog integration, crash reporting</description>
+      <fields>
+        <field name="sentryEnabled" type="Bool" default="false" />
+        <field name="postHogEnabled" type="Bool" default="false" />
+        <field name="crashReporting" type="Bool" default="false" />
+      </fields>
+    </category>
+
+    <category name="Focus Lock Settings">
+      <struct-name>FocusLockSettings</struct-name>
+      <description>Focus session configuration, allowed apps, blocking mode</description>
+      <fields>
+        <field name="globalAllowedApps" type="[String]" default="['Finder', 'System Preferences']" />
+        <field name="emergencyBreakDuration" type="TimeInterval" default="20.0" />
+        <field name="minimumSessionDuration" type="TimeInterval" default="300.0" />
+        <field name="autoStartDetection" type="Bool" default="true" />
+        <field name="enableNotifications" type="Bool" default="true" />
+        <field name="logSessions" type="Bool" default="true" />
+        <field name="enableBackgroundMonitoring" type="Bool" default="true" />
+        <field name="enableTaskDetection" type="Bool" default="true" />
+      </fields>
+      <actual-implementation-file>/home/user/Dayflow/Dayflow/Dayflow/Models/FocusLockModels.swift</actual-implementation-file>
+    </category>
+  </settings-categories>
+
+  <settings-ui-components>
+    <component>
+      <title>SettingsView - Main Settings UI</title>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Views/UI/SettingsView.swift</file>
+      <description>Comprehensive settings UI with tab-based navigation</description>
+      <tabs>
+        <tab name="Storage" description="Recording status and disk usage" />
+        <tab name="Providers" description="LLM providers and prompt customization" />
+        <tab name="FocusLock" description="Focus sessions and productivity features" />
+        <tab name="Bedtime" description="Healthy sleep habits enforcement" />
+        <tab name="Other" description="General preferences and support" />
+      </tabs>
+      <pattern>
+        <description>Uses @State for UI state, persists via UserDefaults and database</description>
+        <persistence>Immediate save on change (no debouncing in UI layer)</persistence>
+        <validation>Pre-save validation with user confirmation for destructive changes</validation>
+      </pattern>
+    </component>
+  </settings-ui-components>
+
+  <threading-and-concurrency>
+    <pattern>
+      <title>@MainActor ObservableObject for Settings Managers</title>
+      <description>Settings managers must be @MainActor for SwiftUI integration</description>
+      <example><![CDATA[
+@MainActor
+class SettingsManager: ObservableObject {
+    static let shared = SettingsManager()
+
+    @Published var aiProvider: AIProviderSettings
+    @Published var recording: RecordingSettings
+    // ... other settings
+
+    private init() {
+        // Initialize with defaults
+        self.aiProvider = AIProviderSettings()
+        self.recording = RecordingSettings()
+
+        Task {
+            await loadAllSettings()
+        }
+    }
+}
+      ]]></example>
+      <notes>
+        @MainActor is required for ObservableObject with @Published properties.
+        Use Task {} for async initialization. Database operations are async/await.
+      </notes>
+    </pattern>
+
+    <pattern>
+      <title>Serial Queue for Database Writes</title>
+      <description>All database writes must be serialized to prevent concurrent access crashes</description>
+      <example><![CDATA[
+private let dbWriteQueue = DispatchQueue(label: "com.focuslock.database.serial")
+
+dbWriteQueue.async {
+    try? self.db.write { db in
+        // Database write operations
+    }
+}
+      ]]></example>
+      <notes>
+        StorageManager uses dbWriteQueue for all writes. GRDB DatabasePool handles
+        concurrent reads automatically. Never bypass the serial queue for writes.
+      </notes>
+    </pattern>
+
+    <pattern>
+      <title>Async/Await for Database Operations</title>
+      <description>Prefer async/await for new database code</description>
+      <example><![CDATA[
+func saveSetting<T: Codable>(key: String, value: T) async throws {
+    try await db.write { db in
+        // Write operation
+    }
+}
+
+func loadSetting<T: Codable>(key: String, defaultValue: T) async throws -> T {
+    return try await db.read { db in
+        // Read operation
+    }
+}
+      ]]></example>
+    </pattern>
+  </threading-and-concurrency>
+
+  <integration-points>
+    <integration>
+      <component>StorageManager</component>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <description>Add saveSetting/loadSetting generic methods</description>
+      <new-methods>
+        <method>saveSetting&lt;T: Codable&gt;(key: String, value: T) async throws</method>
+        <method>loadSetting&lt;T: Codable&gt;(key: String, defaultValue: T) async throws -&gt; T</method>
+      </new-methods>
+    </integration>
+
+    <integration>
+      <component>SettingsManager</component>
+      <file>NEW: /home/user/Dayflow/Dayflow/Dayflow/Core/Settings/SettingsManager.swift</file>
+      <description>Create new @MainActor ObservableObject for all app settings</description>
+      <responsibilities>
+        <responsibility>Load all settings on init</responsibility>
+        <responsibility>Provide @Published properties for SwiftUI binding</responsibility>
+        <responsibility>Save settings on change with debouncing</responsibility>
+        <responsibility>Validate settings before saving</responsibility>
+        <responsibility>Handle migration from old UserDefaults keys</responsibility>
+      </responsibilities>
+    </integration>
+
+    <integration>
+      <component>SettingsView</component>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Views/UI/SettingsView.swift</file>
+      <description>Update to use new SettingsManager</description>
+      <changes>
+        <change>Replace individual @State variables with @StateObject SettingsManager</change>
+        <change>Bind UI controls to SettingsManager @Published properties</change>
+        <change>Remove manual UserDefaults access</change>
+      </changes>
+    </integration>
+
+    <integration>
+      <component>RetentionManager</component>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/Recording/RetentionManager.swift</file>
+      <description>Use retention settings from SettingsManager</description>
+      <current-usage>
+        Currently uses local RetentionPolicy. Should read from SettingsManager.shared.retention.
+      </current-usage>
+    </integration>
+
+    <integration>
+      <component>LLMService</component>
+      <file>/home/user/Dayflow/Dayflow/Dayflow/Core/AI/LLMService.swift</file>
+      <description>Use AI provider settings from SettingsManager</description>
+      <current-usage>
+        Currently uses UserDefaults directly. Should read from SettingsManager.shared.aiProvider.
+      </current-usage>
+    </integration>
+  </integration-points>
+
+  <technical-constraints>
+    <constraint>
+      <title>Database Schema - app_settings Table Already Exists</title>
+      <description>
+        The app_settings table is already created in StorageManager initialization.
+        No schema migration needed, just implement the generic save/load methods.
+      </description>
+      <impact>LOW - Table ready to use</impact>
+    </constraint>
+
+    <constraint>
+      <title>Thread Safety - Serial Queue Required for Writes</title>
+      <description>
+        All database write operations MUST use the serial dbWriteQueue to prevent
+        concurrent access crashes. This is a critical safety requirement from Epic 1.
+      </description>
+      <impact>HIGH - Must follow pattern strictly</impact>
+      <mitigation>Use existing dbWriteQueue pattern from StorageManager</mitigation>
+    </constraint>
+
+    <constraint>
+      <title>SwiftUI Integration - @MainActor Required for ObservableObject</title>
+      <description>
+        Settings managers with @Published properties must be @MainActor isolated
+        for proper SwiftUI integration. Database operations are async/await.
+      </description>
+      <impact>MEDIUM - Requires proper async/await usage</impact>
+      <mitigation>Use Task {} for async init, await for database calls</mitigation>
+    </constraint>
+
+    <constraint>
+      <title>Keychain Integration - API Keys Must NOT Be in Database</title>
+      <description>
+        Sensitive credentials (API keys) must be stored in Keychain, not in the
+        app_settings database table. Use existing KeychainManager.
+      </description>
+      <impact>HIGH - Security requirement</impact>
+      <mitigation>Use KeychainManager.shared for API keys, settings for everything else</mitigation>
+    </constraint>
+
+    <constraint>
+      <title>Settings Migration - Backward Compatibility Required</title>
+      <description>
+        Many settings currently stored in UserDefaults must be migrated to new
+        database-backed system. Migration must preserve existing user settings.
+      </description>
+      <impact>MEDIUM - Migration complexity</impact>
+      <mitigation>Implement migration on first load, keep UserDefaults as fallback</mitigation>
+    </constraint>
+  </technical-constraints>
+
+  <validation-framework>
+    <protocol>
+      <name>SettingsValidatable</name>
+      <description>Protocol for validating settings before save</description>
+      <code><![CDATA[
+protocol SettingsValidatable {
+    func validate() throws
+}
+
+extension RecordingSettings: SettingsValidatable {
+    func validate() throws {
+        guard frameRate >= 1 && frameRate <= 30 else {
+            throw SettingsError.invalidValue("Frame rate must be 1-30 FPS")
+        }
+
+        if let storageLocation = storageLocation {
+            guard FileManager.default.fileExists(atPath: storageLocation.path) else {
+                throw SettingsError.invalidPath("Storage location does not exist")
+            }
+        }
+    }
+}
+
+extension RetentionSettings: SettingsValidatable {
+    func validate() throws {
+        guard retentionDays >= 1 && retentionDays <= 365 else {
+            throw SettingsError.invalidValue("Retention days must be 1-365")
+        }
+
+        guard maxStorageGB >= 1 && maxStorageGB <= 1000 else {
+            throw SettingsError.invalidValue("Max storage must be 1-1000 GB")
+        }
+
+        guard cleanupIntervalHours >= 1 && cleanupIntervalHours <= 24 else {
+            throw SettingsError.invalidValue("Cleanup interval must be 1-24 hours")
+        }
+    }
+}
+
+enum SettingsError: Error {
+    case invalidValue(String)
+    case invalidPath(String)
+    case migrationFailed(String)
+}
+      ]]></code>
+    </protocol>
+  </validation-framework>
+
+  <migration-system>
+    <description>
+      Settings migration system to handle schema changes between app versions.
+      Uses versioning and ordered migration steps.
+    </description>
+    <implementation><![CDATA[
+struct SettingsMigration {
+    let fromVersion: Int
+    let toVersion: Int
+    let migration: (Database) throws -> Void
+}
+
+class SettingsMigrationManager {
+    static let migrations: [SettingsMigration] = [
+        // Migration from version 1 to 2: Add new fields
+        SettingsMigration(fromVersion: 1, toVersion: 2) { db in
+            // Update AIProviderSettings schema
+            let settings = try String.fetchOne(db, sql: """
+                SELECT value FROM app_settings WHERE key = 'aiProvider'
+            """)
+
+            if var settings = settings,
+               var data = settings.data(using: .utf8),
+               var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Add new field with default value
+                json["lmStudioEndpoint"] = "http://localhost:1234"
+
+                let newData = try JSONSerialization.data(withJSONObject: json)
+                let newString = String(data: newData, encoding: .utf8)!
+
+                try db.execute(sql: """
+                    UPDATE app_settings SET value = ? WHERE key = 'aiProvider'
+                """, arguments: [newString])
+            }
+        }
+    ]
+
+    static func performMigrations(db: DatabasePool) throws {
+        let currentVersion = UserDefaults.standard.integer(forKey: "settingsVersion")
+
+        for migration in migrations where currentVersion < migration.toVersion {
+            try db.write { db in
+                try migration.migration(db)
+            }
+            UserDefaults.standard.set(migration.toVersion, forKey: "settingsVersion")
+        }
+    }
+}
+    ]]></implementation>
+  </migration-system>
+
+  <backup-restore>
+    <description>Settings backup and restore functionality for user data portability</description>
+    <implementation><![CDATA[
+struct SettingsBackup: Codable {
+    let version: Int
+    let timestamp: Date
+    let settings: [String: String]  // All settings as JSON strings
+
+    static func create() async throws -> SettingsBackup {
+        let db = StorageManager.shared.db
+        let settingsDict = try await db.read { db -> [String: String] in
+            let rows = try Row.fetchAll(db, sql: "SELECT key, value FROM app_settings")
+            var dict: [String: String] = [:]
+            for row in rows {
+                dict[row["key"]] = row["value"]
+            }
+            return dict
+        }
+
+        return SettingsBackup(
+            version: 1,
+            timestamp: Date(),
+            settings: settingsDict
+        )
+    }
+
+    func restore() async throws {
+        let db = StorageManager.shared.db
+
+        try await db.write { db in
+            for (key, value) in settings {
+                try db.execute(sql: """
+                    INSERT OR REPLACE INTO app_settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                """, arguments: [key, value, Int(Date().timeIntervalSince1970)])
+            }
+        }
+    }
+}
+    ]]></implementation>
+  </backup-restore>
+
+  <testing-patterns>
+    <test-file>/home/user/Dayflow/Dayflow/DayflowTests/TimelinePersistenceTests.swift</test-file>
+    <patterns>
+      <pattern>
+        <name>Test Database Isolation</name>
+        <description>Create isolated test database for each test</description>
+        <code><![CDATA[
+override func setUp() {
+    super.setUp()
+    let tempDir = FileManager.default.temporaryDirectory
+    let testDbPath = tempDir.appendingPathComponent("test_settings_\(UUID().uuidString).sqlite")
+    testDatabasePath = testDbPath.path
+
+    storageManager = StorageManager(testDatabasePath: testDatabasePath)
+}
+
+override func tearDown() {
+    if let dbPath = testDatabasePath {
+        try? FileManager.default.removeItem(atPath: dbPath)
+        try? FileManager.default.removeItem(atPath: dbPath + "-wal")
+        try? FileManager.default.removeItem(atPath: dbPath + "-shm")
+    }
+    storageManager = nil
+    super.tearDown()
+}
+        ]]></code>
+      </pattern>
+
+      <pattern>
+        <name>Settings Save and Load Test</name>
+        <description>Test settings persistence cycle</description>
+        <code><![CDATA[
+func testSettingsSaveAndLoad() async throws {
+    // Create test settings
+    let settings = RecordingSettings(
+        enabled: true,
+        frameRate: 5,
+        quality: .high,
+        storageLocation: nil,
+        displays: []
+    )
+
+    // Save settings
+    try await storageManager.saveSetting(key: "recording", value: settings)
+
+    // Load settings
+    let loaded: RecordingSettings = try await storageManager.loadSetting(
+        key: "recording",
+        defaultValue: RecordingSettings()
+    )
+
+    // Verify
+    XCTAssertEqual(loaded.enabled, true)
+    XCTAssertEqual(loaded.frameRate, 5)
+    XCTAssertEqual(loaded.quality, .high)
+}
+        ]]></code>
+      </pattern>
+
+      <pattern>
+        <name>Settings Validation Test</name>
+        <description>Test validation rules enforcement</description>
+        <code><![CDATA[
+func testSettingsValidation() async throws {
+    var settings = RecordingSettings()
+
+    // Valid settings should not throw
+    settings.frameRate = 15
+    XCTAssertNoThrow(try settings.validate())
+
+    // Invalid settings should throw
+    settings.frameRate = 100
+    XCTAssertThrowsError(try settings.validate())
+}
+        ]]></code>
+      </pattern>
+
+      <pattern>
+        <name>Performance Test</name>
+        <description>Measure settings load/save performance</description>
+        <code><![CDATA[
+func testSettingsLoadPerformance() async throws {
+    // Measure load time
+    let start = Date()
+    _ = try await storageManager.loadSetting(
+        key: "recording",
+        defaultValue: RecordingSettings()
+    )
+    let duration = Date().timeIntervalSince(start)
+
+    // Validate against acceptance criteria (< 100ms)
+    XCTAssertLessThan(duration, 0.1, "Settings load exceeded 100ms target")
+}
+        ]]></code>
+      </pattern>
+    </patterns>
+  </testing-patterns>
+
+  <implementation-checklist>
+    <phase name="Phase 1: Database Foundation">
+      <task>Add saveSetting generic method to StorageManager</task>
+      <task>Add loadSetting generic method to StorageManager</task>
+      <task>Test basic save/load with simple struct</task>
+      <task>Verify app_settings table exists and is working</task>
+    </phase>
+
+    <phase name="Phase 2: Settings Data Models">
+      <task>Define AIProviderSettings struct with Codable</task>
+      <task>Define RecordingSettings struct with Codable and validation</task>
+      <task>Define RetentionSettings struct with Codable and validation</task>
+      <task>Define NotificationSettings struct with Codable</task>
+      <task>Define AnalyticsSettings struct with Codable</task>
+      <task>Implement SettingsValidatable protocol and extensions</task>
+    </phase>
+
+    <phase name="Phase 3: Settings Manager">
+      <task>Create SettingsManager @MainActor ObservableObject</task>
+      <task>Add @Published properties for all settings categories</task>
+      <task>Implement loadAllSettings() method</task>
+      <task>Implement save() method with validation</task>
+      <task>Add auto-save with Combine debouncing (1 second)</task>
+      <task>Implement resetToDefaults() method</task>
+    </phase>
+
+    <phase name="Phase 4: Migration System">
+      <task>Create SettingsMigration struct</task>
+      <task>Implement SettingsMigrationManager</task>
+      <task>Add migration from UserDefaults to database</task>
+      <task>Add version tracking in UserDefaults</task>
+      <task>Test migration with existing user data</task>
+    </phase>
+
+    <phase name="Phase 5: Keychain Integration">
+      <task>Verify KeychainManager.shared is working</task>
+      <task>Update AIProviderSettings to exclude API keys from struct</task>
+      <task>Add methods to save/load API keys via Keychain</task>
+      <task>Test API key storage and retrieval</task>
+    </phase>
+
+    <phase name="Phase 6: Backup/Restore">
+      <task>Implement SettingsBackup struct</task>
+      <task>Add create() method for backup</task>
+      <task>Add restore() method</task>
+      <task>Add export to file functionality</task>
+      <task>Add import from file functionality</task>
+      <task>Test backup/restore cycle</task>
+    </phase>
+
+    <phase name="Phase 7: Testing">
+      <task>Write unit tests for saveSetting/loadSetting</task>
+      <task>Write validation tests for all settings structs</task>
+      <task>Write migration tests</task>
+      <task>Write Keychain integration tests</task>
+      <task>Write backup/restore tests</task>
+      <task>Write performance tests (load &lt; 100ms, save &lt; 50ms)</task>
+      <task>Achieve >90% test coverage</task>
+    </phase>
+
+    <phase name="Phase 8: Integration">
+      <task>Update SettingsView to use SettingsManager</task>
+      <task>Update RetentionManager to use SettingsManager.retention</task>
+      <task>Update LLMService to use SettingsManager.aiProvider</task>
+      <task>Remove old UserDefaults-based settings code</task>
+      <task>Test full integration in app</task>
+    </phase>
+  </implementation-checklist>
+
+  <success-criteria>
+    <functional>
+      <criterion>Settings persist across 100 app restarts (0 failures)</criterion>
+      <criterion>Settings load correctly on app launch (100% success rate)</criterion>
+      <criterion>Invalid settings handled gracefully (100% fallback to defaults)</criterion>
+      <criterion>Migration success rate: 100%</criterion>
+      <criterion>API keys stored securely in Keychain (not in database)</criterion>
+    </functional>
+
+    <performance>
+      <criterion>Settings load time: &lt; 100ms for all settings</criterion>
+      <criterion>Settings save time: &lt; 50ms per setting</criterion>
+      <criterion>Storage overhead: &lt; 100KB for all settings</criterion>
+      <criterion>Validation time: &lt; 10ms per setting</criterion>
+    </performance>
+
+    <reliability>
+      <criterion>Zero crashes related to settings operations</criterion>
+      <criterion>100% data recovery after force quit</criterion>
+      <criterion>Backup/restore success rate: 100%</criterion>
+      <criterion>Keychain integration: 100% API key security</criterion>
+    </reliability>
+
+    <testing>
+      <criterion>All unit tests passing (>90% coverage)</criterion>
+      <criterion>All integration tests passing</criterion>
+      <criterion>Performance tests validating targets</criterion>
+    </testing>
+  </success-criteria>
+
+  <related-stories>
+    <story id="4-1-timeline-data-persistence" status="done">
+      <description>Timeline card persistence foundation</description>
+      <relevance>Provides database patterns and test examples</relevance>
+    </story>
+    <story id="4-2-recording-chunk-management" status="done">
+      <description>Recording chunk lifecycle and retention</description>
+      <relevance>RetentionSettings will configure this system</relevance>
+    </story>
+  </related-stories>
+
+  <references>
+    <reference type="epic-spec">/home/user/Dayflow/docs/epics/epic-4-tech-spec.md</reference>
+    <reference type="story-spec">/home/user/Dayflow/docs/stories/4-3-settings-configuration-persistence.md</reference>
+    <reference type="sprint-status">/home/user/Dayflow/docs/sprint-status.yaml</reference>
+    <reference type="codebase">/home/user/Dayflow</reference>
+  </references>
+</story-context>

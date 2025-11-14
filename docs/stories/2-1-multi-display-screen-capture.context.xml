@@ -1,0 +1,335 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>2</epicId>
+    <storyId>1</storyId>
+    <title>Multi-Display Screen Capture</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-13</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/2-1-multi-display-screen-capture.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a user with multiple monitors</asA>
+    <iWant>FocusLock to capture activity across all displays</iWant>
+    <soThat>my complete work session is recorded accurately</soThat>
+    <tasks>
+      <task id="1" ac="2.1.1">
+        <title>Implement Multi-Display Detection</title>
+        <subtasks>
+          - Create `ActiveDisplayTracker.getActiveDisplays()` to query all connected displays
+          - Implement display configuration snapshot with DisplayInfo models
+          - Add display count and resolution detection logic
+          - Configure ScreenCaptureKit for detected displays
+          - Persist DisplayConfiguration model to recording metadata via DatabaseManager
+          - Write unit tests for display detection with 1-4 mock displays
+        </subtasks>
+      </task>
+      <task id="2" ac="2.1.2">
+        <title>Implement Display Configuration Change Handling</title>
+        <subtasks>
+          - Set up CGDisplayStream configuration change monitoring
+          - Implement `configurationChanges` AsyncStream in ActiveDisplayTracker
+          - Add display reconfiguration workflow (pause → detect → restart)
+          - Ensure frame buffer continuity during display transitions
+          - Add 2-second recovery timeout validation
+          - Write integration tests for display add/remove scenarios
+        </subtasks>
+      </task>
+      <task id="3" ac="2.1.3">
+        <title>Implement Active Display Tracking</title>
+        <subtasks>
+          - Create `ActiveDisplayTracker.getPrimaryDisplay()` for active display identification
+          - Implement display focus detection logic
+          - Add seamless recording continuation during display switching
+          - Write integration tests for user display switching scenarios
+        </subtasks>
+      </task>
+      <task id="4" ac="2.1.4">
+        <title>Implement Frame Capture Pipeline</title>
+        <subtasks>
+          - Integrate ScreenCaptureKit CGDisplayStream for multi-display capture
+          - Configure 1 FPS capture rate per display
+          - Implement frame callback registration for each active display
+          - Validate CVPixelBuffer frames and monotonic timestamps
+          - Integrate with BufferManager (Epic 1) for bounded buffer management (&lt;100 frames)
+          - Add memory leak detection using MemoryMonitor (Epic 1)
+          - Write performance tests for 8+ hour recording sessions
+        </subtasks>
+      </task>
+      <task id="5" ac="all">
+        <title>Implement ScreenRecorder Multi-Display Orchestration</title>
+        <subtasks>
+          - Update `ScreenRecorder.startRecording()` to support DisplayMode.all
+          - Implement RecordingState.recording(displayCount: N) state tracking
+          - Add display configuration persistence to DatabaseManager (serial queue pattern)
+          - Implement `statusUpdates` AsyncStream for state propagation
+          - Write integration tests for complete multi-display recording workflow
+        </subtasks>
+      </task>
+      <task id="6" ac="all">
+        <title>Testing and Validation</title>
+        <subtasks>
+          - Run unit tests for all new components (&gt;80% coverage target)
+          - Execute integration tests with 2-4 physical displays
+          - Perform 8-hour continuous recording test with memory profiling
+          - Test display disconnection/reconnection during active recording
+          - Validate frame capture accuracy and timestamp monotonicity
+          - Verify no memory leaks using Xcode Instruments
+        </subtasks>
+      </task>
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <criterion id="2.1.1" title="Multi-Display Detection">
+      <given>multiple displays are connected (2-4 monitors)</given>
+      <when>FocusLock starts recording</when>
+      <then>screen capture automatically detects and captures from all active displays</then>
+      <and>display configuration is persisted in recording metadata</and>
+    </criterion>
+    <criterion id="2.1.2" title="Display Configuration Changes">
+      <given>recording is active across multiple displays</given>
+      <when>a display is added, removed, or reconfigured</when>
+      <then>recording automatically adapts to new configuration within 2 seconds</then>
+      <and>no frames are lost during transition</and>
+      <and>no crashes or errors occur</and>
+    </criterion>
+    <criterion id="2.1.3" title="Active Display Tracking">
+      <given>user has multiple displays connected</given>
+      <when>user switches between displays while working</when>
+      <then>ActiveDisplayTracker correctly identifies active display</then>
+      <and>recording continues seamlessly without interruption</and>
+    </criterion>
+    <criterion id="2.1.4" title="Frame Capture Validation">
+      <given>multi-display recording is active</given>
+      <when>frames are captured from each display</when>
+      <then>all displays produce valid CVPixelBuffer frames at 1 FPS</then>
+      <and>frame timestamps are monotonically increasing</and>
+      <and>no memory leaks occur during 8+ hour sessions</and>
+    </criterion>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification: Core Recording Pipeline Stabilization</title>
+        <section>Services and Modules - ActiveDisplayTracker</section>
+        <snippet>Multi-display detection, configuration change monitoring, active display determination. Implements getActiveDisplays(), getPrimaryDisplay(), and configurationChanges AsyncStream for display events.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>Data Models - DisplayConfiguration</section>
+        <snippet>DisplayConfiguration includes displayCount, primaryDisplayID, and displayResolutions array. DisplayInfo contains id, bounds, scaleFactor, isActive, isPrimary. DisplayChangeEvent enum defines added/removed/reconfigured events.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>Workflows - Multi-Display Recording Workflow</section>
+        <snippet>1) User initiates → ScreenRecorder.startRecording(displayMode: .automatic) → ActiveDisplayTracker.startMonitoring() 2) Detect display configuration 3) Create CGDisplayStream per display at 1 FPS 4) Handle configuration changes dynamically with pause/restart cycle.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification</title>
+        <section>Non-Functional Requirements - Performance</section>
+        <snippet>Frame Capture Latency &lt;100ms, CPU Usage &lt;2% during 1 FPS recording, Memory Usage &lt;150MB, Display Detection &lt;100ms, Stream Restart &lt;2 seconds after reconfiguration.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture Documentation - FocusLock</title>
+        <section>Rescue Architecture Pattern - Memory Safety</section>
+        <snippet>MVVM with Memory-Safe Serial Database Layer. All database operations serialized, thread isolation for background processing, bounded memory usage with automatic cleanup, comprehensive memory usage tracking.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>Architecture Documentation</title>
+        <section>Recording Service Architecture</section>
+        <snippet>ScreenRecorder (Core) contains ActiveDisplayTracker for multi-display detection and configuration changes, TimelapseStorageManager for chunk management (15-second segments) and storage cleanup (3-day retention).</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics.md</path>
+        <title>FocusLock Epics and Stories</title>
+        <section>Epic 2 - Story 2.1</section>
+        <snippet>Multi-Display Screen Capture: Test with 2-4 monitor configurations, implement ActiveDisplayTracker improvements, handle display configuration changes gracefully, validate frame capture across all displays.</snippet>
+      </doc>
+    </docs>
+    <code>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>ScreenRecorder</symbol>
+        <lines>89-938</lines>
+        <reason>Core screen recording orchestration service. Currently implements single-display recording with ActiveDisplayTracker integration. Needs enhancement for multi-display support including DisplayMode enum and display configuration persistence.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>makeStream</symbol>
+        <lines>243-381</lines>
+        <reason>Display detection and stream creation logic. Currently selects single display (requested → active → first). Needs modification to support multiple concurrent display streams for DisplayMode.all.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>handleActiveDisplayChange</symbol>
+        <lines>421-443</lines>
+        <reason>Display switching logic. Currently restarts stream on display change. Needs enhancement to handle multi-display scenarios without interrupting all streams when one display changes.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+        <kind>service</kind>
+        <symbol>ActiveDisplayTracker</symbol>
+        <lines>14-92</lines>
+        <reason>Tracks active display via mouse position with debouncing. Currently provides single activeDisplayID. Needs expansion for getActiveDisplays(), getPrimaryDisplay(), and configurationChanges AsyncStream.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>StorageManaging</symbol>
+        <lines>49-109</lines>
+        <reason>Storage protocol defining database operations. Uses GRDB for SQLite persistence. Must follow serial queue pattern from Epic 1 for thread-safe operations when adding DisplayConfiguration persistence.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>TimelapseStorageManager</symbol>
+        <lines>3-78</lines>
+        <reason>Manages video chunk file storage with automatic cleanup based on size limits. Used by ScreenRecorder to store compressed video segments.</reason>
+      </artifact>
+    </code>
+    <dependencies>
+      <swift-packages>
+        <package name="GRDB.swift" version="7.8.0" usage="SQLite database persistence for recording metadata and display configuration. Must use serial queue pattern for thread safety."/>
+        <package name="Sentry-Cocoa" version="8.56.2" usage="Optional error reporting for recording failures and performance monitoring."/>
+        <package name="PostHog-iOS" version="3.31.0" usage="Optional analytics for recording usage patterns (user opt-in required)."/>
+        <package name="Sparkle" version="2.7.1" usage="Auto-update framework (not directly used by Epic 2)."/>
+      </swift-packages>
+      <system-frameworks>
+        <framework name="ScreenCaptureKit" minOS="macOS 13.0" usage="Core screen capture functionality via CGDisplayStream for frame capture and display configuration."/>
+        <framework name="AVFoundation" usage="Video compression and encoding using AVAssetWriter with H.264/H.265 codecs."/>
+        <framework name="CoreMedia" usage="Media timing (CMTime) and buffer management (CVPixelBuffer operations)."/>
+        <framework name="Combine" usage="Reactive state management via @Published properties and AsyncStream bridging."/>
+        <framework name="CoreGraphics" usage="Display management via CGDirectDisplayID and display configuration APIs."/>
+      </system-frameworks>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <constraint type="memory-safety" critical="true">
+      All database operations MUST use serial queue pattern from Epic 1 to prevent "freed pointer was not last allocation" crashes. No concurrent database access allowed.
+    </constraint>
+    <constraint type="memory-safety" critical="true">
+      Recording operations must respect bounded buffer limits (100 frames max from Epic 1). BufferManager validates buffer count before adding new frames.
+    </constraint>
+    <constraint type="threading" critical="true">
+      Display tracking runs on dedicated background queue with proper actor isolation. Use @MainActor for UI-touching methods, dedicated queues for recording operations.
+    </constraint>
+    <constraint type="performance">
+      Frame Capture Latency must be &lt;100ms from screen update to buffer delivery. CPU Usage must remain &lt;2% during 1 FPS recording on Apple Silicon.
+    </constraint>
+    <constraint type="performance">
+      Display Detection must complete within &lt;100ms to detect configuration changes. Stream Restart must complete within &lt;2 seconds after display reconfiguration.
+    </constraint>
+    <constraint type="architecture">
+      Follow MVVM architecture with ScreenRecorder as service layer, StateManager for UI coordination, and serial database queue for persistence.
+    </constraint>
+    <constraint type="compatibility">
+      Minimum macOS 13.0 (Ventura) required for ScreenCaptureKit. Swift 5.9+ required for actor isolation and async/await concurrency.
+    </constraint>
+    <constraint type="storage">
+      Video chunks stored at ~/Library/Application Support/Dayflow/recordings/ with 3-day default retention. Database at ~/Library/Application Support/Dayflow/chunks.sqlite.
+    </constraint>
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>ScreenRecorder.startRecording(displayMode:)</name>
+      <kind>actor method</kind>
+      <signature>func startRecording(displayMode: DisplayMode) async throws</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+      <notes>Currently only supports single display. Needs DisplayMode enum with cases: .automatic (follows active), .all (captures all), .specific([CGDirectDisplayID]).</notes>
+    </interface>
+    <interface>
+      <name>ScreenRecorder.statusUpdates</name>
+      <kind>async stream</kind>
+      <signature>var statusUpdates: AsyncStream&lt;RecordingState&gt; { get }</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+      <notes>New property needed for real-time status propagation. RecordingState needs .recording(displayCount: Int) case.</notes>
+    </interface>
+    <interface>
+      <name>ActiveDisplayTracker.getActiveDisplays()</name>
+      <kind>function</kind>
+      <signature>func getActiveDisplays() -&gt; [DisplayInfo]</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+      <notes>New method to query all connected displays with DisplayInfo containing id, bounds, scaleFactor, isActive, isPrimary.</notes>
+    </interface>
+    <interface>
+      <name>ActiveDisplayTracker.getPrimaryDisplay()</name>
+      <kind>function</kind>
+      <signature>func getPrimaryDisplay() -&gt; DisplayInfo?</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+      <notes>New method for active display identification based on mouse position and window focus.</notes>
+    </interface>
+    <interface>
+      <name>ActiveDisplayTracker.configurationChanges</name>
+      <kind>async stream</kind>
+      <signature>var configurationChanges: AsyncStream&lt;DisplayChangeEvent&gt; { get }</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+      <notes>New AsyncStream emitting .added(DisplayInfo), .removed(CGDirectDisplayID), or .reconfigured([DisplayInfo]) events.</notes>
+    </interface>
+    <interface>
+      <name>DatabaseManager.saveRecording(metadata:)</name>
+      <kind>database operation</kind>
+      <signature>func saveRecording(metadata: Recording) async throws</signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+      <notes>Must persist Recording model with embedded DisplayConfiguration via serial queue pattern. CRITICAL: Follow Epic 1 thread-safety requirements.</notes>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      **Unit Tests:** XCTest framework for service APIs (ScreenRecorder, ActiveDisplayTracker). Target &gt;80% code coverage for Epic 2 modules.
+
+      **Integration Tests:** Real ScreenCaptureKit with mock/physical displays. Test multi-display scenarios, configuration changes, 8-hour stability.
+
+      **Performance Tests:** Xcode Instruments (CPU, Memory, Time Profiler) with custom benchmarks. Validate frame timing, compression speed, memory usage, status latency. Fail if performance degrades &gt;10% from baseline.
+
+      **System Tests:** End-to-end workflows with 24-hour continuous recording validation. Manual testing with test plans and automated UI tests for critical paths.
+    </standards>
+    <locations>
+      Tests/Unit/Recording/ActiveDisplayTrackerTests.swift
+      Tests/Integration/Recording/MultiDisplayRecordingTests.swift
+      Tests/Performance/Recording/ExtendedRecordingTests.swift
+      Dayflow/DayflowTests/RecordingPipelineEdgeCaseTests.swift (existing)
+    </locations>
+    <ideas>
+      <test ac="2.1.1">
+        Unit test: ActiveDisplayTrackerTests.testGetActiveDisplays() with mock CGDisplayStream returning 1, 2, 3, 4 displays. Verify DisplayInfo properties (id, bounds, scaleFactor, isActive, isPrimary).
+
+        Integration test: Physical multi-display setup. Start recording and verify all displays detected in recording metadata. Check DisplayConfiguration persisted to database.
+      </test>
+      <test ac="2.1.2">
+        Integration test: MultiDisplayRecordingTests.testDisplayHotplug(). Start recording with 2 displays, disconnect one, verify recording adapts within 2 seconds without frame loss or crashes.
+
+        Integration test: Rapid display reconfiguration (add/remove/change resolution). Verify configurationChanges AsyncStream emits correct events and recording continues seamlessly.
+      </test>
+      <test ac="2.1.3">
+        Integration test: Switch active window between displays during recording. Verify ActiveDisplayTracker.getPrimaryDisplay() correctly identifies active display and recording continues without interruption.
+
+        Unit test: Mock window focus events and mouse position changes. Verify active display tracking logic with debouncing (400ms default).
+      </test>
+      <test ac="2.1.4">
+        Performance test: ExtendedRecordingTests.testEightHourRecording(). Run continuous 1 FPS recording for 8+ hours with Instruments memory profiling. Verify no leaks, frame timestamps monotonically increasing, all frames valid CVPixelBuffers.
+
+        Unit test: Mock CVPixelBuffer frames with synthetic timestamps. Verify frame validation logic, timestamp ordering, and buffer management integration with Epic 1 BufferManager.
+      </test>
+      <test ac="all">
+        System test: Complete multi-display workflow. Connect 4 displays, start recording in DisplayMode.all, switch active display, disconnect one display, verify recording continues, stop recording, validate metadata and video chunks.
+
+        Edge case test: Mac sleep/wake cycle with multi-display setup. Verify recording pauses on sleep, resumes on wake, handles display reconfiguration after wake correctly.
+      </test>
+    </ideas>
+  </tests>
+</story-context>

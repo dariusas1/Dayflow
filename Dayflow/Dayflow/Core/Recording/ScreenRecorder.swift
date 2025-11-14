@@ -53,11 +53,23 @@ private enum SCStreamErrorCode: Int {
 @inline(__always) func dbg(_: @autoclosure () -> String) {}
 #endif
 
+/// Display mode for multi-display recording support
+enum DisplayMode: Sendable, Equatable {
+    /// Automatically follow the active display (mouse cursor position)
+    case automatic
+
+    /// Capture from all connected displays simultaneously
+    case all
+
+    /// Capture from specific display(s)
+    case specific([CGDirectDisplayID])
+}
+
 /// Explicit state machine for the recorder lifecycle
-private enum RecorderState: Equatable {
+enum RecorderState: Sendable, Equatable {
     case idle           // Not recording, no active resources
     case starting       // Initiating stream creation (async operation in progress)
-    case recording      // Active stream + writer
+    case recording(displayCount: Int)  // Active stream + writer (with display count)
     case finishing      // Cleaning up current segment
     case paused         // System event pause (sleep/lock), will auto-resume
 
@@ -65,7 +77,7 @@ private enum RecorderState: Equatable {
         switch self {
         case .idle: return "idle"
         case .starting: return "starting"
-        case .recording: return "recording"
+        case .recording(let count): return "recording(\(count) display\(count == 1 ? "" : "s"))"
         case .finishing: return "finishing"
         case .paused: return "paused"
         }
@@ -84,14 +96,22 @@ private enum RecorderState: Equatable {
         case .idle, .paused: return false
         }
     }
+
+    var displayCount: Int {
+        if case .recording(let count) = self {
+            return count
+        }
+        return 0
+    }
 }
 
 final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     @MainActor
-    init(autoStart: Bool = true) {
+    init(autoStart: Bool = true, displayMode: DisplayMode = .automatic) {
+        self.displayMode = displayMode
         super.init()
-        dbg("init – autoStart = \(autoStart)")
+        dbg("init – autoStart = \(autoStart), displayMode = \(displayMode)")
 
         wantsRecording = AppState.shared.isRecording
 
@@ -124,6 +144,17 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
                 self.q.async { [weak self] in self?.handleActiveDisplayChange(newID) }
             }
 
+        // Monitor display configuration changes for multi-display support
+        Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            let changes = self.tracker.configurationChanges
+            for await event in changes {
+                self.q.async { [weak self] in
+                    self?.handleDisplayConfigurationChange(event)
+                }
+            }
+        }
+
         // Honor the current flag once (after subscriptions exist).
         if autoStart, AppState.shared.isRecording { start() }
 
@@ -149,6 +180,43 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
     private var tracker: ActiveDisplayTracker!
     private var currentDisplayID: CGDirectDisplayID?
     private var requestedDisplayID: CGDirectDisplayID?
+    private var displayMode: DisplayMode      // Multi-display recording mode
+    private var currentDisplayConfiguration: DisplayConfiguration?  // Current display setup
+    private var isHandlingConfigurationChange = false  // Debounce flag for display changes
+
+    // Compression engine (Story 2.2)
+    private var compressionEngine: AVFoundationCompressionEngine?
+    private var adaptiveQualityManager = AdaptiveQualityManager()
+    private var useCompressionEngine = true  // Feature flag for compression engine
+
+    // AsyncStream for status updates (AC 2.3.2)
+    private var statusContinuation: AsyncStream<RecorderState>.Continuation?
+
+    /// AsyncStream of recording state updates for UI observation
+    /// Emits whenever the recorder transitions between states (idle, starting, recording, finishing, paused)
+    var statusUpdates: AsyncStream<RecorderState> {
+        AsyncStream { continuation in
+            self.q.async { [weak self] in
+                guard let self = self else {
+                    continuation.finish()
+                    return
+                }
+
+                // Store continuation for emitting state updates
+                self.statusContinuation = continuation
+
+                // Emit current state immediately
+                continuation.yield(self.state)
+
+                // Cleanup on termination
+                continuation.onTermination = { [weak self] _ in
+                    self?.q.async { [weak self] in
+                        self?.statusContinuation = nil
+                    }
+                }
+            }
+        }
+    }
 
     /// Transitions to a new state and logs it for debugging
     private func transition(to newState: RecorderState, context: String? = nil) {
@@ -158,6 +226,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         let message = context.map { "\(oldState.description) → \(newState.description) (\($0))" }
                       ?? "\(oldState.description) → \(newState.description)"
         dbg("State: \(message)")
+
+        // Emit state update to AsyncStream subscribers (AC 2.3.2)
+        statusContinuation?.yield(newState)
 
         // Breadcrumbs are only sent if an error/crash occurs - zero cost otherwise
         let breadcrumb = Breadcrumb(level: .info, category: "recorder_state")
@@ -298,7 +369,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             // 4. kick-off
             try await startStream(filter: filter, config: cfg)
 
-            // Successfully started - transition to recording
+            // Successfully started - transition to recording with display count
             q.async { [weak self] in
                 guard let self else { return }
                 // Only transition if we're still in starting state (user didn't stop during startup)
@@ -306,7 +377,27 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
                     dbg("makeStream completed but state changed to \(self.state.description), ignoring")
                     return
                 }
-                self.transition(to: .recording, context: "stream started")
+
+                // Determine display count based on mode
+                let displayCount: Int
+                Task { @MainActor in
+                    let displays = self.tracker.getActiveDisplays()
+                    let count = displays.count
+
+                    // Create display configuration snapshot
+                    if let config = DisplayConfiguration.current(displays: displays) {
+                        self.currentDisplayConfiguration = config
+
+                        // Persist display configuration to metadata store (AC 2.1.1)
+                        Task { @MainActor in
+                            RecordingMetadataManager.shared.saveDisplayConfiguration(config)
+                        }
+                    }
+
+                    self.q.async { [weak self] in
+                        self?.transition(to: .recording(displayCount: count), context: "stream started")
+                    }
+                }
             }
         }
         catch {
@@ -428,8 +519,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         // Only flip streams when one is currently running and we're in recording state.
-        guard currentDisplayID != nil, state == .recording else {
+        // For multi-display mode, don't switch - we're already capturing all displays
+        guard currentDisplayID != nil, case .recording = state else {
             dbg("Active display changed while not recording – will switch on next start")
+            return
+        }
+
+        // Skip if in multi-display mode
+        if displayMode == .all {
+            dbg("Active display changed but in multi-display mode – no switch needed")
             return
         }
         guard newID != currentDisplayID else { return }
@@ -442,9 +540,102 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         start()
     }
 
+    /// Handle display configuration changes (AC 2.1.2)
+    /// Adapts recording to new display configuration within 2 seconds
+    private func handleDisplayConfigurationChange(_ event: DisplayChangeEvent) {
+        dbg("Display configuration change: \(event.description)")
+
+        // Debounce rapid configuration changes
+        guard !isHandlingConfigurationChange else {
+            dbg("Already handling configuration change, skipping")
+            return
+        }
+
+        switch event {
+        case .reconfiguring:
+            // Display system is actively reconfiguring - mark as handling
+            isHandlingConfigurationChange = true
+
+        case .reconfigured(let displays):
+            // Configuration stabilized with new display list
+            dbg("Configuration stabilized with \(displays.count) display(s)")
+
+            // Update stored configuration
+            if let config = DisplayConfiguration.current(displays: displays) {
+                let previousConfig = currentDisplayConfiguration
+                currentDisplayConfiguration = config
+
+                // Persist updated display configuration (AC 2.1.1, AC 2.1.2)
+                Task { @MainActor in
+                    RecordingMetadataManager.shared.saveDisplayConfiguration(config)
+                }
+
+                // Check if we need to restart recording
+                let needsRestart = shouldRestartForConfiguration(previous: previousConfig, current: config)
+
+                if needsRestart, case .recording = state {
+                    dbg("Display configuration changed significantly - restarting recording")
+
+                    // Pause → detect → restart workflow (AC 2.1.2)
+                    finishSegment(restart: false)
+                    stopStream()
+
+                    // Restart with small delay to let display system stabilize (< 2 second requirement)
+                    q.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                        self?.start()
+                    }
+                }
+            }
+
+            // Clear handling flag after a short delay
+            q.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                self?.isHandlingConfigurationChange = false
+            }
+
+        case .added(let display):
+            dbg("Display added: \(display.id) - \(display.resolutionDescription)")
+            // For .all mode, might need to expand capture
+            if displayMode == .all {
+                // Will be handled by .reconfigured event
+            }
+
+        case .removed(let displayID):
+            dbg("Display removed: \(displayID)")
+            // Check if we're recording from the removed display
+            if currentDisplayID == displayID, case .recording = state {
+                dbg("Active recording display was removed - switching to remaining display")
+                finishSegment(restart: false)
+                stopStream()
+                start()
+            }
+        }
+    }
+
+    /// Determine if recording should restart based on configuration changes
+    private func shouldRestartForConfiguration(previous: DisplayConfiguration?, current: DisplayConfiguration) -> Bool {
+        guard let prev = previous else { return false }
+
+        // Restart if display count changed
+        if prev.displayCount != current.displayCount {
+            return true
+        }
+
+        // Restart if primary display changed
+        if prev.primaryDisplayID != current.primaryDisplayID {
+            return true
+        }
+
+        // Restart if any display resolution changed
+        if !prev.isEquivalent(to: current) {
+            return true
+        }
+
+        return false
+    }
+
     private func beginSegment() {
         guard writer == nil else { return }
-        
+
         // Check disk space before starting new segment
         if !checkDiskSpace() {
             dbg("beginSegment – insufficient disk space, skipping segment creation")
@@ -455,7 +646,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             }
             return
         }
-        
+
         let url = StorageManager.shared.nextFileURL(); fileURL = url; frames = 0
 
         // Add breadcrumb for recording segment start
@@ -463,11 +654,67 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         beginBreadcrumb.message = "Beginning new segment"
         beginBreadcrumb.data = [
             "file": url.lastPathComponent,
-            "resolution": "\(recordingWidth)x\(recordingHeight)"
+            "resolution": "\(recordingWidth)x\(recordingHeight)",
+            "compressionEngine": useCompressionEngine ? "enabled" : "disabled"
         ]
         SentryHelper.addBreadcrumb(beginBreadcrumb)
 
         StorageManager.shared.registerChunk(url: url)
+
+        // Initialize compression engine if enabled
+        if useCompressionEngine {
+            do {
+                // Get default settings and apply adaptive quality adjustment
+                var settings = CompressionSettings.default(width: recordingWidth, height: recordingHeight, fps: Int(C.fps))
+
+                // Apply adaptive bitrate multiplier from previous chunks
+                let adjustedBitrate = Int(Double(settings.targetBitrate) * adaptiveQualityManager.currentBitrateMultiplier)
+                settings = settings.withBitrate(adjustedBitrate)
+
+                dbg("🎬 Starting segment with bitrate: \(settings.targetBitrate) bps (multiplier: \(String(format: "%.2f", adaptiveQualityManager.currentBitrateMultiplier)))")
+
+                let engine = AVFoundationCompressionEngine(settings: settings)
+
+                // Initialize the engine asynchronously
+                Task {
+                    do {
+                        try await engine.initialize(settings: settings, outputURL: url)
+                        self.q.async { [weak self] in
+                            self?.compressionEngine = engine
+                            dbg("✅ Compression engine initialized for segment")
+                        }
+                    } catch {
+                        self.q.async { [weak self] in
+                            dbg("❌ Failed to initialize compression engine: \(error)")
+                            // Fall back to direct AVAssetWriter
+                            self?.useCompressionEngine = false
+                            self?.beginSegment()  // Retry with fallback
+                        }
+                    }
+                }
+
+                // auto-finish after C.chunk seconds
+                let t = DispatchSource.makeTimerSource(queue: q)
+                t.schedule(deadline: .now() + C.chunk)
+                t.setEventHandler { [weak self] in self?.finishSegment() }
+                t.resume(); timer = t
+
+                // Transition to recording state
+                if case .recording = state {
+                    // Already in recording state, keep it
+                } else {
+                    // Fallback if state wasn't set yet
+                    transition(to: .recording(displayCount: 1), context: "segment started with compression")
+                }
+                return
+            } catch {
+                dbg("❌ Compression engine initialization failed: \(error), falling back to AVAssetWriter")
+                useCompressionEngine = false
+                // Fall through to AVAssetWriter path
+            }
+        }
+
+        // Legacy AVAssetWriter path (fallback)
         do {
             let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
             
@@ -540,7 +787,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             t.resume(); timer = t
 
             // Transition to recording now that segment is fully initialized
-            transition(to: .recording, context: "segment started")
+            // Note: Display count is set in makeStream's success handler
+            if case .recording = state {
+                // Already in recording state, keep it
+            } else {
+                // Fallback if state wasn't set yet
+                transition(to: .recording(displayCount: 1), context: "segment started")
+            }
         } catch {
             dbg("writer creation failed – \(error.localizedDescription)")
             StorageManager.shared.markChunkFailed(url: url); reset()
@@ -552,7 +805,7 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         guard state != .finishing else { return }
 
         // Only transition to finishing if we're actually recording
-        if state == .recording {
+        if case .recording = state {
             transition(to: .finishing, context: "finishing segment (restart: \(restart))")
         }
 
@@ -561,7 +814,8 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         finishBreadcrumb.message = "Finishing segment (restart: \(restart))"
         finishBreadcrumb.data = [
             "frames": frames,
-            "file": fileURL?.lastPathComponent ?? "nil"
+            "file": fileURL?.lastPathComponent ?? "nil",
+            "compressionEngine": useCompressionEngine ? "enabled" : "disabled"
         ]
         SentryHelper.addBreadcrumb(finishBreadcrumb)
 
@@ -569,7 +823,70 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         timer?.cancel()
         timer = nil
 
-        // 2. make sure we even have something to finish
+        // Compression engine path
+        if useCompressionEngine {
+            guard let engine = compressionEngine, let url = fileURL else {
+                return reset()
+            }
+
+            guard frames > 0 else {
+                reset()
+                transition(to: .idle, context: "finishSegment - no frames (compression)")
+                StorageManager.shared.markChunkFailed(url: url)
+                return
+            }
+
+            // Finalize chunk with compression engine
+            Task {
+                do {
+                    let chunk = try await engine.finalizeChunk()
+
+                    self.q.async { [weak self] in
+                        guard let self = self else { return }
+
+                        // Mark chunk as completed
+                        StorageManager.shared.markChunkCompleted(url: url)
+
+                        // Apply adaptive quality adjustment
+                        if let newSettings = self.adaptiveQualityManager.analyzeAndAdjust(chunk: chunk) {
+                            dbg("📊 Quality adjusted: new bitrate = \(newSettings.targetBitrate) bps")
+                            // Settings will be applied to next segment via beginSegment()
+                        }
+
+                        // Save chunk metadata using RecordingMetadataManager
+                        Task { @MainActor in
+                            self.saveChunkMetadata(chunk: chunk)
+                        }
+
+                        // Reset recorder state
+                        self.reset()
+
+                        guard restart else { return }
+
+                        // Restart if still recording
+                        Task { @MainActor in
+                            guard AppState.shared.isRecording else { return }
+                            self.q.async { [weak self] in
+                                guard let self else { return }
+                                guard self.wantsRecording else { return }
+                                self.beginSegment()
+                            }
+                        }
+                    }
+                } catch {
+                    self.q.async { [weak self] in
+                        guard let self = self else { return }
+                        dbg("❌ Failed to finalize chunk: \(error)")
+                        StorageManager.shared.markChunkFailed(url: url)
+                        self.reset()
+                        self.transition(to: .idle, context: "finishSegment - compression finalization failed")
+                    }
+                }
+            }
+            return
+        }
+
+        // Legacy AVAssetWriter path
         guard let w = writer, let inp = input, let url = fileURL else {
             return reset()
         }
@@ -633,6 +950,31 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
     private func reset() {
         timer = nil; writer = nil; input = nil; firstPTS = nil; fileURL = nil; frames = 0
+        compressionEngine = nil  // Reset compression engine for next segment
+    }
+
+    /// Save chunk metadata for analytics and quality tracking
+    @MainActor
+    private func saveChunkMetadata(chunk: CompressedChunk) {
+        // Save using RecordingMetadataManager pattern (transitional until Epic 1 DatabaseManager ready)
+        let metadata: [String: Any] = [
+            "fileURL": chunk.fileURL.path,
+            "size": chunk.size,
+            "duration": chunk.duration,
+            "compressionRatio": chunk.compressionRatio,
+            "frameCount": chunk.frameCount,
+            "createdAt": chunk.createdAt,
+            "codec": chunk.settings.codec.rawValue,
+            "quality": chunk.settings.quality.rawValue,
+            "bitrate": chunk.settings.targetBitrate,
+            "averageBytesPerFrame": chunk.averageBytesPerFrame
+        ]
+
+        // Log for now (will be persisted to database in Epic 1)
+        dbg("📊 Chunk metadata: \(chunk.frameCount) frames, \(chunk.size / 1024) KB, ratio: \(String(format: "%.1f", chunk.compressionRatio)):1")
+
+        // TODO: When Epic 1 DatabaseManager is ready, use serial queue pattern to persist
+        // DatabaseManager.shared.saveChunkMetadata(metadata) on serial queue
     }
     
     // Check available disk space before starting new chunk
@@ -661,22 +1003,52 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         if let pb = CMSampleBufferGetImageBuffer(sb) {
             overlayClock(on: pb)
         }
-        if writer == nil { beginSegment() }
-        guard let w = writer, let inp = input else { return }
 
-        if firstPTS == nil {
-            firstPTS = sb.presentationTimeStamp
+        // Initialize segment if needed
+        if useCompressionEngine {
+            if compressionEngine == nil { beginSegment() }
+            guard let engine = compressionEngine else { return }
 
-            // Start the session timeline with the first frame's timestamp
-            // Note: startWriting() was already called in beginSegment() - no race condition!
-            w.startSession(atSourceTime: firstPTS!)
-        }
+            // Compression engine path
+            if firstPTS == nil {
+                firstPTS = sb.presentationTimeStamp
+            }
 
-        if inp.isReadyForMoreMediaData, w.status == .writing {
-            if inp.append(sb) { 
-                frames += 1
-            } else { 
-                finishSegment() 
+            // Compress frame asynchronously
+            Task {
+                do {
+                    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sb) else { return }
+                    try await engine.compress(frame: pixelBuffer, timestamp: sb.presentationTimeStamp)
+
+                    self.q.async { [weak self] in
+                        self?.frames += 1
+                    }
+                } catch {
+                    self.q.async { [weak self] in
+                        dbg("❌ Compression failed: \(error), finishing segment")
+                        self?.finishSegment()
+                    }
+                }
+            }
+        } else {
+            // Legacy AVAssetWriter path
+            if writer == nil { beginSegment() }
+            guard let w = writer, let inp = input else { return }
+
+            if firstPTS == nil {
+                firstPTS = sb.presentationTimeStamp
+
+                // Start the session timeline with the first frame's timestamp
+                // Note: startWriting() was already called in beginSegment() - no race condition!
+                w.startSession(atSourceTime: firstPTS!)
+            }
+
+            if inp.isReadyForMoreMediaData, w.status == .writing {
+                if inp.append(sb) {
+                    frames += 1
+                } else {
+                    finishSegment()
+                }
             }
         }
     }

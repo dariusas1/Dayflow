@@ -111,6 +111,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AppState.shared.isRecording = false
         recorder = ScreenRecorder(autoStart: true)
 
+        // Make recorder accessible for status UI (Story 2.3)
+        AppState.shared.recorder = recorder
+
         // Only attempt to start recording if we're past the screen step or fully onboarded
         // Steps: 0=welcome, 1=howItWorks, 2=llmSelection, 3=llmSetup, 4=categories, 5=screen, 6=completion
         if didOnboard || onboardingStep > 5 {
