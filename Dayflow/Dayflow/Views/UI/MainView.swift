@@ -23,6 +23,9 @@ struct MainView: View {
     @State private var scrollToNowTick: Int = 0
     @State private var hasAnyActivities: Bool = true
     @ObservedObject private var inactivity = InactivityMonitor.shared
+
+    // Recording status ViewModel (Story 2.3)
+    @State private var statusViewModel: RecordingStatusViewModel?
     
     // Animation states for orchestrated entrance - Emil Kowalski principles
     @State private var logoScale: CGFloat = 0.8
@@ -74,6 +77,12 @@ struct MainView: View {
         }
         .onAppear {
             checkForFeatureOnboarding()
+
+            // Initialize recording status ViewModel (Story 2.3)
+            if statusViewModel == nil, let recorder = appState.recorder {
+                statusViewModel = RecordingStatusViewModel(recorder: recorder)
+                statusViewModel?.restoreSavedState()
+            }
         }
         .sheet(isPresented: $showFeatureOnboarding) {
             if let feature = onboardingFeature {
@@ -98,18 +107,46 @@ struct MainView: View {
 
     @ViewBuilder
     private var mainAppContent: some View {
-        // Two-column layout: left logo + sidebar; right white panel including header + content
-        HStack(alignment: .top, spacing: 0) {
-            // Left column: Logo on top, sidebar centered
-            leftSidebarColumn
-            
-            // Right column: Main white panel including header + content
-            rightContentColumn
+        ZStack(alignment: .top) {
+            // Two-column layout: left logo + sidebar; right white panel including header + content
+            HStack(alignment: .top, spacing: 0) {
+                // Left column: Logo on top, sidebar centered
+                leftSidebarColumn
+
+                // Right column: Main white panel including header + content
+                rightContentColumn
+            }
+            .background(
+                FlowingGradientBackground()
+                    .ignoresSafeArea()
+            )
+
+            // Error banner overlay (Story 2.3)
+            if let viewModel = statusViewModel,
+               viewModel.showErrorBanner,
+               let error = viewModel.errorBanner {
+                VStack {
+                    ErrorBannerView(
+                        error: error,
+                        onAction: { action in
+                            viewModel.executeRecoveryAction(action)
+                        },
+                        onDismiss: {
+                            viewModel.dismissErrorBanner()
+                        }
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+
+                    Spacer()
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: viewModel.showErrorBanner)
+            }
         }
-        .background(
-            FlowingGradientBackground()
-                .ignoresSafeArea()
-        )
     }
     
     private var leftSidebarColumn: some View {
@@ -252,18 +289,26 @@ struct MainView: View {
 
                                     Spacer()
 
-                                    // Recording toggle (now inline with header)
-                                    HStack(spacing: 4) {
-                                        Text("Record")
-                                            .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
-                                            .fontWeight(.medium)
-                                            .foregroundColor(DesignColors.primaryOrange)
+                                    // Recording status and toggle (Story 2.3)
+                                    HStack(spacing: 12) {
+                                        // Recording status indicator
+                                        if let viewModel = statusViewModel {
+                                            RecordingStatusView(viewModel: viewModel)
+                                        }
 
-                                        Toggle("Record", isOn: $appState.isRecording)
-                                            .labelsHidden()
-                                            .toggleStyle(SunriseGlassPillToggleStyle())
-                                            .scaleEffect(0.7)
-                                            .accessibilityLabel(Text("Recording"))
+                                        // Recording toggle
+                                        HStack(spacing: 4) {
+                                            Text("Record")
+                                                .font(.custom(DesignTypography.bodyFont, size: DesignTypography.caption))
+                                                .fontWeight(.medium)
+                                                .foregroundColor(DesignColors.primaryOrange)
+
+                                            Toggle("Record", isOn: $appState.isRecording)
+                                                .labelsHidden()
+                                                .toggleStyle(SunriseGlassPillToggleStyle())
+                                                .scaleEffect(0.7)
+                                                .accessibilityLabel(Text("Recording"))
+                                        }
                                     }
                                 }
                                 .padding(.horizontal, 10)

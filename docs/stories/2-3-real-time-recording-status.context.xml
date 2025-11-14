@@ -1,0 +1,687 @@
+<story-context id=".bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>2</epicId>
+    <storyId>3</storyId>
+    <title>Real-Time Recording Status</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-14</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/2-3-real-time-recording-status.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>user monitoring recording status</asA>
+    <iWant>clear indicators of recording state</iWant>
+    <soThat>I know the app is working correctly</soThat>
+    <tasks>
+      <task id="1" priority="high">
+        Implement RecordingState Enum and Models (AC: 2.3.1, 2.3.3)
+        - Create RecordingState enum with cases: idle, initializing, recording(displayCount: Int), paused, error(RecordingError), stopping
+        - Implement RecordingError struct with code, message, recoveryOptions, timestamp
+        - Define ErrorCode enum: permissionDenied, displayConfigurationChanged, storageSpaceLow, compressionFailed, frameCaptureTimeout, databaseWriteFailed
+        - Create RecoveryAction struct with title, action closure, isPrimary flag
+        - Add Equatable conformance to RecordingState for SwiftUI view updates
+        - Write unit tests for all state model types
+      </task>
+      <task id="2" priority="high">
+        Enhance ScreenRecorder with statusUpdates AsyncStream (AC: 2.3.2)
+        - VERIFY existing statusUpdates: AsyncStream&lt;RecordingState&gt; in ScreenRecorder (created in Story 2.1)
+        - Add AsyncStream.Continuation property for state broadcasting
+        - Emit state changes at key lifecycle points: startRecording(), stopRecording(), pauseRecording(), error conditions
+        - Ensure state updates propagate within &lt;1 second (measure latency)
+        - Add currentState property for synchronous state queries
+        - Write unit tests for state emission timing and sequence
+      </task>
+      <task id="3" priority="high">
+        Create RecordingStatusViewModel (AC: 2.3.1, 2.3.2, 2.3.3)
+        - Create RecordingStatusViewModel conforming to ObservableObject
+        - Add @Published property for current recording state
+        - Subscribe to ScreenRecorder.statusUpdates AsyncStream in init()
+        - Transform RecordingState to UI-friendly presentation models
+        - Implement status indicator properties: color (green/yellow/red), icon name, status text
+        - Add computed properties for display count and recording duration
+        - Implement error message formatting with actionable recovery instructions
+        - Add recovery action handlers (requestPermissions, retryRecording, openSystemPreferences)
+        - Write unit tests for ViewModel state transformations
+      </task>
+      <task id="4" priority="medium">
+        Design and Implement RecordingStatusView (SwiftUI) (AC: 2.3.1, 2.3.2)
+        - Create RecordingStatusView SwiftUI component
+        - Implement status indicator with color-coded visual (green=recording, yellow=paused, red=error, gray=idle)
+        - Add status icon (SF Symbol) reflecting current state
+        - Display status text: "Recording", "Idle", "Paused", "Error: {message}"
+        - Show additional context: display count (e.g., "2 displays"), recording duration (e.g., "00:15:42")
+        - Implement smooth state transition animations (&lt;16ms render time for 60fps)
+        - Ensure view updates don't block UI thread (use @MainActor properly)
+        - Write UI tests for status indicator visibility and state rendering
+      </task>
+      <task id="5" priority="medium">
+        Implement Error Banner with Recovery Actions (AC: 2.3.3)
+        - Create ErrorBannerView SwiftUI component
+        - Display error message prominently with clear typography
+        - Show error timestamp and error code for debugging
+        - Render recovery action buttons (primary and secondary actions)
+        - Implement button actions connected to ViewModel recovery handlers
+        - Add dismiss functionality for error banner
+        - Style error banner for visibility (red/orange background, white text)
+        - Ensure banner appears within 500ms of error occurrence
+        - Write UI tests for error banner display and recovery action triggers
+      </task>
+      <task id="6" priority="medium">
+        Implement Status Persistence (AC: 2.3.4)
+        - Add recording state persistence to UserDefaults or lightweight storage
+        - Save current state, display count, start timestamp on state changes
+        - Restore state on app launch in ScreenRecorder initialization
+        - Validate restored state is still valid (e.g., displays still connected, permissions still granted)
+        - Handle invalid state recovery (e.g., recording was active but app crashed)
+        - Implement recording duration calculation from saved start timestamp
+        - Write integration tests for state persistence across app restarts
+      </task>
+      <task id="7" priority="low">
+        Integrate Status UI into Main Application Interface (AC: 2.3.1)
+        - Add RecordingStatusView to main application window/view hierarchy
+        - Position status indicator prominently (e.g., top bar, menu bar, sidebar)
+        - Ensure status indicator is visible in all app states and view transitions
+        - Wire up RecordingStatusViewModel to ScreenRecorder instance
+        - Test status visibility across different window sizes and layouts
+        - Write UI integration tests for status indicator positioning
+      </task>
+      <task id="8" priority="low">
+        Performance Optimization and Latency Validation (AC: 2.3.2)
+        - Measure state update latency from ScreenRecorder to UI (&lt;1 second target)
+        - Optimize AsyncStream propagation if latency exceeds 1 second
+        - Ensure view rendering doesn't block on state updates (async state handling)
+        - Add performance logging for status update timing
+        - Implement debouncing if rapid state changes cause UI thrashing
+        - Write performance tests measuring end-to-end update latency
+      </task>
+      <task id="9" priority="high">
+        Testing and Validation
+        - Run unit tests for RecordingState models, ViewModel, state transitions (&gt;80% coverage target)
+        - Execute UI tests for RecordingStatusView, ErrorBannerView visibility and interactions
+        - Perform integration tests with ScreenRecorder state changes
+        - Test error scenarios: permission denied, storage full, display disconnection
+        - Validate status persistence across app restart
+        - Measure real-time update latency (&lt;1 second)
+        - Test status indicator visibility across all app views and window configurations
+        - Validate recovery actions work correctly (permissions, retry, system preferences)
+      </task>
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <criterion id="AC-2.3.1" priority="critical">
+      Status Indicator Visibility
+      - Given: FocusLock is running in any state
+      - When: user views the main interface
+      - Then: recording status indicator is clearly visible
+      - And: status shows current state (idle/recording/paused/error)
+      - And: additional context is displayed (display count, duration)
+    </criterion>
+    <criterion id="AC-2.3.2" priority="critical">
+      Real-Time Updates
+      - Given: recording state changes (start/stop/error)
+      - When: state transition occurs
+      - Then: UI status indicator updates within 1 second
+      - And: smooth animation transitions between states
+      - And: no UI freezing or lag occurs
+    </criterion>
+    <criterion id="AC-2.3.3" priority="high">
+      Error State Handling
+      - Given: recording encounters an error condition
+      - When: error occurs (permission denied, storage full, display issue)
+      - Then: error banner displays clear error message
+      - And: recovery options are provided to user
+      - And: recovery instructions are actionable and specific
+    </criterion>
+    <criterion id="AC-2.3.4" priority="medium">
+      Status Persistence
+      - Given: recording is active or paused
+      - When: app is restarted or user switches views
+      - Then: recording status persists correctly
+      - And: status indicator shows accurate current state
+      - And: recording duration continues tracking accurately
+    </criterion>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Technical Specification: Core Recording Pipeline Stabilization</title>
+        <section>Story 2.3: Real-Time Recording Status</section>
+        <snippet>
+          RecordingState enum defines state machine: idle, initializing, recording(displayCount), paused, error(RecordingError), stopping.
+          RecordingError includes ErrorCode, message, recoveryOptions, timestamp.
+          Real-time status workflow: ScreenRecorder emits state → RecordingStatusViewModel transforms → SwiftUI views render with &lt;1s latency.
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Tech Spec</title>
+        <section>Services and Modules - RecordingStatusViewModel</section>
+        <snippet>
+          RecordingStatusViewModel: UI state management, status indicator updates, error message formatting.
+          Inputs: Recording events, error conditions. Outputs: UI-ready status models, user messages.
+          Location: Views/UI/RecordingStatusViewModel.swift (new)
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Tech Spec</title>
+        <section>Data Models and Contracts - RecordingState</section>
+        <snippet>
+          RecordingState enum: idle, initializing, recording(displayCount: Int), paused, error(RecordingError), stopping.
+          RecordingError: code (ErrorCode), message (String), recoveryOptions ([RecoveryAction]), timestamp (Date).
+          RecoveryAction: title, action closure, isPrimary flag.
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Tech Spec</title>
+        <section>APIs and Interfaces - ScreenRecorder</section>
+        <snippet>
+          ScreenRecorder exposes statusUpdates: AsyncStream&lt;RecordingState&gt; for real-time state observation.
+          Emits state changes at lifecycle events: startRecording(), stopRecording(), pauseRecording(), error handling.
+          Already implemented in Story 2.1 (lines 192-219 in ScreenRecorder.swift).
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Tech Spec</title>
+        <section>Workflows and Sequencing - Real-Time Status Workflow</section>
+        <snippet>
+          Status update propagation: ScreenRecorder emits RecordingState change → RecordingStatusViewModel receives update → Transform to UI-friendly status model → Publish via @Published property (&lt;1s latency) → RecordingStatusView observes ViewModel → Update status indicator (color, icon, text) → Animate state transitions → Display additional context (display count, duration).
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-2-tech-spec.md</path>
+        <title>Epic 2 Tech Spec</title>
+        <section>Non-Functional Requirements - UI Responsiveness</section>
+        <snippet>
+          Status Update Latency: &lt;1 second from state change to UI update.
+          Status Indicator Render: &lt;16ms (60fps) for smooth animations.
+          Error Display: &lt;500ms from error occurrence to user notification.
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/2-1-multi-display-screen-capture.md</path>
+        <title>Story 2.1: Multi-Display Screen Capture</title>
+        <section>Dev Agent Record - Code Review Follow-up</section>
+        <snippet>
+          statusUpdates AsyncStream Implementation (RESOLVED): Added statusContinuation?.yield(newState) in transition() method (ScreenRecorder.swift:226).
+          AsyncStream now properly emits state changes for UI observation (AC 2.3.2).
+          Verified by testStatusUpdatesAsyncStream() functional test.
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/2-1-multi-display-screen-capture.md</path>
+        <title>Story 2.1: Multi-Display Screen Capture</title>
+        <section>Learnings from Previous Story</section>
+        <snippet>
+          AsyncStream pattern established in Story 2.1 with ScreenRecorder.statusUpdates. Story 2.3 will consume that stream in RecordingStatusViewModel.
+          Apply @MainActor for RecordingStatusViewModel and SwiftUI views.
+          Use @Published properties for reactive SwiftUI binding.
+          Serial queue pattern in ScreenRecorder: DispatchQueue(label: "com.dayflow.recorder").
+        </snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/2-2-video-compression-optimization.md</path>
+        <title>Story 2.2: Video Compression Optimization</title>
+        <section>Learnings from Previous Story</section>
+        <snippet>
+          Feature flag pattern (useCompressionEngine) for progressive rollout - apply to status UI with useNewStatusUI flag.
+          Protocol-oriented design - consider for RecoveryAction if multiple recovery strategies needed.
+          Comprehensive error handling with descriptive messages - apply to RecordingError model.
+          Graceful degradation - if status UI fails, don't crash the app, log and show basic fallback.
+        </snippet>
+      </doc>
+    </docs>
+    <code>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>ScreenRecorder</symbol>
+        <lines>108-244</lines>
+        <reason>
+          Main recording service that emits statusUpdates AsyncStream (lines 192-219).
+          RecorderState enum defines state machine (lines 69-106).
+          transition() method emits state updates to statusContinuation (line 231).
+          Story 2.3 will consume this existing AsyncStream in RecordingStatusViewModel.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>model</kind>
+        <symbol>RecorderState</symbol>
+        <lines>69-106</lines>
+        <reason>
+          Existing state enum: idle, starting, recording(displayCount), finishing, paused.
+          Story 2.3 will extend or map this to RecordingState for UI layer (add initializing, error, stopping states).
+          Contains displayCount property for multi-display context.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>model</kind>
+        <symbol>DisplayMode</symbol>
+        <lines>56-66</lines>
+        <reason>
+          Multi-display recording mode: automatic, all, specific([CGDirectDisplayID]).
+          RecordingStatusViewModel will use displayMode and displayCount to show context like "Recording 2 displays".
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/ActiveDisplayTracker.swift</path>
+        <kind>service</kind>
+        <symbol>ActiveDisplayTracker</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Provides display configuration information for status UI context.
+          getActiveDisplays() returns display count for "Recording N displays" status text.
+          configurationChanges AsyncStream for display change error handling.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/Models/DisplayConfiguration.swift</path>
+        <kind>model</kind>
+        <symbol>DisplayConfiguration</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Display configuration model with displayCount, primaryDisplayID, displayResolutions.
+          Used for displaying "Recording 2 displays at 1920x1080" in status indicator.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Views/Components/StateManager.swift</path>
+        <kind>service</kind>
+        <symbol>StateManager</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Global app state coordination for recording status across view hierarchy.
+          RecordingStatusViewModel may integrate with StateManager for app-wide state coordination.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Views/UI/MainView.swift</path>
+        <kind>view</kind>
+        <symbol>MainView</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Main application view where RecordingStatusView will be integrated.
+          Task 7: Add RecordingStatusView to main application window/view hierarchy.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/RecordingMetadataManager.swift</path>
+        <kind>service</kind>
+        <symbol>RecordingMetadataManager</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Transitional JSON-based metadata persistence manager from Story 2.1.
+          Task 6: Use for status persistence (state, displayCount, startTimestamp) until Epic 1 DatabaseManager ready.
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/CompressionEngine.swift</path>
+        <kind>protocol</kind>
+        <symbol>CompressionEngine</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Compression errors (compressionFailed, storageSpaceLow) should trigger RecordingError with recovery actions.
+          CompressionError types can inform RecordingError recovery options (e.g., "Free up disk space").
+        </reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/TimelapseStorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>TimelapseStorageManager</symbol>
+        <lines>1-50</lines>
+        <reason>
+          Storage metrics (totalStorageUsed, dailyAverageSize) for storage low error detection.
+          isApproachingStorageLimit() can trigger "Storage Low" error state with recovery action "Free up space".
+        </reason>
+      </artifact>
+    </code>
+    <dependencies>
+      <swift-packages>
+        <package name="GRDB" version="7.8.0" usage="Not directly used in this story (Epic 1 DatabaseManager)" />
+        <package name="Sentry-Cocoa" version="8.56.2" usage="Optional error reporting for recording failures (error state logging)" />
+        <package name="PostHog-iOS" version="3.31.0" usage="Optional analytics for status UI interactions" />
+      </swift-packages>
+      <frameworks>
+        <framework name="SwiftUI" version="system" usage="RecordingStatusView, ErrorBannerView UI components" />
+        <framework name="Combine" version="system" usage="@Published properties, AsyncStream bridging to Combine publishers" />
+        <framework name="Foundation" version="system" usage="UserDefaults for status persistence, Date for timestamp tracking" />
+        <framework name="AppKit" version="system" usage="NSApplication for system preferences recovery action" />
+      </frameworks>
+      <internal-services>
+        <service name="ScreenRecorder" status="exists" epic="2" story="2.1">
+          Provides statusUpdates AsyncStream that Story 2.3 will consume.
+          Already emits RecorderState changes via statusContinuation?.yield(newState) in transition() method.
+        </service>
+        <service name="ActiveDisplayTracker" status="exists" epic="2" story="2.1">
+          Provides display configuration for status context (display count, resolutions).
+        </service>
+        <service name="RecordingMetadataManager" status="exists" epic="2" story="2.1">
+          Transitional JSON persistence for status state (until Epic 1 DatabaseManager ready).
+        </service>
+        <service name="StateManager" status="exists" location="Views/Components/StateManager.swift">
+          Global app state coordination that RecordingStatusViewModel may integrate with.
+        </service>
+        <service name="DatabaseManager" status="pending" epic="1">
+          Not critical for this story. Status persistence can use UserDefaults until Epic 1 ready.
+        </service>
+      </internal-services>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <architectural>
+      <constraint priority="critical">
+        CONSUME EXISTING statusUpdates AsyncStream from ScreenRecorder (Story 2.1) - DO NOT recreate it.
+        ScreenRecorder.swift lines 192-219 already implements statusUpdates: AsyncStream&lt;RecordingState&gt;.
+        RecordingStatusViewModel must subscribe to this existing stream.
+      </constraint>
+      <constraint priority="critical">
+        Use @MainActor for RecordingStatusViewModel and SwiftUI views to ensure UI updates on main thread.
+        Follow Story 2.1 pattern: @MainActor for UI-touching code, serial queue for background operations.
+      </constraint>
+      <constraint priority="high">
+        Status update latency MUST be &lt;1 second from ScreenRecorder state change to UI update (AC 2.3.2).
+        Measure end-to-end latency: transition() → statusContinuation.yield() → ViewModel @Published update → SwiftUI view render.
+      </constraint>
+      <constraint priority="high">
+        UI rendering MUST NOT block on state updates. Use async/await properly with @MainActor.
+        Status indicator render time target: &lt;16ms for 60fps smooth animations.
+      </constraint>
+      <constraint priority="high">
+        RecordingState enum must extend/map existing RecorderState to add error handling:
+        Existing: idle, starting, recording(displayCount), finishing, paused
+        Add: initializing, error(RecordingError), stopping (or map existing states)
+      </constraint>
+      <constraint priority="medium">
+        Status persistence can use UserDefaults or RecordingMetadataManager (transitional) until Epic 1 DatabaseManager ready.
+        Save: current state, display count, start timestamp. Validate restored state is still valid.
+      </constraint>
+      <constraint priority="medium">
+        Error recovery actions MUST be actionable and specific. Examples:
+        - Permission Denied → "Open System Preferences → Screen Recording"
+        - Storage Low → "Free up disk space" with storage usage details
+        - Display Disconnected → "Reconnect display or pause recording"
+      </constraint>
+      <constraint priority="low">
+        Feature flag pattern: Consider useNewStatusUI flag for progressive rollout (Story 2.2 pattern).
+        Graceful degradation: If status UI fails, log error and show basic fallback indicator.
+      </constraint>
+    </architectural>
+    <testing>
+      <constraint priority="critical">
+        Unit test coverage target: &gt;80% for RecordingState models, RecordingStatusViewModel, state transformations.
+      </constraint>
+      <constraint priority="high">
+        UI tests required for RecordingStatusView, ErrorBannerView visibility and state rendering.
+        Test all states: idle, recording, paused, error. Verify color, icon, text correctness.
+      </constraint>
+      <constraint priority="high">
+        Integration tests: ScreenRecorder state changes → ViewModel updates → UI rendering.
+        Measure latency: &lt;1 second end-to-end.
+      </constraint>
+      <constraint priority="medium">
+        Performance tests: Status update timing, view render performance (&lt;16ms), memory usage.
+      </constraint>
+      <constraint priority="medium">
+        Error scenario tests: Permission denied, storage full, display disconnection, compression failed.
+        Validate recovery actions trigger correctly and error messages are clear.
+      </constraint>
+      <constraint priority="medium">
+        Status persistence tests: Save state → kill app → restart → verify state restored.
+        Test invalid state recovery: recording was active but displays disconnected.
+      </constraint>
+    </testing>
+    <patterns>
+      <constraint priority="high">
+        Follow Story 2.1 AsyncStream pattern: ScreenRecorder emits via statusContinuation, ViewModel consumes via statusUpdates stream.
+      </constraint>
+      <constraint priority="high">
+        Follow Story 2.2 feature flag pattern: useNewStatusUI for progressive rollout and easy rollback.
+      </constraint>
+      <constraint priority="medium">
+        Protocol-oriented design: Consider RecoveryActionProvider protocol if multiple recovery strategies needed.
+      </constraint>
+      <constraint priority="medium">
+        Bounded data structures: Limit error history to prevent memory growth (Story 2.2 pattern).
+      </constraint>
+    </patterns>
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>ScreenRecorder.statusUpdates</name>
+      <kind>AsyncStream</kind>
+      <signature>var statusUpdates: AsyncStream&lt;RecordingState&gt; { get }</signature>
+      <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+      <description>
+        AsyncStream of recording state updates for UI observation.
+        Emits whenever recorder transitions between states (idle, starting, recording, finishing, paused).
+        Already implemented in Story 2.1 (lines 192-219).
+        Story 2.3 will CONSUME this stream in RecordingStatusViewModel.
+      </description>
+    </interface>
+    <interface>
+      <name>RecordingStatusViewModel</name>
+      <kind>ObservableObject</kind>
+      <signature>
+        class RecordingStatusViewModel: ObservableObject {
+          @Published var currentState: RecordingState
+          @Published var statusColor: Color
+          @Published var statusIcon: String // SF Symbol name
+          @Published var statusText: String
+          @Published var displayCount: Int
+          @Published var recordingDuration: TimeInterval
+          @Published var errorBanner: RecordingError?
+
+          init(recorder: ScreenRecorder)
+          func requestPermissions()
+          func retryRecording()
+          func openSystemPreferences()
+        }
+      </signature>
+      <path>Views/UI/RecordingStatusViewModel.swift (NEW)</path>
+      <description>
+        ViewModel for status UI state management.
+        Subscribes to ScreenRecorder.statusUpdates AsyncStream.
+        Transforms RecordingState to UI-friendly presentation models.
+        Provides recovery action handlers for error states.
+      </description>
+    </interface>
+    <interface>
+      <name>RecordingState</name>
+      <kind>enum</kind>
+      <signature>
+        enum RecordingState: Equatable, Sendable {
+          case idle
+          case initializing
+          case recording(displayCount: Int)
+          case paused
+          case error(RecordingError)
+          case stopping
+        }
+      </signature>
+      <path>Core/Recording/Models/RecordingState.swift (NEW)</path>
+      <description>
+        State enum for recording lifecycle with associated values.
+        Extends or maps existing RecorderState from ScreenRecorder.
+        Equatable for SwiftUI view updates, Sendable for AsyncStream.
+      </description>
+    </interface>
+    <interface>
+      <name>RecordingError</name>
+      <kind>struct</kind>
+      <signature>
+        struct RecordingError: Equatable, Sendable {
+          let code: ErrorCode
+          let message: String
+          let recoveryOptions: [RecoveryAction]
+          let timestamp: Date
+        }
+
+        enum ErrorCode {
+          case permissionDenied
+          case displayConfigurationChanged
+          case storageSpaceLow
+          case compressionFailed
+          case frameCaptureTimeout
+          case databaseWriteFailed
+        }
+
+        struct RecoveryAction: Equatable {
+          let title: String
+          let action: () -&gt; Void
+          let isPrimary: Bool
+        }
+      </signature>
+      <path>Core/Recording/Models/RecordingError.swift (NEW)</path>
+      <description>
+        Error model with typed error codes and actionable recovery options.
+        RecoveryAction includes title, action closure, isPrimary flag.
+        Equatable for state comparison, Sendable for AsyncStream.
+      </description>
+    </interface>
+    <interface>
+      <name>RecordingStatusView</name>
+      <kind>SwiftUI View</kind>
+      <signature>
+        struct RecordingStatusView: View {
+          @ObservedObject var viewModel: RecordingStatusViewModel
+          var body: some View
+        }
+      </signature>
+      <path>Views/UI/RecordingStatusView.swift (NEW)</path>
+      <description>
+        Main status indicator SwiftUI component.
+        Color-coded indicator: green=recording, yellow=paused, red=error, gray=idle.
+        Displays status icon (SF Symbol), status text, display count, recording duration.
+        Smooth state transition animations (&lt;16ms render time for 60fps).
+      </description>
+    </interface>
+    <interface>
+      <name>ErrorBannerView</name>
+      <kind>SwiftUI View</kind>
+      <signature>
+        struct ErrorBannerView: View {
+          let error: RecordingError
+          let onAction: (RecoveryAction) -&gt; Void
+          let onDismiss: () -&gt; Void
+          var body: some View
+        }
+      </signature>
+      <path>Views/UI/ErrorBannerView.swift (NEW)</path>
+      <description>
+        Error display component with recovery actions.
+        Prominent error message, timestamp, error code.
+        Primary and secondary recovery action buttons.
+        Red/orange background for visibility, appears within 500ms of error.
+      </description>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      Test coverage target: &gt;80% for all Epic 2 modules.
+
+      Unit Tests (XCTest):
+      - RecordingState model: Equatable conformance, state transitions
+      - RecordingError model: ErrorCode descriptions, recovery action creation
+      - RecordingStatusViewModel: State transformations, UI property mapping, recovery handlers
+
+      Integration Tests (XCTest with ScreenRecorder):
+      - ScreenRecorder state changes → ViewModel @Published updates
+      - End-to-end latency measurement: &lt;1 second from state change to UI
+      - Error scenario testing: permission denied, storage full, display disconnection
+
+      UI Tests (XCTest UI Testing):
+      - RecordingStatusView: Visibility in all states, color/icon/text correctness
+      - ErrorBannerView: Display on error, recovery action triggers, dismiss functionality
+      - Status indicator positioning across different window sizes
+
+      Performance Tests:
+      - Status update latency: Measure time from transition() to SwiftUI view render
+      - View render performance: Verify &lt;16ms render time for 60fps animations
+      - Memory usage: Ensure status UI doesn't leak memory during long sessions
+
+      Persistence Tests:
+      - Save state to UserDefaults → kill app → restart → verify state restored
+      - Test invalid state recovery: recording active but displays disconnected
+    </standards>
+    <locations>
+      <location>Dayflow/DayflowTests/RecordingStateTests.swift (NEW)</location>
+      <location>Dayflow/DayflowTests/RecordingStatusViewModelTests.swift (NEW)</location>
+      <location>Dayflow/DayflowTests/RecordingStatusViewTests.swift (NEW UI Tests)</location>
+      <location>Dayflow/DayflowTests/StatusIntegrationTests.swift (NEW Integration)</location>
+      <location>Dayflow/DayflowTests/StatusPerformanceTests.swift (NEW Performance)</location>
+      <location>Dayflow/DayflowTests/MultiDisplayRecordingTests.swift (existing - add statusUpdates tests)</location>
+    </locations>
+    <ideas>
+      <idea ac="AC-2.3.1">
+        Test: RecordingStatusView displays correctly for each RecordingState
+        - Verify status indicator color matches state (green/yellow/red/gray)
+        - Verify status icon (SF Symbol) matches state
+        - Verify status text matches state ("Recording", "Idle", "Paused", "Error: ...")
+        - Verify display count shows correctly ("2 displays")
+        - Verify recording duration updates in real-time
+      </idea>
+      <idea ac="AC-2.3.2">
+        Test: Real-time updates within 1 second
+        - Trigger state change in ScreenRecorder
+        - Measure time to ViewModel @Published update
+        - Measure time to SwiftUI view render
+        - Verify total latency &lt;1 second
+        - Verify animations are smooth (no dropped frames)
+      </idea>
+      <idea ac="AC-2.3.3">
+        Test: Error banner displays with recovery actions
+        - Inject error in ScreenRecorder (permission denied, storage low, etc.)
+        - Verify ErrorBannerView appears within 500ms
+        - Verify error message is clear and specific
+        - Verify recovery actions are displayed correctly
+        - Verify primary action is highlighted
+        - Test recovery action triggers (requestPermissions, retryRecording, openSystemPreferences)
+        - Verify banner dismisses correctly
+      </idea>
+      <idea ac="AC-2.3.4">
+        Test: Status persistence across app restart
+        - Start recording → save state to UserDefaults
+        - Kill app
+        - Restart app
+        - Verify state restored correctly
+        - Verify display count restored
+        - Verify recording duration continues from saved timestamp
+        - Test invalid state recovery: displays disconnected during restart
+      </idea>
+      <idea ac="all">
+        Integration Test: ScreenRecorder → ViewModel → UI end-to-end
+        - Subscribe to ScreenRecorder.statusUpdates in ViewModel
+        - Trigger all state transitions: idle → starting → recording → paused → finishing → idle
+        - Verify ViewModel @Published properties update correctly
+        - Verify UI renders all states correctly
+        - Measure latency at each step
+      </idea>
+      <idea ac="AC-2.3.2">
+        Performance Test: UI render performance under rapid state changes
+        - Trigger rapid state changes (10 per second)
+        - Verify view render time &lt;16ms (60fps)
+        - Verify no UI freezing or lag
+        - Verify debouncing prevents UI thrashing if needed
+      </idea>
+      <idea ac="AC-2.3.3">
+        Error Scenario Tests:
+        - Permission Denied: Verify "Open System Preferences" recovery action works
+        - Storage Low: Verify "Free up disk space" message with storage details
+        - Display Disconnected: Verify "Reconnect display" or pause recording
+        - Compression Failed: Verify "Retry with lower quality" recovery action
+        - Database Write Failed: Verify "Retry" or fallback recovery
+      </idea>
+    </ideas>
+  </tests>
+</story-context>
