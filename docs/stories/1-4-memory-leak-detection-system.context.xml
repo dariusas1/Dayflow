@@ -1,0 +1,478 @@
+<story-context id="1.4-memory-leak-detection-system" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>1.4</storyId>
+    <title>Memory Leak Detection System</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-14</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/1-4-memory-leak-detection-system.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a developer debugging memory issues</asA>
+    <iWant>automatic memory leak detection and reporting</iWant>
+    <soThat>memory issues are caught early and fixed systematically</soThat>
+    <tasks>
+      - Task 1: Create MemoryMonitor actor with data models (AC: 1.4.1, 1.4.2, 1.4.3)
+        - Define `MemorySnapshot` struct with timestamp, memory metrics, component counts
+        - Define `MemoryAlert` struct with severity levels (warning, critical), messages, recommended actions
+        - Create `MemoryMonitor` actor with singleton pattern
+        - Implement private properties for snapshot history and alert callbacks
+        - Add Sendable conformance to all data models
+        - Document public API in comments
+
+      - Task 2: Implement memory sampling and monitoring (AC: 1.4.1, 1.4.7)
+        - Implement `startMonitoring(interval:)` method with configurable sampling interval
+        - Use `task_info` and `mach_task_self()` APIs to collect memory metrics
+        - Track physical memory footprint, available memory, and memory pressure
+        - Collect diagnostic counts: CVPixelBuffer count, database connections, active threads
+        - Create `MemorySnapshot` instances every 10 seconds (default interval)
+        - Store snapshots in bounded history (last 1 hour = 360 snapshots max)
+        - Implement automatic history trimming to prevent unbounded growth
+        - Measure and validate CPU overhead &lt;1%
+
+      - Task 3: Implement threshold-based alerting (AC: 1.4.2, 1.4.3)
+        - Calculate memory usage percentage (used / total system memory)
+        - Implement warning threshold detection (&gt;75% memory usage)
+        - Implement critical threshold detection (&gt;90% memory usage)
+        - Generate `MemoryAlert` with severity and diagnostic snapshot
+        - Include recommended actions: "Pause AI processing", "Clear buffer cache", "Restart app"
+        - Implement alert callback registration (`onAlert(_ handler:)`)
+        - Ensure alerts don't spam (debounce: max 1 alert per threshold per minute)
+        - Test threshold detection with controlled memory allocation
+
+      - Task 4: Implement memory leak trend detection (AC: 1.4.4)
+        - Implement sliding window trend analysis (5-minute window = 30 samples)
+        - Calculate memory growth rate: (current - baseline) / baseline over 5 minutes
+        - Detect leak pattern: &gt;5% growth over 5 minutes without corresponding cleanup
+        - Filter out legitimate growth (e.g., AI processing spikes - expected and temporary)
+        - Generate alert with leak detection details: growth rate, duration, suspected components
+        - Include component-specific metrics in alert (buffer count trend, database connection trend)
+        - Test with artificial gradual memory leak (retain buffers slowly)
+
+      - Task 5: Integrate with diagnostic systems (AC: 1.4.5)
+        - Implement `currentSnapshot()` method for on-demand diagnostics
+        - Implement `memoryTrend(lastMinutes:)` method for historical analysis
+        - Add Sentry integration: Include latest memory snapshot in crash reports
+        - Log memory trends to file for offline analysis (compressed JSON format)
+        - Add memory snapshot to existing error logs (DatabaseManager errors, buffer allocation failures)
+        - Ensure memory snapshots are sanitized (no user screen content, just metrics)
+        - Test Sentry integration with simulated crash
+
+      - Task 6: Implement BufferManager integration (AC: 1.4.4, 1.4.6)
+        - Update BufferManager to report active buffer count to MemoryMonitor
+        - Track buffer allocation/release events for leak detection
+        - Correlate buffer count increases with memory growth trends
+        - Implement `forceCleanup()` method that triggers BufferManager cleanup
+        - Test cleanup triggers when critical memory threshold reached
+        - Validate buffer metrics appear in memory snapshots
+
+      - Task 7: Add UI status integration (AC: 1.4.2, 1.4.3)
+        - Create simple memory status enum: normal, warning, critical
+        - Update AppState with memory status property
+        - Register alert callback that updates AppState on main thread
+        - Add memory status indicator to app status bar (optional visual indicator)
+        - Test UI updates when memory thresholds crossed
+        - Ensure UI updates don't impact monitoring performance
+
+      - Task 8: Create comprehensive test suite (AC: 1.4.1 - 1.4.7)
+        - Unit test: `testMemoryMonitorStartsAndSamples()` - validates monitoring starts and collects samples
+        - Unit test: `testWarningAlertGenerated()` - validates 75% threshold alert
+        - Unit test: `testCriticalAlertGenerated()` - validates 90% threshold alert
+        - Integration test: `testMemoryLeakDetection()` - validates 5% growth over 5 minutes triggers alert
+        - Integration test: `testArtificialMemoryLeak()` - intentionally leak memory, validate detection within 2 cycles
+        - Performance test: `testMonitoringOverhead()` - validates CPU usage &lt;1%
+        - Integration test: `testSentryIntegration()` - validates crash reports include memory context
+        - Integration test: `testMemoryTrendLogging()` - validates trend data persists correctly
+        - Stress test: Run monitoring for 1 hour with varying memory patterns
+        - Test cleanup: Validate `stopMonitoring()` releases resources
+
+      - Task 9: System integration and validation (AC: 1.4.1 - 1.4.7)
+        - Integrate MemoryMonitor.shared.startMonitoring() in app initialization
+        - Test with 8-hour recording session (real-world validation)
+        - Validate alerts during AI processing spikes (should NOT alert - temporary growth)
+        - Validate alerts for actual memory leaks (should alert - sustained growth)
+        - Measure monitoring overhead in production-like scenarios
+        - Verify memory snapshots included in all crash reports
+        - Test graceful cleanup on app termination
+
+      - Task 10: Documentation and completion (AC: All)
+        - Document MemoryMonitor public API with usage examples
+        - Add code comments explaining threshold calculations and leak detection algorithm
+        - Document integration points: BufferManager, Sentry, AppState
+        - Create troubleshooting guide for memory alerts
+        - Update architecture documentation with MemoryMonitor component
+        - Document all test results and validation metrics
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    AC-1.4.1: `MemoryMonitor` starts successfully on app launch and samples memory every 10 seconds
+    AC-1.4.2: When memory usage exceeds 75%, warning alert generated with diagnostic snapshot
+    AC-1.4.3: When memory usage exceeds 90%, critical alert generated with recommended cleanup action
+    AC-1.4.4: Automatic memory leak detection: Alert generated when memory increases &gt;5% over 5-minute period without cleanup
+    AC-1.4.5: Memory usage trends logged for analysis (available in Sentry crash context)
+    AC-1.4.6: Artificial memory leak test (intentionally retain buffers) triggers alert within 2 monitoring cycles
+    AC-1.4.7: `MemoryMonitor` overhead remains &lt;1% CPU usage during continuous monitoring
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <!-- Epic Technical Specification -->
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>MemoryMonitor Data Models</section>
+        <snippet>Defines MemorySnapshot struct with timestamp, memory metrics, component counts. Defines MemoryAlert struct with severity levels (warning, critical), messages, and recommended actions. Story 1.4 is the FINAL story in Epic 1 and completes the memory management rescue mission.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>MemoryMonitor Public API</section>
+        <snippet>Actor MemoryMonitor with singleton pattern. Public API: startMonitoring(interval:), stopMonitoring(), currentSnapshot(), memoryTrend(lastMinutes:), onAlert(_ handler:), forceCleanup(). Periodic sampling using async Task with configurable interval (default 10 seconds).</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>Memory Leak Detection Algorithm</section>
+        <snippet>Sliding window analysis: 5-minute window (30 samples at 10-second intervals). Growth rate: ((current - baseline) / baseline) * 100. Alert threshold: &gt;5% growth sustained over 5 minutes. Filter out temporary spikes from AI processing.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>Non-Functional Requirements - Performance</section>
+        <snippet>Memory monitoring overhead: &lt;1% CPU usage. Memory usage targets: Baseline &lt;50MB idle, &lt;100MB active recording, &lt;300MB AI processing peak. Memory leak threshold: No &gt;5% increase over 1-hour period during steady-state operation.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>Non-Functional Requirements - Observability</section>
+        <snippet>Metrics to track: memory_used_mb, buffer_count, database_queue_depth, crash_free_session_duration_hours. Alert when memory &gt;90% for &gt;1 minute. Alert when memory increases &gt;5% over 5 minutes without cleanup. Include memory snapshot in all crash reports.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-1-database-threading-crash-fix.md</path>
+        <title>Story 1.1: Database Threading Crash Fix</title>
+        <section>Implementation Reference</section>
+        <snippet>DatabaseManager actor-based singleton pattern with serial queue. All public methods async for thread safety. Sendable conformance for all data models. Comprehensive XCTest suite with unit, integration, and stress tests.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-2-screen-recording-memory-cleanup.md</path>
+        <title>Story 1.2: Screen Recording Memory Cleanup</title>
+        <section>Implementation Reference</section>
+        <snippet>BufferManager actor-based singleton with bounded resource management (max 100 buffers). Automatic FIFO eviction when capacity exceeded. Performance testing with 8-hour recording sessions validates &lt;100MB stable memory usage.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-3-thread-safe-database-operations.md</path>
+        <title>Story 1.3: Thread-Safe Database Operations</title>
+        <section>Implementation Reference</section>
+        <snippet>Complete migration of 21 database methods to async + DatabaseManager. Stress testing with 50+ concurrent operations. Transaction isolation for multi-step operations. Extensive documentation of scope, rationale, and learnings.</snippet>
+      </doc>
+      <doc>
+        <path>docs/architecture.md</path>
+        <title>System Architecture</title>
+        <section>Rescue Architecture Pattern</section>
+        <snippet>Serial Database Queue pattern for all GRDB operations. Actor isolation for thread safety (DatabaseManager, BufferManager, MemoryMonitor). Swift concurrency (async/await, actors) for macOS 13.0+.</snippet>
+      </doc>
+    </docs>
+
+    <code>
+      <!-- DatabaseManager Pattern Reference (Story 1.1) -->
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift</path>
+        <kind>actor</kind>
+        <symbol>DatabaseManager</symbol>
+        <lines>1-328</lines>
+        <reason>Reference implementation of actor-based singleton pattern with serial queue. MemoryMonitor should follow the same pattern: singleton, actor isolation, async public API, Sendable conformance.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManagerProtocol.swift</path>
+        <kind>protocol</kind>
+        <symbol>DatabaseManagerProtocol</symbol>
+        <lines>1-34</lines>
+        <reason>Protocol pattern with Sendable conformance. MemoryMonitor should define similar protocol if extensibility needed.</reason>
+      </artifact>
+
+      <!-- BufferManager Pattern Reference (Story 1.2) -->
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/BufferManager.swift</path>
+        <kind>actor</kind>
+        <symbol>BufferManager</symbol>
+        <lines>1-250</lines>
+        <reason>Reference implementation of bounded resource management with FIFO eviction. MemoryMonitor snapshot history should use similar bounded pool pattern (max 360 snapshots). BufferManager.bufferCount() will be queried by MemoryMonitor for diagnostics.</reason>
+      </artifact>
+
+      <!-- StorageManager Integration Point -->
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>class</kind>
+        <symbol>StorageManager</symbol>
+        <lines>1-100</lines>
+        <reason>StorageManager provides database operations. MemoryMonitor may query database connection count for diagnostics. Already updated in Story 1.3 to use async DatabaseManager pattern.</reason>
+      </artifact>
+
+      <!-- AnalysisManager Integration Point -->
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Analysis/AnalysisManager.swift</path>
+        <kind>class</kind>
+        <symbol>AnalysisManager</symbol>
+        <lines>1-694</lines>
+        <reason>Background AI processing that causes temporary memory spikes. MemoryMonitor leak detection must filter these legitimate temporary allocations. Uses Sentry for performance tracking - similar integration needed for MemoryMonitor.</reason>
+      </artifact>
+
+      <!-- LLMService Integration Point -->
+      <artifact>
+        <path>Dayflow/Dayflow/Core/AI/LLMService.swift</path>
+        <kind>class</kind>
+        <symbol>LLMService</symbol>
+        <lines>1-150</lines>
+        <reason>LLM processing causes memory spikes during batch analysis. MemoryMonitor should be aware of processing state to avoid false positive leak alerts.</reason>
+      </artifact>
+
+      <!-- Sentry Integration Reference -->
+      <artifact>
+        <path>Dayflow/Dayflow/Utilities/SentryHelper.swift</path>
+        <kind>class</kind>
+        <symbol>SentryHelper</symbol>
+        <lines>1-46</lines>
+        <reason>Thread-safe wrapper for Sentry SDK calls. MemoryMonitor should use SentryHelper.configureScope() to add memory context to crash reports. Follow pattern of checking isEnabled before Sentry calls.</reason>
+      </artifact>
+
+      <!-- Data Models Reference -->
+      <artifact>
+        <path>Dayflow/Dayflow/Models/AnalysisModels.swift</path>
+        <kind>struct</kind>
+        <symbol>RecordingChunk</symbol>
+        <lines>1-23</lines>
+        <reason>Example of Sendable struct for cross-actor data passing. MemorySnapshot and MemoryAlert should follow same pattern: struct with Sendable conformance, value types only.</reason>
+      </artifact>
+
+      <!-- Test Pattern Reference (Story 1.1) -->
+      <artifact>
+        <path>Dayflow/DayflowTests/DatabaseManagerTests.swift</path>
+        <kind>test</kind>
+        <symbol>DatabaseManagerTests</symbol>
+        <lines>1-100</lines>
+        <reason>Reference test suite structure for actor-based components. MemoryMonitorTests should follow same patterns: unit tests for core logic, stress tests for concurrent access, performance tests for overhead validation.</reason>
+      </artifact>
+    </code>
+
+    <dependencies>
+      <swift>
+        <package name="GRDB.swift" version="7.8.0" />
+        <package name="sentry-cocoa" version="8.56.2" />
+        <package name="posthog-ios" version="3.31.0" />
+        <package name="sparkle" version="2.7.1" />
+      </swift>
+      <system>
+        <framework name="Foundation" reason="Core Swift framework for system primitives, Date, Timer, UUID" />
+        <framework name="AVFoundation" reason="CVPixelBuffer management via BufferManager integration" />
+        <framework name="os" reason="Logger for diagnostic logging" />
+        <api name="task_info" reason="macOS API for memory metrics collection (physical memory footprint)" />
+        <api name="mach_task_self()" reason="macOS API to get current task for memory info queries" />
+      </system>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <!-- Architectural Constraints -->
+    - MUST use Swift actor for MemoryMonitor to guarantee thread safety (follow DatabaseManager and BufferManager patterns)
+    - All public methods MUST be async to enforce actor isolation
+    - All data models (MemorySnapshot, MemoryAlert) MUST conform to Sendable protocol
+    - MUST use singleton pattern: MemoryMonitor.shared (consistency with DatabaseManager, BufferManager)
+    - Snapshot history MUST be bounded (max 360 snapshots = 1 hour at 10-second intervals) to prevent unbounded growth
+    - Memory monitoring MUST use lightweight system APIs to maintain &lt;1% CPU overhead
+
+    <!-- Integration Constraints -->
+    - BufferManager integration: Query buffer count via await BufferManager.shared.bufferCount()
+    - Sentry integration: Use SentryHelper.configureScope() for thread-safe crash context updates
+    - Alert callbacks MUST be executed asynchronously to prevent blocking monitoring loop
+    - UI updates from alerts MUST dispatch to @MainActor to prevent thread safety issues
+
+    <!-- Performance Constraints -->
+    - CPU overhead target: &lt;1% average during continuous monitoring (AC-1.4.7)
+    - Sampling latency: &lt;10ms per snapshot collection
+    - Alert generation latency: &lt;5ms per alert evaluation
+    - Memory footprint: &lt;1MB for snapshot history (360 snapshots)
+    - No blocking operations on main thread
+
+    <!-- Testing Constraints -->
+    - MUST have unit tests for: monitoring start/stop, threshold detection, leak detection algorithm, alert debouncing
+    - MUST have integration tests for: Sentry integration, BufferManager integration, artificial memory leak
+    - MUST have performance test validating &lt;1% CPU overhead over 1-hour monitoring period
+    - MUST have stress test with 8-hour monitoring and varying memory patterns
+    - Test coverage target: &gt;85% for MemoryMonitor core logic
+
+    <!-- Privacy and Security Constraints -->
+    - Memory snapshots MUST NOT contain user screen content or sensitive data
+    - Only collect metrics: counts, sizes, percentages, timestamps
+    - Sentry crash reports MUST sanitize memory context before upload
+    - No logging of user-identifiable information in memory trends
+
+    <!-- Error Handling Constraints -->
+    - Monitoring failures MUST NOT crash the app (graceful degradation)
+    - Wrap all system API calls in do/catch with fallback behavior
+    - If memory monitoring fails, log error but continue app operation
+    - Alert generation errors MUST NOT disrupt snapshot collection
+
+    <!-- Epic 1 Completion Constraints -->
+    - Story 1.4 is FINAL story in Epic 1 - validates that Stories 1.1-1.3 fixes are effective
+    - MUST validate zero memory leaks over 8-hour recording session (Epic 1 success metric)
+    - MUST provide diagnostic visibility into DatabaseManager, BufferManager, and thread safety improvements
+    - Success proves Epic 1 memory management rescue mission is complete
+  </constraints>
+
+  <interfaces>
+    <!-- MemoryMonitor Public API (to be created) -->
+    <interface>
+      <name>MemoryMonitor.startMonitoring(interval:)</name>
+      <kind>actor_method</kind>
+      <signature>func startMonitoring(interval: TimeInterval = 10.0) async</signature>
+      <description>Start continuous memory monitoring with configurable sampling interval. Default 10 seconds.</description>
+    </interface>
+    <interface>
+      <name>MemoryMonitor.stopMonitoring()</name>
+      <kind>actor_method</kind>
+      <signature>func stopMonitoring() async</signature>
+      <description>Stop memory monitoring and release resources.</description>
+    </interface>
+    <interface>
+      <name>MemoryMonitor.currentSnapshot()</name>
+      <kind>actor_method</kind>
+      <signature>func currentSnapshot() async -&gt; MemorySnapshot</signature>
+      <description>Get current memory snapshot on-demand for diagnostics.</description>
+    </interface>
+    <interface>
+      <name>MemoryMonitor.memoryTrend(lastMinutes:)</name>
+      <kind>actor_method</kind>
+      <signature>func memoryTrend(lastMinutes: Int) async -&gt; [MemorySnapshot]</signature>
+      <description>Get memory snapshots for specified time window for historical analysis.</description>
+    </interface>
+    <interface>
+      <name>MemoryMonitor.onAlert(_:)</name>
+      <kind>actor_method</kind>
+      <signature>func onAlert(_ handler: @escaping (MemoryAlert) -&gt; Void) async</signature>
+      <description>Register callback for memory alerts (threshold exceeded or leak detected).</description>
+    </interface>
+    <interface>
+      <name>MemoryMonitor.forceCleanup()</name>
+      <kind>actor_method</kind>
+      <signature>func forceCleanup() async</signature>
+      <description>Trigger immediate cleanup of buffers and resources when critical memory threshold reached.</description>
+    </interface>
+
+    <!-- Data Models (to be created) -->
+    <interface>
+      <name>MemorySnapshot</name>
+      <kind>struct</kind>
+      <signature>struct MemorySnapshot: Codable, Sendable { let timestamp: Date; let usedMemoryMB: Double; let availableMemoryMB: Double; let memoryPressure: MemoryPressure; let bufferCount: Int; let databaseConnectionCount: Int; let activeThreadCount: Int; var memoryUsagePercent: Double { get } }</signature>
+      <description>Snapshot of memory state at a point in time. All value types for Sendable conformance.</description>
+    </interface>
+    <interface>
+      <name>MemoryAlert</name>
+      <kind>struct</kind>
+      <signature>struct MemoryAlert: Codable, Sendable { let id: UUID; let timestamp: Date; let severity: AlertSeverity; let message: String; let snapshot: MemorySnapshot; let recommendedAction: String; let growthRate: Double?; let detectionWindow: TimeInterval? }</signature>
+      <description>Alert generated when threshold exceeded or leak detected. Includes diagnostic snapshot and recommended actions.</description>
+    </interface>
+    <interface>
+      <name>MemoryPressure</name>
+      <kind>enum</kind>
+      <signature>enum MemoryPressure: String, Codable, Sendable { case normal; case warning; case critical }</signature>
+      <description>System memory pressure level.</description>
+    </interface>
+    <interface>
+      <name>AlertSeverity</name>
+      <kind>enum</kind>
+      <signature>enum AlertSeverity: String, Codable, Sendable { case warning; case critical }</signature>
+      <description>Alert severity: warning (&gt;75% memory) or critical (&gt;90% memory or leak detected).</description>
+    </interface>
+
+    <!-- Integration Interfaces (existing) -->
+    <interface>
+      <name>BufferManager.bufferCount()</name>
+      <kind>actor_method</kind>
+      <signature>func bufferCount() async -&gt; Int</signature>
+      <path>Dayflow/Dayflow/Core/Recording/BufferManager.swift</path>
+      <description>Get current number of managed buffers for MemoryMonitor diagnostics.</description>
+    </interface>
+    <interface>
+      <name>SentryHelper.configureScope(_:)</name>
+      <kind>static_method</kind>
+      <signature>static func configureScope(_ configure: @escaping (Scope) -&gt; Void)</signature>
+      <path>Dayflow/Dayflow/Utilities/SentryHelper.swift</path>
+      <description>Thread-safe Sentry scope configuration for adding memory context to crash reports.</description>
+    </interface>
+
+    <!-- macOS System APIs -->
+    <interface>
+      <name>task_info</name>
+      <kind>system_api</kind>
+      <signature>kern_return_t task_info(task_t target_task, task_flavor_t flavor, task_info_t task_info, mach_msg_type_number_t *task_info_count)</signature>
+      <description>macOS API to collect memory metrics. Use flavor MACH_TASK_BASIC_INFO for physical memory footprint.</description>
+    </interface>
+    <interface>
+      <name>mach_task_self()</name>
+      <kind>system_api</kind>
+      <signature>mach_port_t mach_task_self(void)</signature>
+      <description>Returns the calling task's port. Pass to task_info to get current process memory metrics.</description>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      Testing follows established Epic 1 patterns from Stories 1.1-1.3. Use XCTest framework with async/await support. Test structure: Unit tests for core logic (threshold detection, leak algorithm, snapshot trimming), Integration tests for component interaction (BufferManager, Sentry, AppState), Performance tests for overhead validation (&lt;1% CPU, &lt;10ms sampling latency), Stress tests for long-running monitoring (1-8 hours with varying memory patterns). Target &gt;85% code coverage for MemoryMonitor core logic. Use XCTAssertEqual, XCTAssertTrue, XCTAssertLessThan for assertions. Mock GRDB database and system APIs where possible for repeatable tests.
+    </standards>
+
+    <locations>
+      Dayflow/DayflowTests/MemoryMonitorTests.swift (to be created)
+      Dayflow/DayflowTests/MemoryLeakDetectionTests.swift (to be created)
+    </locations>
+
+    <ideas>
+      <!-- AC-1.4.1: MemoryMonitor starts and samples -->
+      - testMemoryMonitorStartsSuccessfully: Verify MemoryMonitor.shared initializes without errors
+      - testMemorySamplingInterval: Start monitoring with 10-second interval, verify samples collected at correct frequency
+      - testSnapshotContainsAllMetrics: Verify MemorySnapshot includes timestamp, memory metrics, buffer count, database connections, thread count
+
+      <!-- AC-1.4.2: Warning alert at 75% threshold -->
+      - testWarningAlertGenerated: Allocate memory to reach 75% usage, verify warning alert generated with correct severity
+      - testWarningAlertContainsDiagnosticSnapshot: Verify warning alert includes MemorySnapshot with current metrics
+      - testWarningAlertRecommendedAction: Verify alert message includes actionable recommendation
+
+      <!-- AC-1.4.3: Critical alert at 90% threshold -->
+      - testCriticalAlertGenerated: Allocate memory to reach 90% usage, verify critical alert generated
+      - testCriticalAlertRecommendedAction: Verify critical alert includes cleanup recommendations (pause AI, clear buffers, restart app)
+      - testAlertDebouncing: Trigger multiple threshold breaches, verify max 1 alert per minute per severity level
+
+      <!-- AC-1.4.4: Memory leak detection -->
+      - testMemoryLeakDetection: Gradually leak memory (5% over 5 minutes), verify leak alert generated
+      - testLeakDetectionIgnoresTemporarySpikes: Simulate AI processing spike (temporary memory increase), verify no leak alert
+      - testLeakDetectionCorrelatesBufferCount: Leak memory by retaining buffers, verify alert includes buffer count correlation
+      - testLeakDetectionSlidingWindow: Verify sliding window analysis uses 30 samples (5 minutes at 10-second intervals)
+
+      <!-- AC-1.4.5: Memory trends logged for analysis -->
+      - testMemoryTrendLogging: Run monitoring for 10 minutes, verify memory trends persist to disk
+      - testSentryIntegration: Trigger simulated crash, verify Sentry crash report includes latest MemorySnapshot
+      - testMemorySnapshotSanitization: Verify memory snapshots contain only metrics (no user data, screen content)
+      - testCurrentSnapshotOnDemand: Call currentSnapshot(), verify returns latest memory state
+
+      <!-- AC-1.4.6: Artificial memory leak test -->
+      - testArtificialMemoryLeakDetection: Intentionally retain 100 buffers over 20 seconds, verify alert within 2 monitoring cycles
+      - testArtificialLeakCleanupTrigger: Trigger critical threshold, verify forceCleanup() called and buffers released
+      - testBufferManagerIntegration: Verify MemoryMonitor queries BufferManager.bufferCount() for diagnostics
+
+      <!-- AC-1.4.7: Monitoring overhead &lt;1% CPU -->
+      - testMonitoringCPUOverhead: Run monitoring for 1 hour, measure CPU usage, verify &lt;1% average
+      - testSamplingLatency: Measure time to collect single snapshot, verify &lt;10ms
+      - testAlertGenerationLatency: Measure time to evaluate and generate alert, verify &lt;5ms
+      - testSnapshotHistoryMemoryFootprint: Run monitoring for 1 hour, verify snapshot history &lt;1MB
+
+      <!-- Integration and Stress Tests -->
+      - testLongRunningMonitoring: Run monitoring for 8 hours with varying memory patterns, verify no crashes or performance degradation
+      - testMonitoringStartStopCycles: Start and stop monitoring 100 times, verify no memory leaks or resource exhaustion
+      - testConcurrentAlertCallbacks: Register multiple alert callbacks, verify all called for each alert
+      - testUIIntegration: Trigger alerts, verify AppState memory status updates on main thread
+      - testGracefulDegradation: Simulate system API failures, verify monitoring continues with reduced functionality
+    </ideas>
+  </tests>
+</story-context>
