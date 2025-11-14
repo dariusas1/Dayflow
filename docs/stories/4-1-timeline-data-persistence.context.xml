@@ -1,0 +1,1322 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<story-context>
+  <story>
+    <id>4-1-timeline-data-persistence</id>
+    <title>Timeline Data Persistence</title>
+    <epic>Epic 4 - Database &amp; Persistence Reliability</epic>
+    <status>ready-for-dev</status>
+    <generated>2025-11-13</generated>
+  </story>
+
+  <!-- ============================================================ -->
+  <!-- DATABASE SCHEMA CONTEXT -->
+  <!-- ============================================================ -->
+  <database-schema>
+    <current-schema>
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 560-760 (migrate function)</location>
+
+      <timeline-cards-table>
+        <sql><![CDATA[
+CREATE TABLE IF NOT EXISTS timeline_cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER REFERENCES analysis_batches(id) ON DELETE CASCADE,
+    start TEXT NOT NULL,       -- Clock time (e.g., "2:30 PM")
+    end TEXT NOT NULL,         -- Clock time (e.g., "3:45 PM")
+    start_ts INTEGER,          -- Unix timestamp
+    end_ts INTEGER,            -- Unix timestamp
+    day DATE NOT NULL,         -- YYYY-MM-DD format (4AM boundary)
+    title TEXT NOT NULL,
+    summary TEXT,
+    category TEXT NOT NULL,
+    subcategory TEXT,
+    detailed_summary TEXT,
+    metadata TEXT,             -- JSON for distractions and appSites
+    video_summary_url TEXT,    -- Link to video summary on filesystem
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_day ON timeline_cards(day);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_start_ts ON timeline_cards(start_ts);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_time_range ON timeline_cards(start_ts, end_ts);
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_active_start_ts ON timeline_cards(start_ts) WHERE is_deleted = 0;
+CREATE INDEX IF NOT EXISTS idx_timeline_cards_active_batch ON timeline_cards(batch_id) WHERE is_deleted = 0;
+        ]]></sql>
+
+        <notes>
+          - Uses soft delete pattern (is_deleted column)
+          - Day field uses 4AM boundary logic (activities before 4AM belong to previous day)
+          - Metadata column stores JSON with distractions and appSites
+          - Foreign key to analysis_batches with CASCADE delete
+          - Partial indexes for active (non-deleted) cards
+        </notes>
+      </timeline-cards-table>
+
+      <related-tables>
+        <table name="analysis_batches">
+          <description>Groups recording chunks for LLM processing</description>
+          <sql><![CDATA[
+CREATE TABLE IF NOT EXISTS analysis_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_start_ts INTEGER NOT NULL,
+    batch_end_ts INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    reason TEXT,
+    llm_metadata TEXT,
+    detailed_transcription TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_batches_status ON analysis_batches(status);
+          ]]></sql>
+        </table>
+
+        <table name="chunks">
+          <description>Stores video recording segments</description>
+          <sql><![CDATA[
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_ts INTEGER NOT NULL,
+    end_ts INTEGER NOT NULL,
+    file_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'recording',
+    is_deleted INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_status ON chunks(status);
+CREATE INDEX IF NOT EXISTS idx_chunks_start_ts ON chunks(start_ts);
+          ]]></sql>
+        </table>
+
+        <table name="observations">
+          <description>Stores LLM transcription outputs (first-class transcript storage)</description>
+          <sql><![CDATA[
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES analysis_batches(id) ON DELETE CASCADE,
+    start_ts INTEGER NOT NULL,
+    end_ts INTEGER NOT NULL,
+    observation TEXT NOT NULL,
+    metadata TEXT,
+    llm_model TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_observations_batch_id ON observations(batch_id);
+CREATE INDEX IF NOT EXISTS idx_observations_start_ts ON observations(start_ts);
+CREATE INDEX IF NOT EXISTS idx_observations_time_range ON observations(start_ts, end_ts);
+          ]]></sql>
+        </table>
+      </related-tables>
+    </current-schema>
+
+    <database-configuration>
+      <location>~/Library/Application Support/Dayflow/chunks.sqlite</location>
+      <engine>SQLite via GRDB.swift 7.8.0</engine>
+      <wal-mode>ENABLED</wal-mode>
+      <synchronous>NORMAL</synchronous>
+      <busy-timeout>5000ms</busy-timeout>
+      <max-readers>5</max-readers>
+      <qos>userInitiated</qos>
+    </database-configuration>
+  </database-schema>
+
+  <!-- ============================================================ -->
+  <!-- DATA MODELS -->
+  <!-- ============================================================ -->
+  <data-models>
+    <model name="TimelineCard">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 162-177</location>
+      <definition><![CDATA[
+struct TimelineCard: Codable, Sendable, Identifiable {
+    var id = UUID()
+    let batchId: Int64? // Tracks source batch for retry functionality
+    let startTimestamp: String
+    let endTimestamp: String
+    let category: String
+    let subcategory: String
+    let title: String
+    let summary: String
+    let detailedSummary: String
+    let day: String
+    let distractions: [Distraction]?
+    let videoSummaryURL: String? // Optional link to primary video summary
+    let otherVideoSummaryURLs: [String]? // For merged cards, subsequent video URLs
+    let appSites: AppSites?
+}
+      ]]></definition>
+      <notes>
+        - Used for reading timeline cards from database
+        - Has UUID id for SwiftUI Identifiable
+        - Includes batchId for retry functionality
+      </notes>
+    </model>
+
+    <model name="TimelineCardShell">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 240-253</location>
+      <definition><![CDATA[
+struct TimelineCardShell: Sendable {
+    let startTimestamp: String
+    let endTimestamp: String
+    let category: String
+    let subcategory: String
+    let title: String
+    let summary: String
+    let detailedSummary: String
+    let distractions: [Distraction]? // Keep this, it's part of the initial save
+    let appSites: AppSites?
+    // No videoSummaryURL here, as it's added later
+    // No batchId here, as it's passed as a separate parameter to the save function
+}
+      ]]></definition>
+      <notes>
+        - Used for saving new timeline cards to database
+        - Lighter than TimelineCard (no id, batchId is separate param)
+        - Video URL added later via updateTimelineCardVideoURL
+      </notes>
+    </model>
+
+    <model name="TimelineCardWithTimestamps">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 271-285</location>
+      <definition><![CDATA[
+struct TimelineCardWithTimestamps {
+    let id: Int64
+    let startTimestamp: String
+    let endTimestamp: String
+    let startTs: Int
+    let endTs: Int
+    let category: String
+    let subcategory: String
+    let title: String
+    let summary: String
+    let detailedSummary: String
+    let day: String
+    let distractions: [Distraction]?
+    let videoSummaryURL: String?
+}
+      ]]></definition>
+      <notes>
+        - Extended card with timestamp fields for internal use
+        - Used by fetchTimelineCard(byId:) method
+      </notes>
+    </model>
+
+    <model name="Distraction">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 124-160</location>
+      <definition><![CDATA[
+struct Distraction: Codable, Sendable, Identifiable {
+    let id: UUID
+    let startTime: String
+    let endTime: String
+    let title: String
+    let summary: String
+    let videoSummaryURL: String? // Optional link to video summary for the distraction
+
+    // Custom decoder to handle missing 'id'
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decodeIfPresent(UUID.self, forKey: .id)) ?? UUID()
+        self.startTime = try container.decode(String.self, forKey: .startTime)
+        self.endTime = try container.decode(String.self, forKey: .endTime)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.summary = try container.decode(String.self, forKey: .summary)
+        self.videoSummaryURL = try container.decodeIfPresent(String.self, forKey: .videoSummaryURL)
+    }
+
+    init(id: UUID = UUID(), startTime: String, endTime: String, title: String, summary: String, videoSummaryURL: String? = nil) {
+        self.id = id
+        self.startTime = startTime
+        self.endTime = endTime
+        self.title = title
+        self.summary = summary
+        self.videoSummaryURL = videoSummaryURL
+    }
+}
+      ]]></definition>
+    </model>
+
+    <model name="AppSites">
+      <file>Dayflow/Dayflow/Core/AI/LLMProvider.swift</file>
+      <location>Lines 28-31</location>
+      <definition><![CDATA[
+struct AppSites: Codable {
+    let primary: String?
+    let secondary: String?
+}
+      ]]></definition>
+    </model>
+
+    <model name="TimelineMetadata">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 256-259</location>
+      <definition><![CDATA[
+// Private metadata envelope to support multiple fields under one JSON column
+private struct TimelineMetadata: Codable {
+    let distractions: [Distraction]?
+    let appSites: AppSites?
+}
+      ]]></definition>
+      <notes>
+        - Private struct used for encoding/decoding metadata column
+        - Combines distractions and appSites into single JSON field
+      </notes>
+    </model>
+
+    <model name="RecordingChunk">
+      <file>Dayflow/Dayflow/Models/AnalysisModels.swift</file>
+      <location>Lines 11-21</location>
+      <definition><![CDATA[
+struct RecordingChunk: Codable {
+    let id: Int64
+    let startTs: Int
+    let endTs: Int
+    let fileUrl: String
+    let status: String
+
+    var duration: TimeInterval {
+        TimeInterval(endTs - startTs)
+    }
+}
+      ]]></definition>
+    </model>
+
+    <model name="Observation">
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 112-122</location>
+      <definition><![CDATA[
+struct Observation: Codable, Sendable {
+    let id: Int64?
+    let batchId: Int64
+    let startTs: Int
+    let endTs: Int
+    let observation: String
+    let metadata: String?
+    let llmModel: String?
+    let createdAt: Date?
+}
+      ]]></definition>
+    </model>
+  </data-models>
+
+  <!-- ============================================================ -->
+  <!-- CORE IMPLEMENTATION -->
+  <!-- ============================================================ -->
+  <existing-implementation>
+    <storage-manager>
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <class-definition>
+        <location>Lines 288-407</location>
+        <code><![CDATA[
+final class StorageManager: StorageManaging, @unchecked Sendable {
+    static let shared = StorageManager()
+
+    private let dbURL: URL
+    private let db: DatabasePool  // GRDB DatabasePool (thread-safe)
+    private let fileMgr = FileManager.default
+    private let root: URL
+    var recordingsRoot: URL { root }
+
+    // Dedicated queue for database writes to prevent main thread blocking
+    private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+
+    // Additional queues for specific operations
+    private let purgeQ = DispatchQueue(label: "com.dayflow.storage.purge", qos: .background)
+    private let optimizationQ = DispatchQueue(label: "com.dayflow.storage.optimization", qos: .utility)
+
+    private init() {
+        // Database initialization with WAL mode
+        var config = Configuration()
+        config.maximumReaderCount = 5
+        config.qos = .userInitiated  // CRITICAL: Prevents priority inversion
+
+        config.prepareDatabase { db in
+            if !db.configuration.readonly {
+                try? db.execute(sql: "PRAGMA journal_mode = WAL")
+                try? db.execute(sql: "PRAGMA synchronous = NORMAL")
+            }
+            try? db.execute(sql: "PRAGMA busy_timeout = 5000")
+        }
+
+        db = try! DatabasePool(path: dbURL.path, configuration: config)
+
+        // Run migrations, purge, optimization
+        migrate()
+        // ...
+    }
+}
+        ]]></code>
+      </class-definition>
+
+      <protocol-definition>
+        <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+        <location>Lines 49-109</location>
+        <code><![CDATA[
+protocol StorageManaging: Sendable {
+    // Timeline-cards methods
+    func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) -> Int64?
+    func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String)
+    func fetchTimelineCards(forBatch batchId: Int64) -> [TimelineCard]
+    func fetchTimelineCard(byId id: Int64) -> TimelineCardWithTimestamps?
+
+    // Timeline Queries
+    func fetchTimelineCards(forDay day: String) -> [TimelineCard]
+    func fetchTimelineCardsByTimeRange(from: Date, to: Date) -> [TimelineCard]
+    func replaceTimelineCardsInRange(from: Date, to: Date, with: [TimelineCardShell], batchId: Int64) -> (insertedIds: [Int64], deletedVideoPaths: [String])
+
+    // Reprocessing Methods
+    func deleteTimelineCards(forDay day: String) -> [String]  // Returns video paths to clean up
+    func deleteTimelineCards(forBatchIds batchIds: [Int64]) -> [String]
+    func resetBatchStatuses(forDay day: String) -> [Int64]  // Returns affected batch IDs
+    func resetBatchStatuses(forBatchIds batchIds: [Int64]) -> [Int64]
+    func fetchBatches(forDay day: String) -> [(id: Int64, startTs: Int, endTs: Int, status: String)]
+
+    // Recording chunk lifecycle
+    func nextFileURL() -> URL
+    func registerChunk(url: URL)
+    func markChunkCompleted(url: URL)
+    func fetchUnprocessedChunks(olderThan oldestAllowed: Int) -> [RecordingChunk]
+
+    // Analysis batch management
+    func saveBatch(startTs: Int, endTs: Int, chunkIds: [Int64]) -> Int64?
+    func updateBatchStatus(batchId: Int64, status: String)
+
+    // Observations Storage
+    func saveObservations(batchId: Int64, observations: [Observation])
+    func fetchObservations(batchId: Int64) -> [Observation]
+}
+        ]]></code>
+      </protocol-definition>
+
+      <existing-timeline-methods>
+        <method name="saveTimelineCardShell">
+          <location>Lines 980-1072</location>
+          <implementation-status>FULLY IMPLEMENTED</implementation-status>
+          <signature><![CDATA[
+func saveTimelineCardShell(batchId: Int64, card: TimelineCardShell) -> Int64?
+          ]]></signature>
+          <summary>
+            - Encodes metadata (distractions, appSites) to JSON
+            - Parses ISO8601 timestamps to Unix timestamps
+            - Computes day string using 4AM boundary logic
+            - Inserts timeline card into database
+            - Returns database row ID
+          </summary>
+          <key-code-excerpt><![CDATA[
+// Encode metadata
+let metadata = TimelineMetadata(
+    distractions: card.distractions,
+    appSites: card.appSites
+)
+let metadataJSON = try JSONEncoder().encode(metadata)
+
+// Parse timestamps (assuming ISO8601 format in card.startTimestamp)
+let formatter = ISO8601DateFormatter()
+let startDate = formatter.date(from: card.startTimestamp)!
+let endDate = formatter.date(from: card.endTimestamp)!
+let startTs = Int(startDate.timeIntervalSince1970)
+let endTs = Int(endDate.timeIntervalSince1970)
+
+// Compute day string (4AM boundary)
+let dayInfo = startDate.getDayInfoFor4AMBoundary()
+
+// Insert timeline card
+try db.execute(sql: """
+    INSERT INTO timeline_cards(
+        batch_id, start, end, start_ts, end_ts, day,
+        title, summary, category, subcategory, detailed_summary, metadata
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""", arguments: [
+    batchId, card.startTimestamp, card.endTimestamp,
+    startTs, endTs, dayInfo.dayString,
+    card.title, card.summary, card.category, card.subcategory,
+    card.detailedSummary, String(data: metadataJSON, encoding: .utf8)
+])
+
+return db.lastInsertedRowID
+          ]]></key-code-excerpt>
+        </method>
+
+        <method name="fetchTimelineCards(forDay:)">
+          <location>Lines 1157-1223</location>
+          <implementation-status>FULLY IMPLEMENTED</implementation-status>
+          <signature><![CDATA[
+func fetchTimelineCards(forDay day: String) -> [TimelineCard]
+          ]]></signature>
+          <summary>
+            - Queries timeline_cards WHERE day = ? AND is_deleted = 0
+            - Orders by start_ts ASC
+            - Decodes metadata JSON to extract distractions and appSites
+            - Returns array of TimelineCard instances
+          </summary>
+          <key-code-excerpt><![CDATA[
+let cards: [TimelineCard]? = try? timedRead("fetchTimelineCards(forDay:\(day))") { db in
+    try Row.fetchAll(db, sql: """
+        SELECT * FROM timeline_cards
+        WHERE day = ? AND is_deleted = 0
+        ORDER BY start_ts ASC
+    """, arguments: [day]).compactMap { row -> TimelineCard? in
+        // Decode metadata JSON
+        let metadataJSON: String? = row["metadata"]
+        let metadata = metadataJSON.flatMap { json in
+            try? JSONDecoder().decode(
+                TimelineMetadata.self,
+                from: json.data(using: .utf8)!
+            )
+        }
+
+        return TimelineCard(
+            batchId: row["batch_id"],
+            startTimestamp: row["start"],
+            endTimestamp: row["end"],
+            category: row["category"],
+            subcategory: row["subcategory"] ?? "",
+            title: row["title"],
+            summary: row["summary"] ?? "",
+            detailedSummary: row["detailed_summary"] ?? "",
+            day: row["day"],
+            distractions: metadata?.distractions,
+            videoSummaryURL: row["video_summary_url"],
+            otherVideoSummaryURLs: nil,
+            appSites: metadata?.appSites
+        )
+    }
+}
+return cards ?? []
+          ]]></key-code-excerpt>
+        </method>
+
+        <method name="updateTimelineCardVideoURL">
+          <location>Lines 1073-1082</location>
+          <implementation-status>FULLY IMPLEMENTED</implementation-status>
+          <signature><![CDATA[
+func updateTimelineCardVideoURL(cardId: Int64, videoSummaryURL: String)
+          ]]></signature>
+          <summary>
+            - Updates video_summary_url field for a specific timeline card
+            - Used when video summaries are generated after card creation
+          </summary>
+        </method>
+
+        <method name="replaceTimelineCardsInRange">
+          <location>Lines 1417-1546</location>
+          <implementation-status>FULLY IMPLEMENTED</implementation-status>
+          <signature><![CDATA[
+func replaceTimelineCardsInRange(from: Date, to: Date, with newCards: [TimelineCardShell], batchId: Int64) -> (insertedIds: [Int64], deletedVideoPaths: [String])
+          ]]></signature>
+          <summary>
+            - Soft-deletes existing cards in time range
+            - Inserts new cards from LLM analysis
+            - Returns inserted IDs and video paths to clean up
+            - Used during reprocessing workflows
+          </summary>
+        </method>
+
+        <method name="deleteTimelineCards(forDay:)">
+          <location>Lines 1733-1782</location>
+          <implementation-status>FULLY IMPLEMENTED</implementation-status>
+          <signature><![CDATA[
+func deleteTimelineCards(forDay day: String) -> [String]
+          ]]></signature>
+          <summary>
+            - Soft-deletes timeline cards for a specific day
+            - Returns video paths for cleanup
+            - Used in reprocessing workflows
+          </summary>
+        </method>
+      </existing-timeline-methods>
+
+      <helper-methods>
+        <method name="timedWrite">
+          <location>Lines 444-500</location>
+          <description>Wrapper for database writes with performance monitoring</description>
+          <signature><![CDATA[
+private func timedWrite<T>(_ label: String, _ block: (Database) throws -> T) throws -> T
+          ]]></signature>
+        </method>
+
+        <method name="timedRead">
+          <location>Lines 502-558</location>
+          <description>Wrapper for database reads with performance monitoring</description>
+          <signature><![CDATA[
+private func timedRead<T>(_ label: String, _ block: (Database) throws -> T) throws -> T
+          ]]></signature>
+        </method>
+      </helper-methods>
+    </storage-manager>
+
+    <date-utilities>
+      <file>Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <location>Lines 11-42</location>
+      <code><![CDATA[
+extension DateFormatter {
+    static let yyyyMMdd: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = Calendar.current.timeZone
+        return formatter
+    }()
+}
+
+extension Date {
+    /// Calculates the "day" based on a 4 AM start time.
+    /// Returns the date string (YYYY-MM-DD) and the Date objects for the start and end of that day.
+    func getDayInfoFor4AMBoundary() -> (dayString: String, startOfDay: Date, endOfDay: Date) {
+        let calendar = Calendar.current
+        guard let fourAMToday = calendar.date(bySettingHour: 4, minute: 0, second: 0, of: self) else {
+            print("Error: Could not calculate 4 AM for date \(self). Falling back to standard day.")
+            let start = calendar.startOfDay(for: self)
+            let end = calendar.date(byAdding: .day, value: 1, to: start)!
+            return (DateFormatter.yyyyMMdd.string(from: start), start, end)
+        }
+
+        let startOfDay: Date
+        if self < fourAMToday {
+            startOfDay = calendar.date(byAdding: .day, value: -1, to: fourAMToday)!
+        } else {
+            startOfDay = fourAMToday
+        }
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay)!
+        let dayString = DateFormatter.yyyyMMdd.string(from: startOfDay)
+        return (dayString, startOfDay, endOfDay)
+    }
+}
+      ]]></code>
+      <notes>
+        - CRITICAL: Timeline days use 4AM boundary, not midnight
+        - Activities between midnight and 4AM belong to previous day
+        - Used throughout the app for day calculations
+      </notes>
+    </date-utilities>
+  </existing-implementation>
+
+  <!-- ============================================================ -->
+  <!-- THREADING AND CONCURRENCY -->
+  <!-- ============================================================ -->
+  <threading-patterns>
+    <critical-pattern>
+      <name>@unchecked Sendable Pattern</name>
+      <rationale>
+        StorageManager is marked as @unchecked Sendable because it wraps a DatabasePool
+        which provides its own thread-safety guarantees. The class is a singleton
+        and all database access is properly serialized through GRDB's DatabasePool.
+      </rationale>
+      <code><![CDATA[
+final class StorageManager: StorageManaging, @unchecked Sendable {
+    static let shared = StorageManager()
+    private let db: DatabasePool  // Thread-safe by design
+    private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+    // ...
+}
+      ]]></code>
+    </critical-pattern>
+
+    <pattern>
+      <name>DatabasePool Read/Write Separation</name>
+      <description>
+        GRDB's DatabasePool allows concurrent reads and serialized writes.
+        Use db.read {} for queries and db.write {} for mutations.
+      </description>
+      <example><![CDATA[
+// Read (concurrent)
+let cards = try? db.read { db in
+    try Row.fetchAll(db, sql: "SELECT * FROM timeline_cards WHERE day = ?", arguments: [day])
+}
+
+// Write (serialized)
+try? db.write { db in
+    try db.execute(sql: "INSERT INTO timeline_cards (...) VALUES (...)", arguments: [...])
+}
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>Serial Queue for Database Writes</name>
+      <description>
+        Additional DispatchQueue used for coordinating write operations
+        to prevent main thread blocking.
+      </description>
+      <code><![CDATA[
+private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+      ]]></code>
+    </pattern>
+
+    <pattern>
+      <name>Performance Monitoring</name>
+      <description>
+        timedWrite and timedRead wrappers track database operation latency
+        and log slow queries (>100ms threshold).
+      </description>
+      <code><![CDATA[
+private let debugSlowQueries = true
+private let slowThresholdMs: Double = 100  // Log anything over 100ms
+
+private func timedWrite<T>(_ label: String, _ block: (Database) throws -> T) throws -> T {
+    let start = CFAbsoluteTimeGetCurrent()
+    let result = try db.write { db in
+        try block(db)
+    }
+    let duration = (CFAbsoluteTimeGetCurrent() - start) * 1000
+
+    if debugSlowQueries && duration > slowThresholdMs {
+        print("⚠️ SLOW WRITE [\(label)]: \(Int(duration))ms")
+    }
+
+    return result
+}
+      ]]></code>
+    </pattern>
+
+    <pattern>
+      <name>No @MainActor Isolation</name>
+      <description>
+        StorageManager is intentionally NOT @MainActor isolated, allowing
+        calls from any thread/actor without hopping to main thread.
+      </description>
+      <code><![CDATA[
+/// _No_ `@MainActor` isolation ⇒ can be called from any thread/actor.
+/// If you add UI‑touching methods later, isolate **those** individually.
+protocol StorageManaging: Sendable {
+    // ...
+}
+      ]]></code>
+    </pattern>
+
+    <anti-patterns>
+      <avoid>
+        <name>Direct Database Access</name>
+        <description>Never access db directly outside of timedRead/timedWrite wrappers</description>
+        <reason>Bypasses performance monitoring and error tracking</reason>
+      </avoid>
+
+      <avoid>
+        <name>Long-Running Transactions</name>
+        <description>Keep write transactions short and focused</description>
+        <reason>Can block other writers and cause contention</reason>
+      </avoid>
+
+      <avoid>
+        <name>Main Thread Database Operations</name>
+        <description>Never call database methods directly from main thread in UI code</description>
+        <reason>Can freeze UI. Use Task {} or async/await to move to background</reason>
+      </avoid>
+    </anti-patterns>
+  </threading-patterns>
+
+  <!-- ============================================================ -->
+  <!-- INTEGRATION POINTS -->
+  <!-- ============================================================ -->
+  <integration-points>
+    <integration>
+      <component>LLMService</component>
+      <file>Dayflow/Dayflow/Core/AI/LLMService.swift</file>
+      <description>
+        LLMService processes batches and creates timeline cards using StorageManager.
+        After LLM analysis completes, it calls replaceTimelineCardsInRange to insert new cards.
+      </description>
+      <code-reference>
+        <location>Lines 385-403</location>
+        <code><![CDATA[
+// Replace old cards with new ones in the time range
+let (insertedCardIds, deletedVideoPaths) = StorageManager.shared.replaceTimelineCardsInRange(
+    from: oneHourAgo,
+    to: currentTime,
+    with: cards.map { card in
+        TimelineCardShell(
+            startTimestamp: card.startTime,
+            endTimestamp: card.endTime,
+            category: card.category,
+            subcategory: card.subcategory,
+            title: card.title,
+            summary: card.summary,
+            detailedSummary: card.detailedSummary,
+            distractions: card.distractions,
+            appSites: card.appSites
+        )
+    },
+    batchId: batchId
+)
+        ]]></code>
+      </code-reference>
+    </integration>
+
+    <integration>
+      <component>AnalysisManager</component>
+      <file>Dayflow/Dayflow/Core/Analysis/AnalysisManager.swift</file>
+      <description>
+        AnalysisManager orchestrates batch processing and reprocessing workflows.
+        It uses StorageManager for:
+        - Deleting timeline cards during reprocessing
+        - Resetting batch statuses
+        - Fetching batches for a day
+        - Managing observations
+      </description>
+      <code-reference>
+        <location>Lines 85-110</location>
+        <code><![CDATA[
+// 1. Delete existing timeline cards and get video paths to clean up
+let videoPaths = self.store.deleteTimelineCards(forDay: day)
+
+// 2. Clean up video files
+for path in videoPaths {
+    if let url = URL(string: path) {
+        try? FileManager.default.removeItem(at: url)
+    }
+}
+
+// 3. Get all batch IDs for the day before resetting
+let batches = self.store.fetchBatches(forDay: day)
+let batchIds = batches.map { $0.id }
+
+// 4. Delete observations for these batches
+self.store.deleteObservations(forBatchIds: batchIds)
+
+// 5. Reset batch statuses to pending
+let resetBatchIds = self.store.resetBatchStatuses(forDay: day)
+        ]]></code>
+      </code-reference>
+    </integration>
+
+    <integration>
+      <component>CanvasTimelineDataView</component>
+      <file>Dayflow/Dayflow/Views/UI/CanvasTimelineDataView.swift</file>
+      <description>
+        Main UI component that displays timeline cards. Fetches cards for
+        a specific day using StorageManager.fetchTimelineCards(forDay:).
+      </description>
+      <code-reference>
+        <location>Lines 295-305</location>
+        <code><![CDATA[
+let dayString = formatter.string(from: timelineDate)
+
+// Check for cancellation before expensive database read
+guard !Task.isCancelled else { return }
+
+let timelineCards = self.storageManager.fetchTimelineCards(forDay: dayString)
+let activities = await self.processTimelineCards(timelineCards, for: timelineDate)
+
+// Check for cancellation before expensive processing
+guard !Task.isCancelled else { return }
+        ]]></code>
+      </code-reference>
+      <notes>
+        - Runs in Task {} to avoid blocking main thread
+        - Checks for cancellation before expensive operations
+        - Converts TimelineCard to TimelineActivity for display
+      </notes>
+    </integration>
+
+    <integration>
+      <component>ScreenRecorder</component>
+      <file>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</file>
+      <description>
+        Records screen and creates video chunks. Uses StorageManager for:
+        - Getting next file URL (nextFileURL)
+        - Registering chunks (registerChunk)
+        - Marking chunks complete (markChunkCompleted)
+      </description>
+      <threading-model>
+        <queue>DispatchQueue(label: "com.dayflow.recorder", qos: .userInitiated)</queue>
+        <pattern>Serial queue pattern with state machine</pattern>
+        <states>idle, starting, recording, finishing, paused</states>
+      </threading-model>
+    </integration>
+  </integration-points>
+
+  <!-- ============================================================ -->
+  <!-- DEPENDENCIES -->
+  <!-- ============================================================ -->
+  <dependencies>
+    <external-dependencies>
+      <dependency>
+        <name>GRDB.swift</name>
+        <version>7.8.0</version>
+        <repository>https://github.com/groue/GRDB.swift</repository>
+        <purpose>SQLite database toolkit with type-safe queries</purpose>
+        <key-features>
+          - DatabasePool for concurrent reads, serialized writes
+          - Row type for flexible query results
+          - Database migrations
+          - WAL mode support
+          - Performance monitoring
+        </key-features>
+      </dependency>
+
+      <dependency>
+        <name>Sentry</name>
+        <version>8.56.2</version>
+        <purpose>Error tracking and performance monitoring</purpose>
+      </dependency>
+
+      <dependency>
+        <name>PostHog</name>
+        <version>3.31.0</version>
+        <purpose>Analytics and feature flags</purpose>
+      </dependency>
+    </external-dependencies>
+
+    <internal-dependencies>
+      <dependency>
+        <name>TimelineActivity</name>
+        <file>Dayflow/Dayflow/Views/UI/TimelineDataModels.swift</file>
+        <description>UI model for displaying timeline cards</description>
+      </dependency>
+
+      <dependency>
+        <name>TimelineCategory</name>
+        <file>Dayflow/Dayflow/Models/TimelineCategory.swift</file>
+        <description>Category system for timeline cards</description>
+      </dependency>
+
+      <dependency>
+        <name>CategoryStore</name>
+        <file>Dayflow/Dayflow/Models/TimelineCategory.swift</file>
+        <description>Manages user-defined and system categories</description>
+      </dependency>
+    </internal-dependencies>
+  </dependencies>
+
+  <!-- ============================================================ -->
+  <!-- TECHNICAL CONSTRAINTS -->
+  <!-- ============================================================ -->
+  <technical-constraints>
+    <constraint>
+      <type>Performance</type>
+      <requirement>Timeline loads must complete in &lt; 2 seconds for 30 days of data</requirement>
+      <current-approach>
+        - Indexes on day, start_ts, and (start_ts, end_ts)
+        - Partial indexes for active cards (WHERE is_deleted = 0)
+        - Query only specific day needed
+      </current-approach>
+    </constraint>
+
+    <constraint>
+      <type>Data Integrity</type>
+      <requirement>Timeline cards must maintain referential integrity with batches</requirement>
+      <current-approach>
+        - Foreign key: batch_id REFERENCES analysis_batches(id) ON DELETE CASCADE
+        - Orphaned cards cleaned up when batch is deleted
+        - Soft delete pattern preserves data during reprocessing
+      </current-approach>
+    </constraint>
+
+    <constraint>
+      <type>Concurrency</type>
+      <requirement>Support concurrent reads while maintaining write serialization</requirement>
+      <current-approach>
+        - GRDB DatabasePool handles read/write separation
+        - WAL mode enables concurrent reads
+        - Single writer serialization prevents conflicts
+      </current-approach>
+    </constraint>
+
+    <constraint>
+      <type>Day Boundary Logic</type>
+      <requirement>Timeline days must use 4AM boundary, not midnight</requirement>
+      <current-approach>
+        - getDayInfoFor4AMBoundary() extension on Date
+        - All day calculations use this method
+        - Stored in database as YYYY-MM-DD string
+      </current-approach>
+    </constraint>
+
+    <constraint>
+      <type>Metadata Storage</type>
+      <requirement>Store complex nested data (distractions, appSites) in single field</requirement>
+      <current-approach>
+        - TimelineMetadata struct wraps both fields
+        - Encoded to JSON using JSONEncoder
+        - Stored in metadata TEXT column
+        - Decoded during fetch using JSONDecoder
+      </current-approach>
+    </constraint>
+
+    <constraint>
+      <type>Soft Delete</type>
+      <requirement>Preserve timeline cards during reprocessing workflows</requirement>
+      <current-approach>
+        - is_deleted INTEGER column (0 = active, 1 = deleted)
+        - Queries filter WHERE is_deleted = 0
+        - Reprocessing marks old cards deleted, inserts new ones
+        - Allows rollback if reprocessing fails
+      </current-approach>
+    </constraint>
+  </technical-constraints>
+
+  <!-- ============================================================ -->
+  <!-- CODE PATTERNS TO FOLLOW -->
+  <!-- ============================================================ -->
+  <code-patterns>
+    <pattern>
+      <name>Database Query Pattern</name>
+      <description>Always use timedRead/timedWrite wrappers</description>
+      <example><![CDATA[
+func fetchTimelineCards(forDay day: String) -> [TimelineCard] {
+    let cards: [TimelineCard]? = try? timedRead("fetchTimelineCards(forDay:\(day))") { db in
+        // Database operations here
+        try Row.fetchAll(db, sql: "SELECT * FROM timeline_cards WHERE day = ?", arguments: [day])
+            .compactMap { row -> TimelineCard? in
+                // Transform row to TimelineCard
+            }
+    }
+    return cards ?? []  // Always provide fallback
+}
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>JSON Encoding Pattern</name>
+      <description>Encode complex types to JSON for database storage</description>
+      <example><![CDATA[
+// Encoding
+let metadata = TimelineMetadata(
+    distractions: card.distractions,
+    appSites: card.appSites
+)
+let metadataJSON = try JSONEncoder().encode(metadata)
+let metadataString = String(data: metadataJSON, encoding: .utf8)
+
+// Decoding
+let metadataJSON: String? = row["metadata"]
+let metadata = metadataJSON.flatMap { json in
+    try? JSONDecoder().decode(
+        TimelineMetadata.self,
+        from: json.data(using: .utf8)!
+    )
+}
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>Day Calculation Pattern</name>
+      <description>Always use 4AM boundary for day calculations</description>
+      <example><![CDATA[
+// Get day string for a Date
+let dayInfo = date.getDayInfoFor4AMBoundary()
+let dayString = dayInfo.dayString  // "2025-11-13"
+let startOfDay = dayInfo.startOfDay  // 4AM on that day
+let endOfDay = dayInfo.endOfDay      // 4AM next day
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>Timestamp Parsing Pattern</name>
+      <description>Parse ISO8601 timestamps to Unix timestamps for indexing</description>
+      <example><![CDATA[
+let formatter = ISO8601DateFormatter()
+let startDate = formatter.date(from: card.startTimestamp)!
+let startTs = Int(startDate.timeIntervalSince1970)
+
+// Store both formats:
+// - ISO8601 string for display/serialization
+// - Unix timestamp for efficient querying/sorting
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>Error Handling Pattern</name>
+      <description>Use try? with fallback values for database operations</description>
+      <example><![CDATA[
+// For queries returning data
+let cards = try? timedRead("operation") { db in
+    // query
+}
+return cards ?? []  // Fallback to empty array
+
+// For mutations returning success
+let success = (try? timedWrite("operation") { db in
+    // mutation
+}) != nil
+return success
+      ]]></example>
+    </pattern>
+
+    <pattern>
+      <name>Soft Delete Pattern</name>
+      <description>Mark records as deleted instead of removing them</description>
+      <example><![CDATA[
+// Soft delete
+try db.execute(sql: """
+    UPDATE timeline_cards
+    SET is_deleted = 1
+    WHERE day = ?
+""", arguments: [day])
+
+// Query only active records
+try Row.fetchAll(db, sql: """
+    SELECT * FROM timeline_cards
+    WHERE day = ? AND is_deleted = 0
+    ORDER BY start_ts ASC
+""", arguments: [day])
+      ]]></example>
+    </pattern>
+  </code-patterns>
+
+  <!-- ============================================================ -->
+  <!-- TESTING CONTEXT -->
+  <!-- ============================================================ -->
+  <testing-context>
+    <existing-tests>
+      <file>Dayflow/Dayflow/DayflowTests/TimeParsingTests.swift</file>
+      <description>Tests for time parsing logic</description>
+    </existing-tests>
+
+    <existing-tests>
+      <file>Dayflow/Dayflow/DayflowTests/RecordingPipelineEdgeCaseTests.swift</file>
+      <description>Tests for recording pipeline edge cases</description>
+    </existing-tests>
+
+    <test-patterns>
+      <pattern>
+        <name>Database Test Setup</name>
+        <code><![CDATA[
+class TimelinePersistenceTests: XCTestCase {
+    var storageManager: StorageManager!
+
+    override func setUp() {
+        super.setUp()
+        // Use in-memory database for tests
+        storageManager = StorageManager.testInstance()
+    }
+
+    override func tearDown() {
+        storageManager = nil
+        super.tearDown()
+    }
+
+    func testTimelineCardPersistence() async throws {
+        let card = TimelineCardShell(
+            startTimestamp: "2025-11-13T10:00:00Z",
+            endTimestamp: "2025-11-13T11:00:00Z",
+            category: "Work",
+            subcategory: "Coding",
+            title: "Swift Development",
+            summary: "Working on database layer",
+            detailedSummary: "Implementing timeline persistence",
+            distractions: nil,
+            appSites: nil
+        )
+
+        let cardId = storageManager.saveTimelineCardShell(batchId: 1, card: card)
+        XCTAssertNotNil(cardId)
+
+        let cards = storageManager.fetchTimelineCards(forDay: "2025-11-13")
+        XCTAssertEqual(cards.count, 1)
+        XCTAssertEqual(cards.first?.title, "Swift Development")
+    }
+}
+        ]]></code>
+      </pattern>
+    </test-patterns>
+
+    <test-requirements>
+      <requirement>
+        <name>Persistence Tests</name>
+        <description>Verify cards persist across app restarts</description>
+        <approach>Use actual DatabasePool with temporary file</approach>
+      </requirement>
+
+      <requirement>
+        <name>Concurrent Access Tests</name>
+        <description>Test concurrent read/write operations</description>
+        <approach>Use DispatchQueue.concurrentPerform with read operations</approach>
+      </requirement>
+
+      <requirement>
+        <name>Data Integrity Tests</name>
+        <description>Verify timestamp consistency and foreign key integrity</description>
+        <approach>Test invalid data rejection and orphaned record cleanup</approach>
+      </requirement>
+
+      <requirement>
+        <name>Performance Tests</name>
+        <description>Ensure queries meet latency targets</description>
+        <approach>Use XCTestCase measure block with realistic data volumes</approach>
+      </requirement>
+    </test-requirements>
+  </testing-context>
+
+  <!-- ============================================================ -->
+  <!-- IMPLEMENTATION NOTES -->
+  <!-- ============================================================ -->
+  <implementation-notes>
+    <note priority="critical">
+      <title>4AM Boundary Logic is Non-Negotiable</title>
+      <description>
+        The entire app uses 4AM as the day boundary. This is a core
+        business rule that cannot be changed. All day calculations
+        MUST use getDayInfoFor4AMBoundary().
+      </description>
+    </note>
+
+    <note priority="critical">
+      <title>Thread Safety is Critical</title>
+      <description>
+        StorageManager is accessed from multiple threads/actors:
+        - ScreenRecorder (recorder queue)
+        - AnalysisManager (analysis queue)
+        - LLMService (various queues)
+        - UI views (main actor)
+
+        ALL database operations MUST go through DatabasePool's
+        read/write methods. Never access database directly.
+      </description>
+    </note>
+
+    <note priority="high">
+      <title>Metadata JSON Structure</title>
+      <description>
+        The metadata column stores JSON with this structure:
+        {
+          "distractions": [
+            {
+              "id": "UUID",
+              "startTime": "10:30 AM",
+              "endTime": "10:45 AM",
+              "title": "Distraction title",
+              "summary": "What happened",
+              "videoSummaryURL": null
+            }
+          ],
+          "appSites": {
+            "primary": "App or domain name",
+            "secondary": "Secondary app or domain"
+          }
+        }
+
+        This structure must be maintained for backward compatibility.
+      </description>
+    </note>
+
+    <note priority="high">
+      <title>Performance Monitoring</title>
+      <description>
+        All database operations are wrapped in timedRead/timedWrite
+        which log slow queries (>100ms). This is essential for
+        identifying performance bottlenecks. Do not bypass these
+        wrappers.
+      </description>
+    </note>
+
+    <note priority="medium">
+      <title>Soft Delete Pattern</title>
+      <description>
+        Timeline cards use soft delete (is_deleted column) to enable
+        rollback during reprocessing. When reprocessing a day:
+
+        1. Mark old cards as deleted (is_deleted = 1)
+        2. Insert new cards from LLM analysis
+        3. If processing fails, can restore old cards
+        4. Periodic cleanup removes old deleted cards
+
+        This pattern is critical for data reliability.
+      </description>
+    </note>
+
+    <note priority="medium">
+      <title>Video URL Management</title>
+      <description>
+        Video summary URLs are set in two stages:
+
+        1. saveTimelineCardShell() - creates card without video URL
+        2. updateTimelineCardVideoURL() - adds video URL later
+
+        This is because video generation happens after card creation.
+        Video URLs may be cleared when recordings are purged based
+        on retention policy.
+      </description>
+    </note>
+
+    <note priority="low">
+      <title>Database Migration Strategy</title>
+      <description>
+        Database schema changes are handled in migrate() function.
+        New columns are added with ALTER TABLE. Existing data is
+        preserved. Migration is idempotent (safe to run multiple times).
+      </description>
+    </note>
+  </implementation-notes>
+
+  <!-- ============================================================ -->
+  <!-- RELATED DOCUMENTATION -->
+  <!-- ============================================================ -->
+  <related-documentation>
+    <document>
+      <title>Epic 4 Technical Specification</title>
+      <path>docs/epics/epic-4-tech-spec.md</path>
+      <relevance>Comprehensive technical specification for database persistence</relevance>
+    </document>
+
+    <document>
+      <title>Story 4.1 User Story</title>
+      <path>docs/stories/4-1-timeline-data-persistence.md</path>
+      <relevance>Detailed requirements and acceptance criteria</relevance>
+    </document>
+
+    <document>
+      <title>Architecture Overview</title>
+      <path>docs/architecture.md</path>
+      <relevance>Overall system architecture and component interactions</relevance>
+    </document>
+
+    <document>
+      <title>Error Documentation</title>
+      <path>docs/errors.md</path>
+      <relevance>Common errors and troubleshooting guide</relevance>
+    </document>
+  </related-documentation>
+
+  <!-- ============================================================ -->
+  <!-- SUMMARY -->
+  <!-- ============================================================ -->
+  <summary>
+    <status>
+      Timeline data persistence is FULLY IMPLEMENTED with the following capabilities:
+
+      ✅ Database schema defined with timeline_cards table
+      ✅ GRDB 7.8.0 integration with DatabasePool (WAL mode)
+      ✅ Thread-safe operations using DatabasePool read/write pattern
+      ✅ saveTimelineCardShell() - creates timeline cards from LLM analysis
+      ✅ fetchTimelineCards(forDay:) - retrieves cards for a specific day
+      ✅ updateTimelineCardVideoURL() - adds video references post-creation
+      ✅ replaceTimelineCardsInRange() - supports reprocessing workflows
+      ✅ Soft delete pattern for data safety during reprocessing
+      ✅ 4AM boundary logic for day calculations
+      ✅ JSON metadata storage for distractions and appSites
+      ✅ Performance monitoring with timedRead/timedWrite wrappers
+      ✅ Integration with LLMService, AnalysisManager, and UI components
+
+      The implementation follows established patterns and is production-ready.
+      Story 4.1 can focus on:
+      - Adding additional validation and integrity checks
+      - Implementing caching layer for performance optimization
+      - Adding comprehensive test coverage
+      - Optimizing query performance for large datasets
+      - Adding data migration utilities
+    </status>
+
+    <key-files>
+      <file priority="1">Dayflow/Dayflow/Core/Recording/StorageManager.swift</file>
+      <file priority="2">Dayflow/Dayflow/Core/AI/LLMService.swift</file>
+      <file priority="2">Dayflow/Dayflow/Core/Analysis/AnalysisManager.swift</file>
+      <file priority="3">Dayflow/Dayflow/Views/UI/CanvasTimelineDataView.swift</file>
+      <file priority="3">Dayflow/Dayflow/Models/TimelineCategory.swift</file>
+      <file priority="3">Dayflow/Dayflow/Views/UI/TimelineDataModels.swift</file>
+      <file priority="4">Dayflow/Dayflow/Core/AI/LLMProvider.swift</file>
+      <file priority="4">Dayflow/Dayflow/Models/AnalysisModels.swift</file>
+    </key-files>
+
+    <next-steps>
+      1. Review existing implementation for any gaps vs requirements
+      2. Add data integrity validation functions
+      3. Implement caching layer (TimelineCache actor)
+      4. Add comprehensive unit tests (90%+ coverage target)
+      5. Add integration tests for concurrent operations
+      6. Add performance benchmarks
+      7. Implement automatic integrity checks on startup
+      8. Add data migration utilities for schema changes
+    </next-steps>
+  </summary>
+</story-context>
