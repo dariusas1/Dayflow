@@ -659,6 +659,15 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         guard CMSampleBufferDataIsReady(sb) else { return }
         guard isComplete(sb) else { return }
         if let pb = CMSampleBufferGetImageBuffer(sb) {
+            // Story 1.2: Register buffer with BufferManager for bounded memory management
+            // BufferManager automatically evicts oldest buffers when count exceeds 100
+            Task {
+                let bufferId = await BufferManager.shared.addBuffer(pb)
+                // Buffer will be automatically released when evicted or on cleanup
+                // No need to store bufferId since eviction is automatic (FIFO)
+                _ = bufferId
+            }
+
             overlayClock(on: pb)
         }
         if writer == nil { beginSegment() }
@@ -673,10 +682,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         }
 
         if inp.isReadyForMoreMediaData, w.status == .writing {
-            if inp.append(sb) { 
+            if inp.append(sb) {
                 frames += 1
-            } else { 
-                finishSegment() 
+            } else {
+                finishSegment()
             }
         }
     }

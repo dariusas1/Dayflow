@@ -1,0 +1,338 @@
+<story-context id="{bmad_folder}/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>1.2</storyId>
+    <title>Screen Recording Memory Cleanup</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-14</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/1-2-screen-recording-memory-cleanup.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a user recording screen activity</asA>
+    <iWant>video frame buffers to be properly managed</iWant>
+    <soThat>memory usage stays below 100MB during continuous recording</soThat>
+    <tasks>
+      - Task 1: Create BufferManager actor with bounded buffer pool (AC: 1.2.3, 1.2.6)
+        - Define BufferManagerProtocol with buffer lifecycle operations
+        - Implement actor BufferManager with singleton pattern
+        - Create internal ManagedBuffer struct to track buffer metadata (CVPixelBuffer, createdAt, id)
+        - Implement addBuffer(_ buffer: CVPixelBuffer) -> UUID with automatic eviction logic
+        - Implement releaseBuffer(_ id: UUID) with proper CVPixelBuffer lock/unlock
+        - Implement bufferCount() for diagnostics and monitoring
+        - Add FIFO eviction when buffer count exceeds maxBuffers (100)
+        - Implement deinit to ensure all buffers released on cleanup
+
+      - Task 2: Integrate BufferManager with ScreenRecorder (AC: 1.2.1, 1.2.5)
+        - Audit ScreenRecorder.swift for CVPixelBuffer creation points
+        - Identify stream(_:didOutputSampleBuffer:) callback as primary integration point
+        - Add BufferManager.shared.addBuffer() call in frame processing pipeline
+        - Ensure proper CVPixelBuffer locking before processing
+        - Ensure proper CVPixelBuffer unlocking after processing
+        - Add buffer release coordination with video encoding pipeline
+        - Verify frame buffers are not released while still in use by encoder
+
+      - Task 3: Implement memory usage monitoring (AC: 1.2.2, 1.2.4)
+        - Add memory tracking to BufferManager (current buffer count, total memory estimate)
+        - Integrate with MemoryMonitor (will be created in Story 1.4)
+        - Add logging for buffer allocation and eviction events
+        - Implement memory usage calculation: bufferCount * estimated bytes per frame
+        - Add diagnostic logging when memory exceeds thresholds
+        - Verify memory usage stays below 100MB baseline during recording
+
+      - Task 4: Create comprehensive test suite (AC: 1.2.3, 1.2.6)
+        - Write unit test: BufferManager initialization and singleton pattern
+        - Write unit test: Add single buffer and verify UUID returned
+        - Write unit test: Add 150 buffers, verify count stays at 100 (FIFO eviction)
+        - Write unit test: Release specific buffer by UUID
+        - Write unit test: Verify oldest buffers evicted first (FIFO order)
+        - Write unit test: CVPixelBuffer lock/unlock calls verified
+        - Write performance test: Measure P99 buffer allocation time (&lt;10ms target)
+        - Write integration test: ScreenRecorder + BufferManager end-to-end
+
+      - Task 5: Memory leak detection and long-running validation (AC: 1.2.1, 1.2.4)
+        - Create stress test: Continuous buffer allocation for 1 hour
+        - Monitor memory usage every 10 seconds during stress test
+        - Verify no memory growth beyond initial baseline
+        - Test with Instruments Leaks tool to detect CVPixelBuffer leaks
+        - Validate memory usage remains stable over 8-hour recording session
+        - Create test harness to simulate 1 FPS frame capture for extended duration
+
+      - Task 6: Integration with video encoding pipeline (AC: 1.2.5)
+        - Coordinate buffer lifecycle with video encoder
+        - Add reference counting if encoder retains buffers
+        - Ensure buffers not released while encoder is processing
+        - Test frame drops or visual artifacts after buffer eviction
+        - Verify video quality not impacted by buffer management
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    AC-1.2.1: Screen recording runs continuously for 1+ hours with stable memory usage
+    AC-1.2.2: Memory usage remains below 100MB during continuous recording (excluding AI processing spikes)
+    AC-1.2.3: BufferManager automatically evicts oldest buffers when count exceeds 100 frames
+    AC-1.2.4: No memory leaks detected in screen recording pipeline over 8-hour session
+    AC-1.2.5: All CVPixelBuffer instances properly locked/unlocked and released on eviction
+    AC-1.2.6: Buffer allocation time remains &lt;10ms for 99th percentile
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic Technical Specification: Critical Memory Management Rescue</title>
+        <section>Story 1.2: Screen Recording Memory Cleanup</section>
+        <snippet>Epic 1 addresses critical memory management failures. Story 1.2 implements bounded video frame buffer management with automatic cleanup (max 100 frames). Root cause: Screen recording captures video frames at 1 FPS, creating CVPixelBuffer instances that accumulate in memory without bounded management.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic Technical Specification</title>
+        <section>Data Models and Contracts - BufferManager Data Model</section>
+        <snippet>BufferManager actor with ManagedBuffer struct tracking CVPixelBuffer, createdAt, id. FIFO eviction when buffer count exceeds maxBuffers (100). Actor isolation provides thread-safe access to buffer pool.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic Technical Specification</title>
+        <section>Integration Points - ScreenRecorder → BufferManager</section>
+        <snippet>Integration point in ScreenRecorder.stream(_:didOutputSampleBuffer:) at lines 657-682. Register buffer with BufferManager, automatic release when count exceeds 100. Coordinate with video encoder to prevent premature release.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic Technical Specification</title>
+        <section>Non-Functional Requirements - Memory Usage Targets</section>
+        <snippet>Baseline idle: &lt;50MB. Active recording: &lt;100MB during continuous 1 FPS capture. Buffer pool: ~100MB maximum (100 frames × ~1MB per frame). No memory leak threshold: No &gt;5% memory increase over 1-hour period.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-2-screen-recording-memory-cleanup.md</path>
+        <title>Story 1.2: Screen Recording Memory Cleanup</title>
+        <section>Dev Notes - Architecture Patterns</section>
+        <snippet>Bounded Buffer Pool Pattern: Actor-based BufferManager managing up to 100 CVPixelBuffer instances with FIFO eviction. CVPixelBuffer Memory Management: Proper locking/unlocking with CVPixelBufferLockBaseAddress/UnlockBaseAddress. Must coordinate with video encoder to prevent premature release.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-2-screen-recording-memory-cleanup.md</path>
+        <title>Story 1.2</title>
+        <section>Learnings from Previous Story</section>
+        <snippet>Story 1.1 established actor-based singleton pattern with DatabaseManager. Follow similar structure: actor isolation, protocol definition, comprehensive error handling. Use serial DispatchQueue with QoS .userInitiated if needed. Replace fatalError() calls with proper error handling.</snippet>
+      </doc>
+    </docs>
+
+    <code>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>ScreenRecorder.stream(_:didOutputSampleBuffer:of:)</symbol>
+        <lines>657-682</lines>
+        <reason>Primary integration point for BufferManager. This callback receives CVPixelBuffer instances that need lifecycle management. Currently unbounded retention leads to memory accumulation.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift</path>
+        <kind>service</kind>
+        <symbol>ScreenRecorder.overlayClock(on:)</symbol>
+        <lines>829-876</lines>
+        <reason>Example of proper CVPixelBuffer lock/unlock pattern. Shows CVPixelBufferLockBaseAddress() before access and CVPixelBufferUnlockBaseAddress() in defer block. Pattern to follow in BufferManager.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift</path>
+        <kind>actor</kind>
+        <symbol>DatabaseManager</symbol>
+        <lines>1-328</lines>
+        <reason>Reference pattern from Story 1.1 for actor-based singleton with serial queue. Shows error handling, logging with os.log, graceful degradation. BufferManager should follow similar architectural pattern.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManagerProtocol.swift</path>
+        <kind>protocol</kind>
+        <symbol>DatabaseManagerProtocol</symbol>
+        <lines>1-34</lines>
+        <reason>Protocol pattern to follow for BufferManagerProtocol. Shows Sendable conformance requirement for cross-actor safety. Defines async operations with error handling.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>service</kind>
+        <symbol>StorageManager</symbol>
+        <lines>1-100</lines>
+        <reason>Shows how recording chunks are managed and registered. BufferManager will coordinate with this for video file lifecycle. Interface shows async patterns established in Story 1.1.</reason>
+      </file>
+      <file>
+        <path>Dayflow/Dayflow/Models/AnalysisModels.swift</path>
+        <kind>model</kind>
+        <symbol>RecordingChunk</symbol>
+        <lines>12-22</lines>
+        <reason>Shows Sendable conformance pattern for models crossing actor boundaries. RecordingChunk model represents video chunks that contain the CVPixelBuffer frames managed by BufferManager.</reason>
+      </file>
+      <file>
+        <path>DayflowTests/DatabaseManagerTests.swift</path>
+        <kind>test</kind>
+        <symbol>DatabaseManagerTests</symbol>
+        <lines>1-50</lines>
+        <reason>Reference test pattern from Story 1.1. Shows comprehensive test structure: initialization tests, thread safety tests, performance tests. BufferManagerTests should follow similar structure and naming conventions.</reason>
+      </file>
+    </code>
+
+    <dependencies>
+      <swift>
+        <package name="GRDB.swift" version="7.8.0">Database persistence (not directly used by BufferManager but used by DatabaseManager pattern reference)</package>
+        <package name="Sentry" version="8.56.2">Error tracking and breadcrumb logging for diagnostics</package>
+        <package name="PostHog" version="3.31.0">Product analytics (optional, sampling enabled)</package>
+        <package name="Sparkle" version="2.7.1">Automatic updates (no direct Epic 1 dependency)</package>
+      </swift>
+      <frameworks>
+        <framework name="AVFoundation">Core framework for CVPixelBuffer management, video encoding, CMSampleBuffer processing</framework>
+        <framework name="ScreenCaptureKit">Screen capture stream integration (existing, provides CVPixelBuffer instances)</framework>
+        <framework name="Foundation">Core Swift framework for UUID generation, Date handling, system primitives</framework>
+        <framework name="os.log">Structured logging for observability (pattern from DatabaseManager)</framework>
+      </frameworks>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    - Follow actor-based singleton pattern established in Story 1.1 (DatabaseManager)
+    - Use Swift concurrency (async/await, actors) for thread safety
+    - Proper CVPixelBuffer lifecycle management: Lock before access, unlock after processing, release on eviction
+    - No fatalError() calls - handle all errors gracefully with proper error propagation
+    - All operations must be non-blocking on main thread
+    - FIFO (First-In-First-Out) eviction strategy for oldest buffers when capacity reached
+    - Maximum 100 buffer retention (100 frames at 1 FPS = 100 seconds of video history)
+    - Buffer allocation must complete in &lt;10ms for P99 latency
+    - Memory usage target: &lt;100MB during continuous recording (baseline, excluding AI spikes)
+    - Must coordinate with video encoder - never release buffers still in use by encoding pipeline
+    - Use os.log for structured logging with privacy annotations
+    - macOS 13.0+ (Ventura) minimum OS requirement
+    - All models crossing actor boundaries must conform to Sendable protocol
+    - Use DispatchQueue with QoS .userInitiated if serial queue needed (pattern from DatabaseManager)
+    - Add Sentry breadcrumbs for significant buffer lifecycle events (allocation, eviction, errors)
+    - Zero memory leaks required for acceptance - validate with 8-hour recording session
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>BufferManagerProtocol</name>
+      <kind>Swift Protocol</kind>
+      <signature>
+protocol BufferManagerProtocol: Sendable {
+    /// Add a buffer to the managed pool, automatically evicting oldest if at capacity
+    /// Returns: UUID identifier for the buffer
+    func addBuffer(_ buffer: CVPixelBuffer) async -> UUID
+
+    /// Remove and release a specific buffer
+    /// Parameter id: UUID of buffer to release
+    func releaseBuffer(_ id: UUID) async
+
+    /// Get current buffer count for diagnostics
+    /// Returns: Number of buffers currently managed
+    func bufferCount() async -> Int
+}
+      </signature>
+      <path>Dayflow/Dayflow/Core/Recording/BufferManagerProtocol.swift (NEW)</path>
+    </interface>
+
+    <interface>
+      <name>BufferManager Actor</name>
+      <kind>Swift Actor</kind>
+      <signature>
+actor BufferManager: BufferManagerProtocol {
+    static let shared: BufferManager
+
+    private struct ManagedBuffer {
+        let buffer: CVPixelBuffer
+        let createdAt: Date
+        let id: UUID
+    }
+
+    private var buffers: [UUID: ManagedBuffer] = [:]
+    private let maxBuffers: Int = 100
+
+    func addBuffer(_ buffer: CVPixelBuffer) async -> UUID
+    func releaseBuffer(_ id: UUID) async
+    func bufferCount() async -> Int
+}
+      </signature>
+      <path>Dayflow/Dayflow/Core/Recording/BufferManager.swift (NEW)</path>
+    </interface>
+
+    <interface>
+      <name>ScreenRecorder Integration Point</name>
+      <kind>Swift Method Modification</kind>
+      <signature>
+// In ScreenRecorder.stream(_:didOutputSampleBuffer:of:)
+func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
+    guard type == .screen else { return }
+    guard CMSampleBufferDataIsReady(sb) else { return }
+    guard isComplete(sb) else { return }
+
+    // NEW: Register buffer with BufferManager
+    if let pb = CMSampleBufferGetImageBuffer(sb) {
+        Task {
+            let bufferId = await BufferManager.shared.addBuffer(pb)
+            // Buffer automatically released when count exceeds 100
+        }
+        overlayClock(on: pb)
+    }
+
+    // Existing video encoding logic continues...
+}
+      </signature>
+      <path>Dayflow/Dayflow/Core/Recording/ScreenRecorder.swift (MODIFIED)</path>
+    </interface>
+
+    <interface>
+      <name>DatabaseManagerProtocol Pattern Reference</name>
+      <kind>Swift Protocol (Reference)</kind>
+      <signature>
+protocol DatabaseManagerProtocol: Sendable {
+    func read&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -> T) async throws -> T
+    func write&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -> T) async throws -> T
+    func transaction&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -> T) async throws -> T
+}
+      </signature>
+      <path>Dayflow/Dayflow/Core/Database/DatabaseManagerProtocol.swift (REFERENCE - Story 1.1)</path>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      Framework: XCTest for all unit, integration, and performance tests. Follow patterns established in DatabaseManagerTests from Story 1.1: async test methods, comprehensive error handling, performance measurement with XCTMetric. Use XCTestCase for unit tests, XCUITest for UI validation. Target &gt;80% code coverage for new components (BufferManager). Use @testable import for internal access. Performance tests use measureMetrics with wall clock time and memory metrics. Stress tests simulate production loads (1-hour, 8-hour sessions).
+    </standards>
+
+    <locations>
+      DayflowTests/BufferManagerTests.swift (NEW) - Comprehensive unit tests for BufferManager
+      DayflowTests/ScreenRecorderMemoryTests.swift (NEW) - Memory leak detection and integration tests
+      DayflowTests/ - Existing test directory with patterns to follow (DatabaseManagerTests.swift, StorageManagerThreadingTests.swift)
+    </locations>
+
+    <ideas>
+      AC-1.2.1 (Continuous 1+ hour recording with stable memory):
+        - Integration test: Start recording, run for 1 hour simulated time (accelerated with mocked frame delivery), verify no crashes
+        - System test: Real 1-hour recording session, monitor memory usage every 10 seconds
+
+      AC-1.2.2 (Memory usage &lt;100MB during continuous recording):
+        - Performance test: Monitor actual memory usage during simulated recording session
+        - Use XCTestCase performance metrics to measure memory footprint baseline
+        - Verify memory stays within 100MB threshold (excluding AI processing spikes)
+
+      AC-1.2.3 (BufferManager automatic eviction when count exceeds 100):
+        - Unit test: Add exactly 100 buffers, verify count = 100
+        - Unit test: Add 101st buffer, verify count still = 100 (oldest evicted)
+        - Unit test: Add 150 buffers rapidly, verify count stays at 100 throughout
+        - Unit test: Verify FIFO order - oldest buffer ID no longer present after eviction
+
+      AC-1.2.4 (No memory leaks over 8-hour session):
+        - Stress test: Simulate 8-hour recording session (accelerated)
+        - Use Instruments Leaks tool integration to detect CVPixelBuffer leaks
+        - Monitor memory baseline at start and every hour, verify no growth &gt;5%
+        - Test harness to create/destroy buffers continuously for extended duration
+
+      AC-1.2.5 (CVPixelBuffer proper lock/unlock and release):
+        - Unit test: Mock CVPixelBuffer operations, verify lock called before access
+        - Unit test: Verify unlock called in all code paths (success and error)
+        - Unit test: Verify buffer released on eviction (reference count decrements)
+        - Use XCTest expectations to verify proper cleanup in async contexts
+
+      AC-1.2.6 (Buffer allocation time &lt;10ms P99):
+        - Performance test: Measure addBuffer() latency for 1000 consecutive calls
+        - Use XCTMetric to calculate P95, P99 percentiles
+        - Target: P99 &lt;10ms, P95 &lt;5ms for buffer allocation
+        - Test under various loads: idle, active encoding, background AI processing
+    </ideas>
+  </tests>
+</story-context>
