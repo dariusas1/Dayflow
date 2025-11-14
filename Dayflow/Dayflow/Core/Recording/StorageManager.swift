@@ -106,6 +106,10 @@ protocol StorageManaging: Sendable {
     
     /// All batches, newest first
     func allBatches() -> [(id: Int64, start: Int, end: Int, status: String)]
+
+    // Data Integrity Validation
+    func validateTimelineCardIntegrity() -> [String]
+    func getIntegrityStatistics() -> IntegrityStatistics
 }
 
 
@@ -284,6 +288,21 @@ struct TimelineCardWithTimestamps {
     let videoSummaryURL: String?
 }
 
+// Integrity statistics for database health monitoring
+struct IntegrityStatistics: Sendable {
+    let totalCards: Int
+    let totalBatches: Int
+    let totalObservations: Int
+    let cardsWithInvalidTimestamps: Int
+    let orphanedCards: Int
+    let orphanedObservations: Int
+    let cardsWithMissingRequiredFields: Int
+    let daysWithCards: Int
+    let averageCardsPerDay: Double
+    let oldestCardDate: String?
+    let newestCardDate: String?
+}
+
 
 final class StorageManager: StorageManaging, @unchecked Sendable {
     static let shared = StorageManager()
@@ -323,6 +342,9 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
     // Dedicated queue for database writes to prevent main thread blocking
     private let dbWriteQueue = DispatchQueue(label: "com.dayflow.storage.writes", qos: .utility)
+
+    // Timeline cache for performance optimization
+    private let timelineCache = TimelineCache(cacheDuration: 60.0, maxCacheSize: 30)
 
     private init() {
         UserDefaultsMigrator.migrateIfNeeded()
@@ -1155,21 +1177,26 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
 
 
     func fetchTimelineCards(forDay day: String) -> [TimelineCard] {
+        // Check cache first
+        if let cachedCards = timelineCache.getCachedCards(forDay: day) {
+            return cachedCards
+        }
+
         let decoder = JSONDecoder()
-        
+
         guard let dayDate = dateFormatter.date(from: day) else {
             return []
         }
-        
+
         let calendar = Calendar.current
-        
+
         // Get 4 AM of the given day as the start
         var startComponents = calendar.dateComponents([.year, .month, .day], from: dayDate)
         startComponents.hour = 4
         startComponents.minute = 0
         startComponents.second = 0
         guard let dayStart = calendar.date(from: startComponents) else { return [] }
-        
+
         // Get 4 AM of the next day as the end
         guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayDate) else { return [] }
         var endComponents = calendar.dateComponents([.year, .month, .day], from: nextDay)
@@ -1177,7 +1204,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
         endComponents.minute = 0
         endComponents.second = 0
         guard let dayEnd = calendar.date(from: endComponents) else { return [] }
-        
+
         let startTs = Int(dayStart.timeIntervalSince1970)
         let endTs = Int(dayEnd.timeIntervalSince1970)
 
@@ -1220,7 +1247,14 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 )
             }
         }
-        return cards ?? []
+        let fetchedCards = cards ?? []
+
+        // Cache the results for future queries
+        if !fetchedCards.isEmpty {
+            timelineCache.cacheCards(fetchedCards, forDay: day)
+        }
+
+        return fetchedCards
     }
 
     func fetchTimelineCardsByTimeRange(from: Date, to: Date) -> [TimelineCard] {
@@ -1542,7 +1576,18 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 insertedIds.append(insertedId)
             }
         }
-        
+
+        // Invalidate cache for affected days
+        // Calculate which days are affected by the time range
+        let calendar = Calendar.current
+        var currentDate = from
+        while currentDate < to {
+            let (dayString, _, _) = currentDate.getDayInfoFor4AMBoundary()
+            timelineCache.invalidate(forDay: dayString)
+            guard let nextDate = calendar.date(byAdding: .day, value: 1, to: currentDate) else { break }
+            currentDate = nextDate
+        }
+
         return (insertedIds, videoPaths)
     }
 
@@ -1776,7 +1821,10 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                   AND is_deleted = 0
             """, arguments: [startTs, endTs])
         }
-        
+
+        // Invalidate cache for this day
+        timelineCache.invalidate(forDay: day)
+
         return videoPaths
     }
 
@@ -3113,6 +3161,201 @@ private extension StorageManager {
             let logger = Logger(subsystem: "Dayflow", category: "StorageManager")
             logger.error("Failed to track database growth: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Data Integrity Validation
+
+    /// Validates timeline card data integrity and returns a list of issues found
+    func validateTimelineCardIntegrity() -> [String] {
+        var issues: [String] = []
+
+        // Check for invalid timestamps (end_ts < start_ts)
+        let invalidTimestamps = (try? timedRead("validateIntegrity:invalidTimestamps") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE end_ts < start_ts
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        if invalidTimestamps > 0 {
+            issues.append("\(invalidTimestamps) timeline cards have invalid timestamps (end before start)")
+        }
+
+        // Check for orphaned timeline cards (batch_id references non-existent batch)
+        let orphanedCards = (try? timedRead("validateIntegrity:orphanedCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards tc
+                LEFT JOIN analysis_batches ab ON tc.batch_id = ab.id
+                WHERE tc.batch_id IS NOT NULL
+                  AND ab.id IS NULL
+                  AND tc.is_deleted = 0
+            """)
+        }) ?? 0
+
+        if orphanedCards > 0 {
+            issues.append("\(orphanedCards) timeline cards reference non-existent batches")
+        }
+
+        // Check for missing required fields (title, category, timestamps)
+        let missingFields = (try? timedRead("validateIntegrity:missingFields") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE (title IS NULL OR title = ''
+                   OR category IS NULL OR category = ''
+                   OR start IS NULL OR start = ''
+                   OR end IS NULL OR end = '')
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        if missingFields > 0 {
+            issues.append("\(missingFields) timeline cards have missing required fields")
+        }
+
+        // Check for day field consistency with start_ts (4AM boundary logic)
+        let inconsistentDays = (try? timedRead("validateIntegrity:inconsistentDays") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE is_deleted = 0
+                  AND day IS NOT NULL
+                  AND start_ts IS NOT NULL
+            """)
+        }) ?? 0
+
+        // For now, we just count cards with day field - more complex validation would require
+        // comparing the day field against the actual 4AM boundary calculation in Swift
+
+        // Check for orphaned observations (batch_id references non-existent batch)
+        let orphanedObs = (try? timedRead("validateIntegrity:orphanedObservations") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM observations o
+                LEFT JOIN analysis_batches ab ON o.batch_id = ab.id
+                WHERE ab.id IS NULL
+            """)
+        }) ?? 0
+
+        if orphanedObs > 0 {
+            issues.append("\(orphanedObs) observations reference non-existent batches")
+        }
+
+        // Check for batches without any chunks
+        let batchesWithoutChunks = (try? timedRead("validateIntegrity:batchesWithoutChunks") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM analysis_batches ab
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM batch_chunks bc
+                    WHERE bc.batch_id = ab.id
+                )
+            """)
+        }) ?? 0
+
+        if batchesWithoutChunks > 0 {
+            issues.append("\(batchesWithoutChunks) batches have no associated chunks")
+        }
+
+        if issues.isEmpty {
+            return ["Database integrity check passed - no issues found"]
+        }
+
+        return issues
+    }
+
+    /// Returns comprehensive statistics about database health and integrity
+    func getIntegrityStatistics() -> IntegrityStatistics {
+        let totalCards = (try? timedRead("integrityStats:totalCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE is_deleted = 0
+            """)
+        }) ?? 0
+
+        let totalBatches = (try? timedRead("integrityStats:totalBatches") { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM analysis_batches")
+        }) ?? 0
+
+        let totalObservations = (try? timedRead("integrityStats:totalObservations") { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM observations")
+        }) ?? 0
+
+        let invalidTimestamps = (try? timedRead("integrityStats:invalidTimestamps") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE end_ts < start_ts AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        let orphanedCards = (try? timedRead("integrityStats:orphanedCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards tc
+                LEFT JOIN analysis_batches ab ON tc.batch_id = ab.id
+                WHERE tc.batch_id IS NOT NULL
+                  AND ab.id IS NULL
+                  AND tc.is_deleted = 0
+            """)
+        }) ?? 0
+
+        let orphanedObservations = (try? timedRead("integrityStats:orphanedObservations") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM observations o
+                LEFT JOIN analysis_batches ab ON o.batch_id = ab.id
+                WHERE ab.id IS NULL
+            """)
+        }) ?? 0
+
+        let missingFields = (try? timedRead("integrityStats:missingFields") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(*) FROM timeline_cards
+                WHERE (title IS NULL OR title = ''
+                   OR category IS NULL OR category = ''
+                   OR start IS NULL OR start = ''
+                   OR end IS NULL OR end = '')
+                  AND is_deleted = 0
+            """)
+        }) ?? 0
+
+        let daysWithCards = (try? timedRead("integrityStats:daysWithCards") { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COUNT(DISTINCT day) FROM timeline_cards
+                WHERE is_deleted = 0
+            """)
+        }) ?? 0
+
+        let oldestDay: String? = try? timedRead("integrityStats:oldestDay") { db in
+            try String.fetchOne(db, sql: """
+                SELECT day FROM timeline_cards
+                WHERE is_deleted = 0
+                ORDER BY start_ts ASC
+                LIMIT 1
+            """)
+        }
+
+        let newestDay: String? = try? timedRead("integrityStats:newestDay") { db in
+            try String.fetchOne(db, sql: """
+                SELECT day FROM timeline_cards
+                WHERE is_deleted = 0
+                ORDER BY start_ts DESC
+                LIMIT 1
+            """)
+        }
+
+        let averageCardsPerDay: Double = daysWithCards > 0
+            ? Double(totalCards) / Double(daysWithCards)
+            : 0.0
+
+        return IntegrityStatistics(
+            totalCards: totalCards,
+            totalBatches: totalBatches,
+            totalObservations: totalObservations,
+            cardsWithInvalidTimestamps: invalidTimestamps,
+            orphanedCards: orphanedCards,
+            orphanedObservations: orphanedObservations,
+            cardsWithMissingRequiredFields: missingFields,
+            daysWithCards: daysWithCards,
+            averageCardsPerDay: averageCardsPerDay,
+            oldestCardDate: oldestDay,
+            newestCardDate: newestDay
+        )
     }
 }
 

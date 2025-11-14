@@ -68,7 +68,7 @@ epics:
     stories:
       - id: "4-1-timeline-data-persistence"
         title: "Timeline Data Persistence"
-        status: "backlog"
+        status: "review"
       - id: "4-2-recording-chunk-management"
         title: "Recording Chunk Management"
         status: "backlog"
