@@ -467,7 +467,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         ]
         SentryHelper.addBreadcrumb(beginBreadcrumb)
 
-        StorageManager.shared.registerChunk(url: url)
+        // Story 1.3: Updated for async database operations
+        Task {
+            try? await StorageManager.shared.registerChunk(url: url)
+        }
         do {
             let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
             
@@ -543,7 +546,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             transition(to: .recording, context: "segment started")
         } catch {
             dbg("writer creation failed – \(error.localizedDescription)")
-            StorageManager.shared.markChunkFailed(url: url); reset()
+            // Story 1.3: Updated for async database operations
+            Task {
+                try? await StorageManager.shared.markChunkFailed(url: url)
+            }
+            reset()
         }
     }
 
@@ -577,7 +584,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
         // ── EARLY EXIT ────────────────────────────────────────────────────
         guard frames > 0 else {
             w.cancelWriting()
-            StorageManager.shared.markChunkFailed(url: url)
+            // Story 1.3: Updated for async database operations
+            Task {
+                try? await StorageManager.shared.markChunkFailed(url: url)
+            }
             reset()
             transition(to: .idle, context: "finishSegment - no frames")
             return
@@ -586,7 +596,10 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
 
         guard w.status == .writing else {
             w.cancelWriting()
-            StorageManager.shared.markChunkFailed(url: url)
+            // Story 1.3: Updated for async database operations
+            Task {
+                try? await StorageManager.shared.markChunkFailed(url: url)
+            }
             reset()
             transition(to: .idle, context: "finishSegment - writer not writing")
             return
@@ -603,11 +616,13 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             self.q.async { [weak self] in
                 guard let self = self else { return }
 
-                // Mark chunk completion status
-                if w.status == .completed {
-                    StorageManager.shared.markChunkCompleted(url: url)
-                } else {
-                    StorageManager.shared.markChunkFailed(url: url)
+                // Mark chunk completion status (Story 1.3: updated for async database operations)
+                Task {
+                    if w.status == .completed {
+                        try? await StorageManager.shared.markChunkCompleted(url: url)
+                    } else {
+                        try? await StorageManager.shared.markChunkFailed(url: url)
+                    }
                 }
 
                 // Reset recorder state (NOW SAFE - on recorder queue)

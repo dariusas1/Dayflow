@@ -1,0 +1,357 @@
+<story-context id="bmad/bmm/workflows/4-implementation/story-context/template" v="1.0">
+  <metadata>
+    <epicId>1</epicId>
+    <storyId>1.3</storyId>
+    <title>Thread-Safe Database Operations</title>
+    <status>drafted</status>
+    <generatedAt>2025-11-14</generatedAt>
+    <generator>BMAD Story Context Workflow</generator>
+    <sourceStoryPath>docs/stories/1-3-thread-safe-database-operations.md</sourceStoryPath>
+  </metadata>
+
+  <story>
+    <asA>a developer working with the database</asA>
+    <iWant>all database operations to be thread-safe</iWant>
+    <soThat>background analysis doesn't crash the application</soThat>
+    <tasks>
+      <task id="1" priority="high">
+        <title>Audit all remaining database access points in StorageManager</title>
+        <description>Search codebase for all direct `db.read` and `db.write` calls in StorageManager. Document each method's current database access pattern. Categorize methods by criticality (crash-prone vs. safe). Identify methods called from background threads vs. main thread. Create migration priority list based on thread-safety risk. Document findings in completion notes.</description>
+        <acceptanceCriteria>AC-1.3.1</acceptanceCriteria>
+      </task>
+      <task id="2" priority="high">
+        <title>Migrate critical recording/batch methods to DatabaseManager</title>
+        <description>Convert registerChunk(), markChunkCompleted(), markChunkFailed(), fetchUnprocessedChunks(), saveBatch(), updateBatchStatus() to async and route through DatabaseManager.write() or DatabaseManager.read(). Update all callers to handle async context properly.</description>
+        <acceptanceCriteria>AC-1.3.1, AC-1.3.2</acceptanceCriteria>
+      </task>
+      <task id="3" priority="high">
+        <title>Migrate timeline card database methods</title>
+        <description>Convert saveTimelineCardShell(), updateTimelineCardVideoURL(), fetchTimelineCards(forBatch:), fetchTimelineCards(forDay:), fetchTimelineCardsByTimeRange() to async and route through DatabaseManager. Update UI layer to handle async timeline card loading with loading states.</description>
+        <acceptanceCriteria>AC-1.3.1, AC-1.3.5</acceptanceCriteria>
+      </task>
+      <task id="4" priority="medium">
+        <title>Migrate LLM metadata and analysis methods</title>
+        <description>Convert updateBatchLLMMetadata(), fetchBatchLLMMetadata(), fetchRecentAnalysisBatchesForDebug(), fetchLLMCallsForBatches(), insertLLMCall() to async and route through DatabaseManager. Update AnalysisManager and LLMService callers.</description>
+        <acceptanceCriteria>AC-1.3.1, AC-1.3.2</acceptanceCriteria>
+      </task>
+      <task id="5" priority="medium">
+        <title>Migrate remaining utility and debug methods</title>
+        <description>Convert fetchChunksInTimeRange(), getBatchStartTimestamp(), fetchRecentTimelineCardsForDebug(), fetchRecentLLMCallsForDebug(), fetchTimelineCard(byId:), getChunkFilesForBatch() to async and route through DatabaseManager. Update debug UI and utility callers.</description>
+        <acceptanceCriteria>AC-1.3.1</acceptanceCriteria>
+      </task>
+      <task id="6" priority="high">
+        <title>Update all callers to handle async database operations</title>
+        <description>Audit all callers of migrated methods across the codebase. Update synchronous contexts to wrap async calls in Task {}. Ensure main thread operations use proper async/await patterns. Add loading states to UI for async database operations. Verify no blocking operations remain on main thread. Test UI responsiveness during background database load.</description>
+        <acceptanceCriteria>AC-1.3.4</acceptanceCriteria>
+      </task>
+      <task id="7" priority="high">
+        <title>Configure and validate QoS for thread safety</title>
+        <description>Verify DatabaseManager queue QoS is `.userInitiated`. Test for priority inversion with background AI processing. Add logging for queue depth and operation latency. Monitor for QoS escalation during concurrent access. Validate background tasks don't block UI operations. Document QoS configuration decisions.</description>
+        <acceptanceCriteria>AC-1.3.3</acceptanceCriteria>
+      </task>
+      <task id="8" priority="high">
+        <title>Implement transaction isolation for batch operations</title>
+        <description>Review batch processing workflows for transaction boundaries. Wrap multi-step batch operations in DatabaseManager.transaction(). Test concurrent AI processing + timeline writes for isolation. Verify no dirty reads or write conflicts. Add transaction rollback error handling. Document transaction patterns for future development.</description>
+        <acceptanceCriteria>AC-1.3.5</acceptanceCriteria>
+      </task>
+      <task id="9" priority="high">
+        <title>Create comprehensive stress test suite</title>
+        <description>Design stress test: 50 concurrent AI analysis operations. Add UI interaction simulation during stress test. Implement test with mixed read/write operations. Monitor for crashes, priority inversion, deadlocks. Measure UI responsiveness during stress test. Validate P95 latency remains &lt;100ms under load. Test for data corruption or consistency issues.</description>
+        <acceptanceCriteria>AC-1.3.6</acceptanceCriteria>
+      </task>
+      <task id="10" priority="high">
+        <title>System validation and performance testing</title>
+        <description>Run stress test for 10 minutes with 50 concurrent operations. Measure UI response time during background database operations. Verify no crashes or memory leaks during stress test. Test real-world scenario: AI analysis + user browsing timeline. Validate database operation latency &lt;100ms P95. Check for any remaining direct database access patterns.</description>
+        <acceptanceCriteria>AC-1.3.2, AC-1.3.4</acceptanceCriteria>
+      </task>
+    </tasks>
+  </story>
+
+  <acceptanceCriteria>
+    <criterion id="AC-1.3.1">
+      <title>All remaining ~18 database access points in StorageManager audited and documented with thread-safety assessment</title>
+      <testIdea>Code audit: Search for all database access patterns in StorageManager, verify all migrated to DatabaseManager</testIdea>
+    </criterion>
+    <criterion id="AC-1.3.2">
+      <title>Background AI analysis runs concurrently with UI database access without crashes or priority inversion errors</title>
+      <testIdea>Integration test: Run AI analysis while UI loads timeline, verify no crashes. System test: 30-minute concurrent operation without issues</testIdea>
+    </criterion>
+    <criterion id="AC-1.3.3">
+      <title>No priority inversion errors detected (QoS configured correctly on database queue)</title>
+      <testIdea>Unit test: Verify queue QoS is `.userInitiated`. Monitor for priority inversion during concurrent operations</testIdea>
+    </criterion>
+    <criterion id="AC-1.3.4">
+      <title>UI remains responsive (&lt;200ms) during background database operations</title>
+      <testIdea>UI test: Measure UI response time during background database load. Performance test: Validate no blocking on main thread</testIdea>
+    </criterion>
+    <criterion id="AC-1.3.5">
+      <title>Database transactions properly isolated (AI processing doesn't interfere with recording writes)</title>
+      <testIdea>Integration test: Verify transaction isolation with concurrent operations. Test for dirty reads and write conflicts</testIdea>
+    </criterion>
+    <criterion id="AC-1.3.6">
+      <title>Stress test with 50 concurrent AI analysis + UI interactions completes without crashes</title>
+      <testIdea>Stress test: 50 concurrent AI + UI operations, verify no crashes, monitor for deadlocks and data corruption</testIdea>
+    </criterion>
+  </acceptanceCriteria>
+
+  <artifacts>
+    <docs>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1: Critical Memory Management Rescue - Technical Specification</title>
+        <section>Overview</section>
+        <snippet>Epic 1 addresses critical memory management failures that prevent FocusLock from running for more than 2 minutes without crashing. The root cause is concurrent access to GRDB database operations from multiple threads, specifically in StorageManager.chunksForBatch(), which triggers "freed pointer was not last allocation" errors.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Tech Spec</title>
+        <section>Detailed Design - Services and Modules</section>
+        <snippet>DatabaseManager provides serial queue wrapper for all GRDB operations. All database access must go through this single DispatchQueue with label com.focusLock.database to prevent concurrent access crashes. StorageManager depends on DatabaseManager for thread-safe database operations.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Tech Spec</title>
+        <section>Data Models and Contracts - DatabaseManager Protocol</section>
+        <snippet>DatabaseManagerProtocol defines read(), write(), and transaction() methods. All operations take closures that receive GRDB.Database and return Sendable results. Implementation uses actor isolation and serial DispatchQueue with QoS .userInitiated.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Tech Spec</title>
+        <section>Workflows and Sequencing - Story 1.3: Thread-Safe Database Operations</section>
+        <snippet>Audit all database access points in codebase (StorageManager, AnalysisManager, LLMService). Replace synchronous database calls with async DatabaseManager calls. Configure QoS for database serial queue: .userInitiated to prevent priority inversion. Add transaction isolation for batch operations. Update UI layer to handle async database calls.</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Tech Spec</title>
+        <section>Non-Functional Requirements - Performance</section>
+        <snippet>Database operations: &lt;50ms for read operations, &lt;100ms for write operations. Database transactions: Support 100+ transactions per second without queue buildup. UI responsiveness: No blocking operations on main thread (all database calls async).</snippet>
+      </doc>
+      <doc>
+        <path>docs/epics/epic-1-tech-spec.md</path>
+        <title>Epic 1 Tech Spec</title>
+        <section>Acceptance Criteria - Story 1.3</section>
+        <snippet>AC-1.3.1: All database access points audited and routed through DatabaseManager. AC-1.3.2: Background AI analysis runs concurrently with UI database access without crashes. AC-1.3.3: No priority inversion errors detected. AC-1.3.4: UI remains responsive (&lt;200ms) during background database operations. AC-1.3.5: Database transactions properly isolated. AC-1.3.6: Stress test with 50 concurrent operations completes without crashes.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-3-thread-safe-database-operations.md</path>
+        <title>Story 1.3: Thread-Safe Database Operations</title>
+        <section>Dev Notes - Architecture Patterns</section>
+        <snippet>Story 1.1 fixed the critical crash by migrating chunksForBatch() and allBatches(). Story 1.3 completes the migration by routing ALL remaining StorageManager database operations through DatabaseManager. DatabaseManager Serial Queue Pattern established in Story 1.1: All GRDB operations MUST go through DatabaseManager.shared, serial queue with label com.focusLock.database and QoS .userInitiated.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-3-thread-safe-database-operations.md</path>
+        <title>Story 1.3</title>
+        <section>Dev Notes - Components to Modify</section>
+        <snippet>Existing Files to Modify: StorageManager.swift - Migrate ~18 remaining database methods to async + DatabaseManager. AnalysisManager.swift - Update callers of migrated methods. LLMService.swift - Update callers of migrated methods. UI components - Add loading states for async database operations.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-3-thread-safe-database-operations.md</path>
+        <title>Story 1.3</title>
+        <section>Dev Notes - Database Methods Migration List (Priority Order)</section>
+        <snippet>High Priority (Background Threads): registerChunk(), markChunkCompleted(), markChunkFailed(), saveBatch(), updateBatchStatus(), updateBatchLLMMetadata(), saveTimelineCardShell(). Medium Priority (Mixed Thread Access): fetchUnprocessedChunks(), fetchBatchLLMMetadata(), fetchTimelineCards(forBatch:), fetchChunksInTimeRange(), updateTimelineCardVideoURL(), insertLLMCall(). Lower Priority (UI/Debug): fetchTimelineCards(forDay:), fetchTimelineCardsByTimeRange(), debug methods.</snippet>
+      </doc>
+      <doc>
+        <path>docs/stories/1-3-thread-safe-database-operations.md</path>
+        <title>Story 1.3</title>
+        <section>Dev Notes - Learnings from Previous Story (Story 1.1)</section>
+        <snippet>New Service Created: DatabaseManager actor available at Dayflow/Core/Database/DatabaseManager.swift. Architectural Pattern Established: Serial queue pattern for all GRDB operations through DatabaseManager. Methods Already Migrated: chunksForBatch() and allBatches() now async. Protocol Changes: StorageManaging protocol updated with async signatures. Testing Setup: DatabaseManagerTests and StorageManagerThreadingTests provide patterns for thread-safety testing.</snippet>
+      </doc>
+    </docs>
+    <code>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift</path>
+        <kind>actor</kind>
+        <symbol>DatabaseManager</symbol>
+        <lines>1-328</lines>
+        <reason>Story 1.1 implementation - Thread-safe database manager using actor isolation and serial dispatch queue. All database operations in Story 1.3 must route through this manager's read(), write(), and transaction() methods. Provides the architectural pattern to follow.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Database/DatabaseManagerProtocol.swift</path>
+        <kind>protocol</kind>
+        <symbol>DatabaseManagerProtocol</symbol>
+        <lines>1-34</lines>
+        <reason>Protocol defining thread-safe database operations. All implementations must conform to Sendable to guarantee safe cross-actor usage. Defines the contract that StorageManager methods will use.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift</path>
+        <kind>class</kind>
+        <symbol>StorageManager</symbol>
+        <lines>823-1716</lines>
+        <reason>Primary file to modify. Contains ~35 database methods that need migration to async + DatabaseManager routing. Critical methods include: registerChunk(), markChunkCompleted(), saveBatch(), updateBatchStatus(), saveTimelineCardShell(), updateTimelineCardVideoURL(), fetchTimelineCards(), fetchBatchLLMMetadata(), insertLLMCall(), and many more.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/Analysis/AnalysisManager.swift</path>
+        <kind>class</kind>
+        <symbol>AnalysisManager</symbol>
+        <lines>1-694</lines>
+        <reason>Caller of migrated methods. Line 370 already uses async chunksForBatch() from Story 1.1. Will need updates to handle additional async database methods from Story 1.3. Background processing context requires careful async handling.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Core/AI/LLMService.swift</path>
+        <kind>class</kind>
+        <symbol>LLMService</symbol>
+        <lines>1-1018</lines>
+        <reason>Caller of StorageManager database methods. Line 196, 228, 296, 417 use StorageManager methods. Will need updates for newly async methods. Runs in background context, critical for thread safety.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/Dayflow/Models/AnalysisModels.swift</path>
+        <kind>struct</kind>
+        <symbol>RecordingChunk</symbol>
+        <lines>1-23</lines>
+        <reason>Data model with Sendable conformance (added in Story 1.1). Example of how data models must conform to Sendable to cross actor boundaries safely. Pattern to follow for any new data models.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/DayflowTests/DatabaseManagerTests.swift</path>
+        <kind>test</kind>
+        <symbol>DatabaseManagerTests</symbol>
+        <lines>1-323</lines>
+        <reason>Story 1.1 test suite - comprehensive test patterns for thread-safety and performance. Tests cover: concurrent reads, stress testing, data consistency, error handling, transaction rollback, latency measurement. Use as template for Story 1.3 tests.</reason>
+      </artifact>
+      <artifact>
+        <path>Dayflow/DayflowTests/StorageManagerThreadingTests.swift</path>
+        <kind>test</kind>
+        <symbol>StorageManagerThreadingTests</symbol>
+        <lines>1-195</lines>
+        <reason>Story 1.1 threading tests - patterns for testing multi-threaded access, concurrent operations, async context handling, and integration with AnalysisManager. Demonstrates how to test the async migration.</reason>
+      </artifact>
+    </code>
+    <dependencies>
+      <swift-packages>
+        <package name="GRDB.swift" version="7.8.0" purpose="Type-safe SQLite database wrapper - core dependency for all database operations" />
+        <package name="Sentry" version="8.56.2" purpose="Error tracking and crash reporting - used for monitoring database errors and performance" />
+        <package name="PostHog" version="3.31.0" purpose="Product analytics - optional, sampling enabled" />
+        <package name="Sparkle" version="2.7.1" purpose="Automatic update framework - no direct dependency on this story" />
+      </swift-packages>
+      <system-frameworks>
+        <framework name="Foundation" purpose="Core Swift framework for system primitives" />
+        <framework name="GRDB" purpose="SQLite database access and management" />
+        <framework name="os.log" purpose="Unified logging system for database operation logging" />
+      </system-frameworks>
+    </dependencies>
+  </artifacts>
+
+  <constraints>
+    <constraint type="architecture">
+      <title>DatabaseManager Serial Queue Pattern (Mandatory)</title>
+      <description>ALL database operations MUST go through DatabaseManager.shared. Direct GRDB database pool access is prohibited. This is the foundational pattern established in Story 1.1 that prevents the "freed pointer was not last allocation" crash.</description>
+    </constraint>
+    <constraint type="architecture">
+      <title>Async Conversion Requirement</title>
+      <description>All StorageManager database methods must be converted to async throws signatures. Synchronous wrappers are NOT safe and must not be used. All callers must handle async context properly using await or Task {}.</description>
+    </constraint>
+    <constraint type="actor-isolation">
+      <title>Actor Isolation and Sendable Conformance</title>
+      <description>DatabaseManager uses actor isolation for thread safety. All data crossing actor boundaries must conform to Sendable protocol. Use isolated parameters where needed to prevent reentrancy issues.</description>
+    </constraint>
+    <constraint type="performance">
+      <title>QoS Configuration</title>
+      <description>DatabaseManager queue QoS must be .userInitiated to prevent priority inversion. Background AI tasks should use .utility or .background QoS. UI operations use .userInitiated or .userInteractive QoS.</description>
+    </constraint>
+    <constraint type="breaking-change">
+      <title>Breaking API Changes</title>
+      <description>Many StorageManager methods will become async, breaking existing synchronous call sites. All callers across the codebase must be updated. UI code must add loading states for async database operations.</description>
+    </constraint>
+    <constraint type="testing">
+      <title>Comprehensive Testing Required</title>
+      <description>Stress testing with 50 concurrent operations is mandatory. Must monitor for priority inversion, deadlocks, and data corruption. UI responsiveness must be measured and validated (&lt;200ms). P95 latency must remain &lt;100ms.</description>
+    </constraint>
+    <constraint type="transaction-isolation">
+      <title>Transaction Boundaries</title>
+      <description>Multi-step operations must be atomic using DatabaseManager.transaction(). Avoid holding transactions longer than necessary (performance impact). Batch operations (AI processing + timeline writes) must use proper transaction isolation.</description>
+    </constraint>
+    <constraint type="migration-scope">
+      <title>Complete Migration (No Partial State)</title>
+      <description>This story completes the work started in Story 1.1. Do NOT recreate DatabaseManager - reuse existing infrastructure. Migration must be complete - no mixing of old synchronous and new async patterns allowed.</description>
+    </constraint>
+  </constraints>
+
+  <interfaces>
+    <interface>
+      <name>DatabaseManager.read()</name>
+      <kind>actor method</kind>
+      <signature>func read&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T</signature>
+      <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift:192-223</path>
+      <usage>Use for all read-only database operations. Ensures thread-safe access through serial queue. Example: try await DatabaseManager.shared.read { db in try RecordingChunk.fetchAll(db, sql: "SELECT * FROM chunks") }</usage>
+    </interface>
+    <interface>
+      <name>DatabaseManager.write()</name>
+      <kind>actor method</kind>
+      <signature>func write&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T</signature>
+      <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift:229-260</path>
+      <usage>Use for all write database operations. Ensures thread-safe access through serial queue. Example: try await DatabaseManager.shared.write { db in try db.execute(sql: "INSERT INTO chunks ...") }</usage>
+    </interface>
+    <interface>
+      <name>DatabaseManager.transaction()</name>
+      <kind>actor method</kind>
+      <signature>func transaction&lt;T: Sendable&gt;(_ operation: @escaping (GRDB.Database) throws -&gt; T) async throws -&gt; T</signature>
+      <path>Dayflow/Dayflow/Core/Database/DatabaseManager.swift:267-305</path>
+      <usage>Use for multi-step operations requiring atomicity. Automatically rolls back on error. Example: try await DatabaseManager.shared.transaction { db in /* multiple related operations */ }</usage>
+    </interface>
+    <interface>
+      <name>StorageManager.chunksForBatch() - PATTERN TO FOLLOW</name>
+      <kind>async method</kind>
+      <signature>func chunksForBatch(_ batchId: Int64) async throws -&gt; [RecordingChunk]</signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift (migrated in Story 1.1)</path>
+      <usage>Example of completed async migration from Story 1.1. Use this as the pattern for migrating other methods: convert to async throws, route through DatabaseManager.shared.read(), ensure Sendable return types.</usage>
+    </interface>
+    <interface>
+      <name>StorageManager.allBatches() - PATTERN TO FOLLOW</name>
+      <kind>async method</kind>
+      <signature>func allBatches() async throws -&gt; [(id: Int64, start: Int, end: Int, status: String)]</signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift (migrated in Story 1.1)</path>
+      <usage>Example of completed async migration from Story 1.1. Demonstrates tuple return type with Sendable conformance. Pattern for complex return types.</usage>
+    </interface>
+    <interface>
+      <name>StorageManaging Protocol</name>
+      <kind>protocol</kind>
+      <signature>protocol StorageManaging</signature>
+      <path>Dayflow/Dayflow/Core/Recording/StorageManager.swift:52-102</path>
+      <usage>Protocol defining all StorageManager methods. Must be updated to include async throws signatures for all migrated methods. Maintains backward compatibility during transition.</usage>
+    </interface>
+  </interfaces>
+
+  <tests>
+    <standards>
+      <framework>XCTest</framework>
+      <approach>Unit tests for each migrated method testing async signature, error propagation, and DatabaseManager usage. Integration tests for concurrent operations (AnalysisManager + DatabaseManager, ScreenRecorder + BufferManager + DatabaseManager). Stress tests with 50 concurrent operations for 10 minutes. Performance tests measuring P50, P95, P99 latency. System tests for end-to-end workflows.</approach>
+      <coverage>Target &gt;80% code coverage for modified components. All critical database methods must have unit tests. Stress test must validate zero crashes, no priority inversion, no data corruption.</coverage>
+      <patterns>Follow Story 1.1 test patterns from DatabaseManagerTests.swift and StorageManagerThreadingTests.swift. Use withThrowingTaskGroup for concurrent operations. Measure latency with Date() timestamps. Validate data consistency after concurrent operations.</patterns>
+    </standards>
+    <locations>
+      <location>Dayflow/DayflowTests/DatabaseManagerTests.swift</location>
+      <location>Dayflow/DayflowTests/StorageManagerThreadingTests.swift</location>
+      <location>Dayflow/DayflowTests/StorageManagerAsyncMigrationTests.swift (new - to be created)</location>
+      <location>Dayflow/DayflowTests/TransactionIsolationTests.swift (new - to be created)</location>
+      <location>Dayflow/DayflowTests/ConcurrentStressTests.swift (new - to be created)</location>
+    </locations>
+    <ideas>
+      <test ac="AC-1.3.1" name="testAllDatabaseMethodsMigrated">
+        <description>Code audit test: Use reflection or static analysis to verify no direct dbPool access remains in StorageManager. Verify all methods use DatabaseManager.shared.</description>
+      </test>
+      <test ac="AC-1.3.2" name="testConcurrentAIAndUIAccess">
+        <description>Integration test: Simulate background AI batch processing while UI loads timeline cards. Run for 5 minutes with mixed read/write operations. Assert no crashes, measure latency.</description>
+      </test>
+      <test ac="AC-1.3.3" name="testQoSConfiguration">
+        <description>Unit test: Verify DatabaseManager queue QoS is .userInitiated using Mirror reflection. Test priority inversion scenario: low priority task holds database lock while high priority task waits.</description>
+      </test>
+      <test ac="AC-1.3.4" name="testUIResponsiveness">
+        <description>UI test: Trigger background database load (100 operations). Measure main thread response time to UI interactions. Assert all responses &lt;200ms. Monitor for main thread blocking.</description>
+      </test>
+      <test ac="AC-1.3.5" name="testTransactionIsolation">
+        <description>Integration test: Start transaction writing batch + timeline cards. Concurrently attempt to read same data. Verify transaction isolation (no dirty reads). Test rollback on error prevents partial writes.</description>
+      </test>
+      <test ac="AC-1.3.6" name="testStressConcurrentOperations">
+        <description>Stress test: Launch 25 concurrent AI analysis tasks + 25 concurrent UI timeline loads. Run for 10 minutes. Monitor for crashes, deadlocks, priority inversion, data corruption. Measure P95 latency (&lt;100ms). Verify all operations complete successfully.</description>
+      </test>
+      <test ac="AC-1.3.1" name="testRegisterChunkAsync">
+        <description>Unit test: Verify registerChunk() is async and routes through DatabaseManager.write(). Test error propagation. Verify chunk persisted correctly.</description>
+      </test>
+      <test ac="AC-1.3.1" name="testSaveBatchAsync">
+        <description>Unit test: Verify saveBatch() is async and routes through DatabaseManager.write(). Test batch creation with chunk IDs. Verify batch ID returned correctly.</description>
+      </test>
+      <test ac="AC-1.3.1" name="testFetchTimelineCardsAsync">
+        <description>Unit test: Verify fetchTimelineCards() is async and routes through DatabaseManager.read(). Test with multiple batches. Verify correct timeline cards returned.</description>
+      </test>
+    </ideas>
+  </tests>
+</story-context>
