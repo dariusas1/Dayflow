@@ -85,6 +85,20 @@ final class MultiDisplayRecordingTests: XCTestCase {
 
         // Verify recorder has display tracking capability
         XCTAssertNotNil(recorder, "Recorder should track display configuration")
+
+        // Verify that ActiveDisplayTracker can detect displays
+        let tracker = ActiveDisplayTracker()
+        let displays = tracker.getActiveDisplays()
+        XCTAssertGreaterThan(displays.count, 0, "Should detect at least one display")
+
+        // Verify DisplayConfiguration can be created
+        let config = DisplayConfiguration.current(displays: displays)
+        XCTAssertNotNil(config, "Should create display configuration from active displays")
+
+        if let config = config {
+            XCTAssertEqual(config.displayCount, displays.count, "Configuration should match display count")
+            XCTAssertFalse(config.displayResolutions.isEmpty, "Configuration should have display resolutions")
+        }
     }
 
     // MARK: - AC 2.1.2 Tests - Display Configuration Changes
@@ -116,6 +130,68 @@ final class MultiDisplayRecordingTests: XCTestCase {
         // 3. Verify recording continues within 2 seconds
         // 4. Verify no frames lost
         // 5. Verify no crashes
+    }
+
+    func testStatusUpdatesAsyncStream() async throws {
+        // Test that statusUpdates AsyncStream emits state changes (AC 2.3.2)
+        recorder = ScreenRecorder(autoStart: false, displayMode: .automatic)
+
+        guard let recorder = recorder else {
+            XCTFail("Recorder should be initialized")
+            return
+        }
+
+        // Create a task to collect status updates
+        let expectation = XCTestExpectation(description: "Should receive initial state")
+
+        Task { @MainActor in
+            var statesReceived = 0
+            for await state in recorder.statusUpdates {
+                statesReceived += 1
+
+                // First state should be idle (initial state)
+                if statesReceived == 1 {
+                    // Accept either idle or starting state depending on timing
+                    XCTAssertTrue(
+                        state == .idle || state == .starting,
+                        "Initial state should be idle or starting, got: \(state.description)"
+                    )
+                    expectation.fulfill()
+                    break
+                }
+            }
+        }
+
+        // Wait for expectation
+        await fulfillment(of: [expectation], timeout: 2.0)
+    }
+
+    func testRecordingMetadataPersistence() async throws {
+        // Test that RecordingMetadataManager persists display configuration
+        let tracker = ActiveDisplayTracker()
+        let displays = tracker.getActiveDisplays()
+
+        guard let config = DisplayConfiguration.current(displays: displays) else {
+            XCTFail("Should create display configuration")
+            return
+        }
+
+        // Save configuration
+        let sessionID = "test_session_\(Date().timeIntervalSince1970)"
+        RecordingMetadataManager.shared.saveDisplayConfiguration(config, sessionID: sessionID)
+
+        // Small delay to ensure file is written
+        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+        // Load configuration
+        let loadedConfig = RecordingMetadataManager.shared.loadDisplayConfiguration(sessionID: sessionID)
+
+        XCTAssertNotNil(loadedConfig, "Should load saved configuration")
+        XCTAssertEqual(loadedConfig?.displayCount, config.displayCount, "Loaded config should match saved config")
+        XCTAssertEqual(loadedConfig?.primaryDisplayID, config.primaryDisplayID, "Primary display should match")
+
+        // Cleanup
+        RecordingMetadataManager.shared.deleteDisplayConfiguration(sessionID: sessionID)
     }
 
     // MARK: - Performance Tests

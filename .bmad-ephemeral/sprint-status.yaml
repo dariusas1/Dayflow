@@ -46,7 +46,7 @@ development_status:
 
   # Epic 2: Core Recording Pipeline Stabilization
   epic-2: contexted
-  2-1-multi-display-screen-capture: in-progress
+  2-1-multi-display-screen-capture: done
   2-2-video-compression-optimization: backlog
   2-3-real-time-recording-status: backlog
   epic-2-retrospective: optional

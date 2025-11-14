@@ -222,6 +222,9 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
                       ?? "\(oldState.description) → \(newState.description)"
         dbg("State: \(message)")
 
+        // Emit state update to AsyncStream subscribers (AC 2.3.2)
+        statusContinuation?.yield(newState)
+
         // Breadcrumbs are only sent if an error/crash occurs - zero cost otherwise
         let breadcrumb = Breadcrumb(level: .info, category: "recorder_state")
         breadcrumb.message = message
@@ -379,6 +382,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
                     // Create display configuration snapshot
                     if let config = DisplayConfiguration.current(displays: displays) {
                         self.currentDisplayConfiguration = config
+
+                        // Persist display configuration to metadata store (AC 2.1.1)
+                        Task { @MainActor in
+                            RecordingMetadataManager.shared.saveDisplayConfiguration(config)
+                        }
                     }
 
                     self.q.async { [weak self] in
@@ -551,6 +559,11 @@ final class ScreenRecorder: NSObject, SCStreamOutput, @unchecked Sendable {
             if let config = DisplayConfiguration.current(displays: displays) {
                 let previousConfig = currentDisplayConfiguration
                 currentDisplayConfiguration = config
+
+                // Persist updated display configuration (AC 2.1.1, AC 2.1.2)
+                Task { @MainActor in
+                    RecordingMetadataManager.shared.saveDisplayConfiguration(config)
+                }
 
                 // Check if we need to restart recording
                 let needsRestart = shouldRestartForConfiguration(previous: previousConfig, current: config)
