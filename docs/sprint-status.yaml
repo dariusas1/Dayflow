@@ -1,0 +1,75 @@
+# Sprint Status Template
+# Generated from FocusLock epics.md
+
+generated: 2025-11-14T00:00:00.000Z
+project: FocusLock
+project_key: focuslock-dayflow
+tracking_system: file-system
+story_location: "/home/user/Dayflow/docs/stories"
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic exists in epic file but not contexted
+#   - contexted: Epic tech context created (required before story development)
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - drafted: Story file created in stories folder
+#   - ready-for-dev: Story context created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed and deployed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - completed: Retrospective has been done
+
+development_status:
+  epic-1: backlog
+  1-1-database-threading-crash-fix: backlog
+  1-2-screen-recording-memory-cleanup: backlog
+  1-3-thread-safe-database-operations: backlog
+  1-4-memory-leak-detection-system: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-multi-display-screen-capture: backlog
+  2-2-video-compression-optimization: backlog
+  2-3-real-time-recording-status: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-batch-processing-validation: backlog
+  3-2-ocr-text-extraction: backlog
+  3-3-activity-categorization-system: backlog
+  3-4-gemini-api-integration-testing: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-timeline-data-persistence: backlog
+  4-2-recording-chunk-management: backlog
+  4-3-settings-and-configuration-persistence: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-dashboard-timeline-visualization: backlog
+  5-2-real-time-status-indicators: backlog
+  5-3-responsive-swiftui-interface: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-ai-chat-interface-implementation: backlog
+  6-2-work-pattern-memory-system: backlog
+  6-3-real-time-coaching-insights: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-focus-mode-implementation: backlog
+  7-2-smart-task-management: backlog
+  epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-secure-api-key-storage: backlog
+  8-2-local-first-data-processing: backlog
+  epic-8-retrospective: optional
