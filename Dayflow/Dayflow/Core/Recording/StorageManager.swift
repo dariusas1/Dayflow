@@ -110,6 +110,10 @@ protocol StorageManaging: Sendable {
     // Data Integrity Validation
     func validateTimelineCardIntegrity() -> [String]
     func getIntegrityStatistics() -> IntegrityStatistics
+
+    // Chunk Management and Storage
+    func cleanupOldChunks(retentionDays: Int) async throws -> CleanupStats
+    func calculateStorageUsage() async throws -> StorageUsage
 }
 
 
@@ -1068,6 +1072,240 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                               fileUrl: r["file_url"], status: r["status"])
             }
         }) ?? []
+    }
+
+    /// Removes recording chunks older than the specified retention period
+    ///
+    /// This method performs automatic cleanup of old recording chunks to manage storage usage.
+    /// It identifies chunks whose end timestamp is older than the retention period and performs
+    /// the following operations for each chunk:
+    /// 1. Deletes the physical video file from the filesystem
+    /// 2. Clears video_summary_url references in timeline_cards (preserves timeline data)
+    /// 3. Removes the chunk record from the database
+    ///
+    /// **Important:** This method only deletes chunks that are NOT referenced in batches.
+    /// Chunks linked to analysis batches via the batch_chunks table are excluded from cleanup
+    /// to prevent foreign key constraint violations (ON DELETE RESTRICT).
+    ///
+    /// The cleanup process is resilient to individual file deletion failures - if a file cannot
+    /// be deleted, the operation logs an error and continues processing remaining chunks.
+    ///
+    /// - Parameter retentionDays: Number of days to retain chunks (default: 3 days)
+    /// - Returns: Statistics about the cleanup operation including chunks found, files deleted,
+    ///            database records removed, and bytes freed
+    /// - Throws: Database errors if chunk queries or deletions fail
+    ///
+    /// ## Performance
+    /// - Target: < 5 seconds for batch deletion
+    /// - Sequential processing of chunks with file I/O and database operations
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Clean up chunks older than 7 days
+    /// let stats = try await storageManager.cleanupOldChunks(retentionDays: 7)
+    /// print("Freed \(stats.bytesFreed) bytes")
+    /// ```
+    func cleanupOldChunks(retentionDays: Int = 3) async throws -> CleanupStats {
+        let retentionSeconds = retentionDays * 24 * 60 * 60
+        let cutoffTs = Int(Date().timeIntervalSince1970) - retentionSeconds
+
+        var stats = CleanupStats()
+
+        // Find chunks older than retention period
+        let oldChunks = try await withCheckedThrowingContinuation { continuation in
+            dbWriteQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                    return
+                }
+
+                do {
+                    let chunks = try self.timedRead("fetchOldChunks") { db -> [RecordingChunk] in
+                        try Row.fetchAll(db, sql: """
+                            SELECT id, file_url, start_ts, end_ts, status
+                            FROM chunks
+                            WHERE end_ts < ?
+                              AND id NOT IN (SELECT chunk_id FROM batch_chunks)
+                        """, arguments: [cutoffTs])
+                        .map { row in
+                            RecordingChunk(
+                                id: row["id"],
+                                startTs: row["start_ts"],
+                                endTs: row["end_ts"],
+                                fileUrl: row["file_url"],
+                                status: row["status"]
+                            )
+                        }
+                    }
+                    continuation.resume(returning: chunks)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        stats.chunksFound = oldChunks.count
+
+        // Delete files and database records
+        for chunk in oldChunks {
+            let fileURL = URL(fileURLWithPath: chunk.fileUrl)
+
+            // Delete physical file
+            do {
+                let attrs = try fileMgr.attributesOfItem(atPath: chunk.fileUrl)
+                let fileSize = attrs[.size] as? Int64 ?? 0
+
+                try fileMgr.removeItem(at: fileURL)
+                stats.filesDeleted += 1
+                stats.bytesFreed += fileSize
+            } catch {
+                // Log error but continue cleanup
+                print("Failed to delete chunk file at \(chunk.fileUrl): \(error)")
+            }
+
+            // Clear video references in timeline cards (preserve timeline data)
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                dbWriteQueue.async { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                        return
+                    }
+
+                    do {
+                        try self.timedWrite("clearVideoURLs") { db in
+                            let filename = fileURL.lastPathComponent
+                            try db.execute(sql: """
+                                UPDATE timeline_cards
+                                SET video_summary_url = NULL
+                                WHERE video_summary_url LIKE ?
+                            """, arguments: ["%\(filename)%"])
+                        }
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            // Delete database record
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                dbWriteQueue.async { [weak self] in
+                    guard let self = self else {
+                        continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                        return
+                    }
+
+                    do {
+                        try self.timedWrite("deleteChunkRecord") { db in
+                            try db.execute(sql: "DELETE FROM chunks WHERE id = ?", arguments: [chunk.id])
+                        }
+                        continuation.resume()
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+
+            stats.recordsDeleted += 1
+        }
+
+        return stats
+    }
+
+    /// Calculates total storage usage for database and recording files
+    ///
+    /// This method provides a comprehensive breakdown of storage usage across both
+    /// database files and video recording chunks. It performs the following calculations:
+    ///
+    /// **Database Storage:**
+    /// - Main SQLite database file (chunks.sqlite)
+    /// - Write-Ahead Log file (chunks.sqlite-wal)
+    /// - Shared memory file (chunks.sqlite-shm)
+    ///
+    /// **Recording Storage:**
+    /// - Queries all chunk file paths from the database
+    /// - Calculates individual file sizes for each chunk
+    /// - Handles missing files gracefully (files may be deleted or moved)
+    ///
+    /// The calculation runs on a background queue to avoid blocking the main thread,
+    /// making it safe to call from UI contexts.
+    ///
+    /// - Returns: A `StorageUsage` struct containing:
+    ///   - `databaseBytes`: Total size of database files
+    ///   - `recordingsBytes`: Total size of all chunk video files
+    ///   - `totalBytes`: Combined size of database and recordings
+    ///   - Computed properties for GB conversions (`totalGB`, `databaseGB`, `recordingsGB`)
+    /// - Throws: Database errors if chunk queries fail
+    ///
+    /// ## Performance
+    /// - Target: < 2 seconds for 1000+ chunks
+    /// - Uses single database query to fetch all chunk paths
+    /// - File size lookups are performed synchronously but efficiently
+    ///
+    /// ## Example
+    /// ```swift
+    /// let usage = try await storageManager.calculateStorageUsage()
+    /// print("Total storage: \(usage.totalGB) GB")
+    /// print("Database: \(usage.databaseGB) GB, Recordings: \(usage.recordingsGB) GB")
+    /// ```
+    func calculateStorageUsage() async throws -> StorageUsage {
+        // Calculate database size (main file + WAL + SHM)
+        let dbPath = dbURL.path
+        var databaseSize: Int64 = 0
+
+        // Main database file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // WAL file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath + "-wal"),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // SHM file
+        if let attrs = try? fileMgr.attributesOfItem(atPath: dbPath + "-shm"),
+           let size = attrs[.size] as? Int64 {
+            databaseSize += size
+        }
+
+        // Calculate total recording file size
+        let recordingsSize = try await withCheckedThrowingContinuation { continuation in
+            dbWriteQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: NSError(domain: "StorageManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "StorageManager deallocated"]))
+                    return
+                }
+
+                do {
+                    let totalSize = try self.timedRead("calculateRecordingsSize") { db -> Int64 in
+                        let chunks = try Row.fetchAll(db, sql: "SELECT file_url FROM chunks")
+                        var total: Int64 = 0
+
+                        for row in chunks {
+                            let path: String = row["file_url"]
+                            if let attrs = try? self.fileMgr.attributesOfItem(atPath: path),
+                               let size = attrs[.size] as? Int64 {
+                                total += size
+                            }
+                        }
+
+                        return total
+                    }
+                    continuation.resume(returning: totalSize)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+
+        return StorageUsage(
+            databaseBytes: databaseSize,
+            recordingsBytes: recordingsSize,
+            totalBytes: databaseSize + recordingsSize
+        )
     }
 
 

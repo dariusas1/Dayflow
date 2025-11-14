@@ -71,7 +71,7 @@ epics:
         status: "done"
       - id: "4-2-recording-chunk-management"
         title: "Recording Chunk Management"
-        status: "backlog"
+        status: "done"
       - id: "4-3-settings-configuration-persistence"
         title: "Settings and Configuration Persistence"
         status: "backlog"
