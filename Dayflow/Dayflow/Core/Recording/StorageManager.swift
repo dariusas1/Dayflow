@@ -102,10 +102,10 @@ protocol StorageManaging: Sendable {
     func fetchBatches(forDay day: String) -> [(id: Int64, startTs: Int, endTs: Int, status: String)]
 
     /// Chunks that belong to one batch, already sorted.
-    func chunksForBatch(_ batchId: Int64) -> [RecordingChunk]
-    
+    func chunksForBatch(_ batchId: Int64) async throws -> [RecordingChunk]
+
     /// All batches, newest first
-    func allBatches() -> [(id: Int64, start: Int, end: Int, status: String)]
+    func allBatches() async throws -> [(id: Int64, start: Int, end: Int, status: String)]
 }
 
 
@@ -932,8 +932,9 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
     }
 
     /// Chunks that belong to one batch, already sorted.
-    func chunksForBatch(_ batchId: Int64) -> [RecordingChunk] {
-        (try? db.read { db in
+    /// Updated to use DatabaseManager for thread-safe access (Story 1.1)
+    func chunksForBatch(_ batchId: Int64) async throws -> [RecordingChunk] {
+        return try await DatabaseManager.shared.read { db in
             try Row.fetchAll(db, sql: """
                 SELECT c.* FROM batch_chunks bc
                 JOIN chunks c ON c.id = bc.chunk_id
@@ -945,7 +946,7 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
                 RecordingChunk(id: r["id"], startTs: r["start_ts"], endTs: r["end_ts"],
                                fileUrl: r["file_url"], status: r["status"])
             }
-        }) ?? []
+        }
     }
 
     /// Helper to get the batch start timestamp for date calculations
@@ -1121,15 +1122,16 @@ final class StorageManager: StorageManaging, @unchecked Sendable {
     }
 
     // All batches, newest first
-       func allBatches() -> [(id: Int64, start: Int, end: Int, status: String)] {
-            (try? db.read { db in
-                try Row.fetchAll(db, sql:
-                    "SELECT id, batch_start_ts, batch_end_ts, status FROM analysis_batches ORDER BY id DESC"
-                ).map { row in
-                    (row["id"], row["batch_start_ts"], row["batch_end_ts"], row["status"])
-                }
-            }) ?? []
+    /// Updated to use DatabaseManager for thread-safe access (Story 1.1)
+    func allBatches() async throws -> [(id: Int64, start: Int, end: Int, status: String)] {
+        return try await DatabaseManager.shared.read { db in
+            try Row.fetchAll(db, sql:
+                "SELECT id, batch_start_ts, batch_end_ts, status FROM analysis_batches ORDER BY id DESC"
+            ).map { row in
+                (row["id"], row["batch_start_ts"], row["batch_end_ts"], row["status"])
+            }
         }
+    }
 
     func fetchRecentAnalysisBatchesForDebug(limit: Int) -> [AnalysisBatchDebugEntry] {
         guard limit > 0 else { return [] }
